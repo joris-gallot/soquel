@@ -18,10 +18,18 @@ export const commands = {
 	activeConnections: () => typedError<string[], Error>(__TAURI_INVOKE("active_connections")),
 	runQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_query", { id, sql })),
 	cancelQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_query", { id })),
+	schemaSnapshot: (id: string) => typedError<SchemaSnapshot, Error>(__TAURI_INVOKE("schema_snapshot", { id })),
 };
 
 /* Types */
 export type Capability = "sql-query" | "introspection" | "kv-browse";
+
+export type ColumnInfo = {
+	name: string,
+	dataType: string,
+	nullable: boolean,
+	default: string | null,
+};
 
 /**  Secrets ride in on the input but are stored in the OS keychain, never in the profile. */
 export type ConnectionInput = {
@@ -53,9 +61,32 @@ export type Env = "dev" | "staging" | "prod";
 /**  Normalized error shape crossing the IPC boundary. */
 export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string };
 
+export type ForeignKeyInfo = {
+	name: string,
+	columns: string[],
+	referencedSchema: string,
+	referencedTable: string,
+	referencedColumns: string[],
+};
+
+export type IndexInfo = {
+	name: string,
+	definition: string,
+	unique: boolean,
+};
+
 export type QueryResult = {
 	statements: StatementResult[],
 	durationMs: number | null,
+};
+
+export type SchemaInfo = {
+	name: string,
+	tables: TableInfo[],
+};
+
+export type SchemaSnapshot = {
+	schemas: SchemaInfo[],
 };
 
 export type StatementResult = {
@@ -63,6 +94,19 @@ export type StatementResult = {
 	rows: ((string | null)[])[],
 	rowsAffected: number | null,
 };
+
+export type TableInfo = {
+	name: string,
+	kind: TableKind,
+	/**  Planner estimate (pg reltuples): -1 when never analyzed. */
+	estimatedRows: number | null,
+	columns: ColumnInfo[],
+	primaryKey: string[],
+	indexes: IndexInfo[],
+	foreignKeys: ForeignKeyInfo[],
+};
+
+export type TableKind = "table" | "view" | "materialized-view";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

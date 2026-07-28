@@ -38,12 +38,82 @@ pub trait SqlQuery: Send + Sync {
   async fn cancel(&self) -> Result<(), Error>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum TableKind {
+  Table,
+  View,
+  MaterializedView,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnInfo {
+  pub name: String,
+  pub data_type: String,
+  pub nullable: bool,
+  pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexInfo {
+  pub name: String,
+  pub definition: String,
+  pub unique: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKeyInfo {
+  pub name: String,
+  pub columns: Vec<String>,
+  pub referenced_schema: String,
+  pub referenced_table: String,
+  pub referenced_columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableInfo {
+  pub name: String,
+  pub kind: TableKind,
+  /// Planner estimate (pg reltuples): -1 when never analyzed.
+  pub estimated_rows: f64,
+  pub columns: Vec<ColumnInfo>,
+  pub primary_key: Vec<String>,
+  pub indexes: Vec<IndexInfo>,
+  pub foreign_keys: Vec<ForeignKeyInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaInfo {
+  pub name: String,
+  pub tables: Vec<TableInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaSnapshot {
+  pub schemas: Vec<SchemaInfo>,
+}
+
+/// Introspection capability surface, mirroring `Capability::Introspection`.
+#[async_trait::async_trait]
+pub trait Introspect: Send + Sync {
+  async fn schema_snapshot(&self) -> Result<SchemaSnapshot, Error>;
+}
+
 /// A live connection to a database, produced by a `Connector`.
 #[async_trait::async_trait]
 pub trait Connection: Send + Sync {
   async fn health(&self) -> Result<(), Error>;
   async fn close(&self) -> Result<(), Error>;
   fn sql(&self) -> Option<&dyn SqlQuery> {
+    None
+  }
+  fn introspect(&self) -> Option<&dyn Introspect> {
     None
   }
 }

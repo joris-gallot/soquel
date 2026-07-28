@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::connectors::{connector_for, Capability, Connection, QueryResult, SqlQuery};
+use crate::connectors::{
+  connector_for, Capability, Connection, QueryResult, SchemaSnapshot, SqlQuery,
+};
 use crate::error::Error;
 use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind};
 use crate::AppState;
@@ -95,6 +97,19 @@ pub async fn run_query(
 pub async fn cancel_query(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   let connection = active(&state, &id).await?;
   sql_surface(&connection)?.cancel().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn schema_snapshot(
+  state: State<'_, AppState>,
+  id: String,
+) -> Result<SchemaSnapshot, Error> {
+  let connection = active(&state, &id).await?;
+  let introspect = connection.introspect().ok_or_else(|| Error::Unsupported {
+    message: "this connection does not support schema introspection".to_string(),
+  })?;
+  introspect.schema_snapshot().await
 }
 
 // Clone the Arc out so queries never hold the map lock.

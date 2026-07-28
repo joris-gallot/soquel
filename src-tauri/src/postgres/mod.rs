@@ -3,10 +3,12 @@ use std::time::{Duration, Instant};
 use tokio_postgres::{CancelToken, Client, Config, NoTls, SimpleQueryMessage};
 
 use crate::connectors::{
-  Capability, Connection, Connector, QueryResult, SqlQuery, StatementResult,
+  Capability, Connection, Connector, Introspect, QueryResult, SqlQuery, StatementResult,
 };
 use crate::error::Error;
 use crate::profiles::ConnectionProfile;
+
+mod introspect;
 
 pub struct PostgresConnector;
 
@@ -46,7 +48,7 @@ impl Connector for PostgresConnector {
 }
 
 pub struct PostgresConnection {
-  client: Client,
+  pub(super) client: Client,
   cancel: CancelToken,
 }
 
@@ -63,6 +65,10 @@ impl Connection for PostgresConnection {
   }
 
   fn sql(&self) -> Option<&dyn SqlQuery> {
+    Some(self)
+  }
+
+  fn introspect(&self) -> Option<&dyn Introspect> {
     Some(self)
   }
 }
@@ -110,22 +116,26 @@ fn collect_statements(messages: Vec<SimpleQueryMessage>) -> Vec<StatementResult>
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
   use super::*;
   use crate::profiles::ConnectorKind;
 
   // Convention: integration_* tests run via `pnpm test:integration` (needs `pnpm db:test`),
   // each gated by its connector's env var, and skip silently otherwise.
-  #[tokio::test]
-  async fn integration_postgres_query_roundtrip() {
-    let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
-      return;
-    };
+  pub async fn test_connection_from_env() -> Option<PostgresConnection> {
+    let url = std::env::var("SOQUEL_TEST_PG").ok()?;
     let (client, connection) = tokio_postgres::connect(&url, NoTls).await.unwrap();
     tokio::spawn(connection);
-    let pg = PostgresConnection {
+    Some(PostgresConnection {
       cancel: client.cancel_token(),
       client,
+    })
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_query_roundtrip() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
     };
 
     pg.health().await.unwrap();

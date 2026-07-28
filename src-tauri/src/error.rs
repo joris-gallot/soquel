@@ -15,6 +15,8 @@ pub enum Error {
     Storage { message: String },
     #[error("{message}")]
     Secret { message: String },
+    #[error("{message}")]
+    Unsupported { message: String },
 }
 
 impl From<std::io::Error> for Error {

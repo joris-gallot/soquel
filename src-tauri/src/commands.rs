@@ -1,13 +1,20 @@
 use tauri::State;
 
+use crate::connectors::{connector_for, Capability};
 use crate::error::Error;
-use crate::profiles::{ConnectionInput, ConnectionProfile};
+use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind};
 use crate::AppState;
 
 #[tauri::command]
 #[specta::specta]
 pub fn ping() -> Result<String, Error> {
     Ok("pong".to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn connector_capabilities(kind: ConnectorKind) -> Result<Vec<Capability>, Error> {
+    Ok(connector_for(kind).capabilities().to_vec())
 }
 
 #[tauri::command]

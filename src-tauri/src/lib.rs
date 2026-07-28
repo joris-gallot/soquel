@@ -6,6 +6,7 @@ use crate::profiles::ProfileStore;
 use crate::secrets::{KeyringStore, SecretStore};
 
 mod commands;
+mod connectors;
 mod error;
 mod profiles;
 mod secrets;
@@ -19,6 +20,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
             commands::ping,
+            commands::connector_capabilities,
             commands::list_connections,
             commands::get_connection,
             commands::create_connection,

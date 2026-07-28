@@ -41,6 +41,8 @@ pnpm test          # vitest across the workspace
 cargo check --manifest-path src-tauri/Cargo.toml   # fast Rust validation
 cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
+# driver integration test, needs a reachable Postgres:
+SOQUEL_TEST_PG=postgres://user:pass@localhost:5432/db cargo test --manifest-path src-tauri/Cargo.toml query_roundtrip
 ```
 
 ## Tauri specifics

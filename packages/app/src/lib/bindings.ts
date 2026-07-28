@@ -11,6 +11,11 @@ export const commands = {
 	createConnection: (input: ConnectionInput) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("create_connection", { input })),
 	updateConnection: (id: string, input: ConnectionInput) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("update_connection", { id, input })),
 	deleteConnection: (id: string) => typedError<null, Error>(__TAURI_INVOKE("delete_connection", { id })),
+	connect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("connect", { id })),
+	disconnect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("disconnect", { id })),
+	activeConnections: () => typedError<string[], Error>(__TAURI_INVOKE("active_connections")),
+	runQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_query", { id, sql })),
+	cancelQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_query", { id })),
 };
 
 /* Types */
@@ -44,7 +49,18 @@ export type ConnectorKind = "postgres";
 export type Env = "dev" | "staging" | "prod";
 
 /**  Normalized error shape crossing the IPC boundary. */
-export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string };
+export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string };
+
+export type QueryResult = {
+	statements: StatementResult[],
+	durationMs: number | null,
+};
+
+export type StatementResult = {
+	columns: string[],
+	rows: ((string | null)[])[],
+	rowsAffected: number | null,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

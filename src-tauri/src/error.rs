@@ -17,6 +17,19 @@ pub enum Error {
     Secret { message: String },
     #[error("{message}")]
     Unsupported { message: String },
+    #[error("{message}")]
+    Database { message: String },
+}
+
+impl From<tokio_postgres::Error> for Error {
+    fn from(err: tokio_postgres::Error) -> Self {
+        // db_error carries the useful message; err.to_string() alone is often just "db error".
+        let message = err
+            .as_db_error()
+            .map(|db| db.message().to_string())
+            .unwrap_or_else(|| err.to_string());
+        Error::Database { message }
+    }
 }
 
 impl From<std::io::Error> for Error {

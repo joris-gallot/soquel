@@ -1,19 +1,23 @@
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
+use crate::connectors::Connection;
 use crate::profiles::ProfileStore;
 use crate::secrets::{KeyringStore, SecretStore};
 
 mod commands;
 mod connectors;
 mod error;
+mod postgres;
 mod profiles;
 mod secrets;
 
 pub struct AppState {
     pub profiles: Mutex<ProfileStore>,
     pub secrets: Box<dyn SecretStore>,
+    pub connections: tokio::sync::Mutex<HashMap<String, Arc<dyn Connection>>>,
 }
 
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
@@ -26,6 +30,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::create_connection,
             commands::update_connection,
             commands::delete_connection,
+            commands::connect,
+            commands::disconnect,
+            commands::active_connections,
+            commands::run_query,
+            commands::cancel_query,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Result)
 }
@@ -56,6 +65,7 @@ pub fn run() {
             app.manage(AppState {
                 profiles: Mutex::new(store),
                 secrets: Box::new(KeyringStore),
+                connections: tokio::sync::Mutex::new(HashMap::new()),
             });
             Ok(())
         })

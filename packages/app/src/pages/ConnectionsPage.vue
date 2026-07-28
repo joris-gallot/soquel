@@ -2,6 +2,7 @@
 import type { ConnectionProfile } from '@/lib/bindings'
 import { MoreHorizontal, Plug, Plus, Unplug } from '@lucide/vue'
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import ConnectionFormDialog from '@/components/ConnectionFormDialog.vue'
 import { Badge } from '@/components/ui/badge'
@@ -16,6 +17,7 @@ import {
 import { useConnections } from '@/composables/useConnections'
 import { ENV_BADGE_CLASSES } from '@/lib/connections'
 
+const router = useRouter()
 const { connections, activeIds, refresh, remove, connect, disconnect } = useConnections()
 
 const formOpen = ref(false)
@@ -37,10 +39,13 @@ function openEdit(profile: ConnectionProfile) {
 async function toggle(profile: ConnectionProfile) {
   busyId.value = profile.id
   try {
-    if (activeIds.value.has(profile.id))
+    if (activeIds.value.has(profile.id)) {
       await disconnect(profile.id)
-    else
+    }
+    else {
       await connect(profile.id)
+      router.push({ name: 'workspace', params: { id: profile.id } })
+    }
   }
   catch (error) {
     toast.error(error instanceof Error ? error.message : String(error))
@@ -48,6 +53,14 @@ async function toggle(profile: ConnectionProfile) {
   finally {
     busyId.value = null
   }
+}
+
+async function openWorkspace(profile: ConnectionProfile) {
+  if (!activeIds.value.has(profile.id)) {
+    await toggle(profile)
+    return
+  }
+  router.push({ name: 'workspace', params: { id: profile.id } })
 }
 
 async function removeProfile(profile: ConnectionProfile) {
@@ -102,7 +115,12 @@ async function removeProfile(profile: ConnectionProfile) {
           :class="activeIds.has(profile.id) ? 'bg-[oklch(0.72_0.11_240)]' : 'bg-muted-foreground/30'"
           :data-testid="activeIds.has(profile.id) ? 'status-connected' : 'status-disconnected'"
         />
-        <div class="min-w-0 flex-1">
+        <button
+          type="button"
+          class="min-w-0 flex-1 text-left"
+          :data-testid="`open-${profile.name}`"
+          @click="openWorkspace(profile)"
+        >
           <div class="flex items-center gap-2">
             <span class="truncate text-sm font-medium">{{ profile.name }}</span>
             <Badge variant="outline" class="font-mono text-[10px]" :class="ENV_BADGE_CLASSES[profile.env]">
@@ -112,7 +130,7 @@ async function removeProfile(profile: ConnectionProfile) {
           <p class="truncate font-mono text-xs text-muted-foreground">
             {{ profile.kind }}://{{ profile.user }}@{{ profile.host }}:{{ profile.port }}/{{ profile.database }}
           </p>
-        </div>
+        </button>
         <Button
           size="sm"
           variant="ghost"

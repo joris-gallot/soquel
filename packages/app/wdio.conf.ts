@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
+import { browser } from '@wdio/globals'
 
 let tauriDriver: ChildProcess | undefined
 let exiting = false
@@ -53,6 +54,13 @@ export const config: WebdriverIO.Config = {
         process.exit(1)
       }
     })
+  },
+
+  afterTest: async (test, _context, { passed }) => {
+    if (!passed) {
+      const slug = test.title.replace(/\W+/g, '-').toLowerCase()
+      await browser.saveScreenshot(`./e2e/screenshots/FAIL-${slug}.png`)
+    }
   },
 
   afterSession: () => closeTauriDriver(),

@@ -1,5 +1,6 @@
 import { $, browser } from '@wdio/globals'
 import { TEST_DBS } from './fixtures'
+import { waitForText } from './helpers'
 
 const PG = TEST_DBS.postgres
 
@@ -27,10 +28,14 @@ describe('connection manager', () => {
 
     await $('[data-testid="save-connection"]').click()
     await $('[data-testid="connection-row"]').waitForExist()
+    await $('[data-testid="field-name"]').waitForExist({ reverse: true })
   })
 
-  it('connects and disconnects', async () => {
+  it('connects into the workspace, then disconnects from the list', async () => {
     await $('[data-testid="toggle-connection"]').click()
+    await waitForText('[data-testid="workspace-name"]', 'test pg')
+
+    await $('[data-testid="workspace-back"]').click()
     await $('[data-testid="status-connected"]').waitForExist()
     await browser.saveScreenshot('./e2e/screenshots/connections-connected.png')
 

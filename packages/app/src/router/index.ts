@@ -8,5 +8,10 @@ export const router = createRouter({
       name: 'connections',
       component: () => import('@/pages/ConnectionsPage.vue'),
     },
+    {
+      path: '/c/:id',
+      name: 'workspace',
+      component: () => import('@/pages/WorkspacePage.vue'),
+    },
   ],
 })

@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 use tokio_postgres::{CancelToken, Client, Config, NoTls, SimpleQueryMessage};
 
 use crate::connectors::{
-  Capability, Connection, Connector, Introspect, QueryResult, SqlQuery, StatementResult,
+  Capability, Connection, Connector, Introspect, QueryResult, SortDirection, SqlQuery,
+  StatementResult, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::ConnectionProfile;
@@ -88,6 +89,35 @@ impl SqlQuery for PostgresConnection {
     self.cancel.cancel_query(NoTls).await?;
     Ok(())
   }
+
+  async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error> {
+    let mut sql = format!(
+      "SELECT * FROM {}.{}",
+      quote_ident(&request.schema),
+      quote_ident(&request.table)
+    );
+    if let Some(sort) = &request.sort {
+      let direction = match sort.direction {
+        SortDirection::Asc => "ASC",
+        SortDirection::Desc => "DESC",
+      };
+      sql.push_str(&format!(
+        " ORDER BY {} {direction}",
+        quote_ident(&sort.column)
+      ));
+    }
+    sql.push_str(&format!(
+      " LIMIT {} OFFSET {}",
+      request.limit.min(1000),
+      request.offset
+    ));
+    self.run_query(&sql).await
+  }
+}
+
+// Identifiers come from the UI: quoting is the injection boundary.
+fn quote_ident(ident: &str) -> String {
+  format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
 fn collect_statements(messages: Vec<SimpleQueryMessage>) -> Vec<StatementResult> {
@@ -122,6 +152,13 @@ pub mod tests {
 
   // Convention: integration_* tests run via `pnpm test:integration` (needs `pnpm db:test`),
   // each gated by its connector's env var, and skip silently otherwise.
+  #[test]
+  fn quote_ident_escapes_quotes() {
+    assert_eq!(quote_ident("customers"), "\"customers\"");
+    assert_eq!(quote_ident("MiXeD"), "\"MiXeD\"");
+    assert_eq!(quote_ident("evil\"; DROP--"), "\"evil\"\"; DROP--\"");
+  }
+
   pub async fn test_connection_from_env() -> Option<PostgresConnection> {
     let url = std::env::var("SOQUEL_TEST_PG").ok()?;
     let (client, connection) = tokio_postgres::connect(&url, NoTls).await.unwrap();
@@ -151,6 +188,45 @@ pub mod tests {
       result.statements[1].rows[0],
       vec![Some("a".to_string()), None]
     );
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_table_rows_sorts_and_paginates() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let result = pg
+      .table_rows(&TableRowsRequest {
+        schema: "app".to_string(),
+        table: "customers".to_string(),
+        limit: 2,
+        offset: 0,
+        sort: Some(crate::connectors::SortSpec {
+          column: "name".to_string(),
+          direction: SortDirection::Desc,
+        }),
+      })
+      .await
+      .unwrap();
+    let statement = &result.statements[0];
+    assert_eq!(statement.rows.len(), 2);
+    assert_eq!(statement.rows[0][1], Some("Grace Hopper".to_string()));
+
+    let next = pg
+      .table_rows(&TableRowsRequest {
+        schema: "app".to_string(),
+        table: "customers".to_string(),
+        limit: 2,
+        offset: 2,
+        sort: Some(crate::connectors::SortSpec {
+          column: "name".to_string(),
+          direction: SortDirection::Desc,
+        }),
+      })
+      .await
+      .unwrap();
+    assert_eq!(next.statements[0].rows.len(), 1);
+    assert_eq!(next.statements[0].rows[0][1], Some("Ada Lovelace".to_string()));
   }
 
   fn profile_from_env_url(url: &str) -> ConnectionProfile {

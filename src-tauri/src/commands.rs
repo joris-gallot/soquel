@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::connectors::{
-  connector_for, Capability, Connection, QueryResult, SchemaSnapshot, SqlQuery,
+  connector_for, Capability, Connection, QueryResult, SchemaSnapshot, SqlQuery, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind};
@@ -97,6 +97,17 @@ pub async fn run_query(
 pub async fn cancel_query(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   let connection = active(&state, &id).await?;
   sql_surface(&connection)?.cancel().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn table_rows(
+  state: State<'_, AppState>,
+  id: String,
+  request: TableRowsRequest,
+) -> Result<QueryResult, Error> {
+  let connection = active(&state, &id).await?;
+  sql_surface(&connection)?.table_rows(&request).await
 }
 
 #[tauri::command]

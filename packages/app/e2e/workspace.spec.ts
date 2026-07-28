@@ -13,13 +13,25 @@ describe('workspace', () => {
     await browser.saveScreenshot('./e2e/screenshots/workspace.png')
   })
 
-  it('filters the tree and selects a table', async () => {
+  it('filters the tree and opens a table in the grid', async () => {
     await $('[data-testid="tree-filter"]').setValue('cust')
     await $('[data-testid="table-app.orders"]').waitForExist({ reverse: true })
 
     await $('[data-testid="table-app.customers"]').click()
-    await waitForText('[data-testid="table-placeholder"]', 'app.customers')
-    await browser.saveScreenshot('./e2e/screenshots/workspace-selected.png')
+    await waitForText('[data-testid="table-title"]', 'app.customers')
+    await waitForText('[data-testid="grid-body"]', 'ada@example.com')
+    // Grace Hopper has a NULL email in the fixture.
+    await waitForText('[data-testid="grid-body"]', 'NULL')
+    await browser.saveScreenshot('./e2e/screenshots/workspace-grid.png')
+  })
+
+  it('sorts by column from the header', async () => {
+    await $('[data-testid="grid-header-name"]').click()
+    await waitForText('[data-testid="grid-body"] tr:first-child', 'Ada Lovelace')
+
+    await $('[data-testid="grid-header-name"]').click()
+    await waitForText('[data-testid="grid-body"] tr:first-child', 'Grace Hopper')
+    await browser.saveScreenshot('./e2e/screenshots/workspace-grid-sorted.png')
   })
 
   it('opens the command palette', async () => {

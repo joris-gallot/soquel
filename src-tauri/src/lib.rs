@@ -36,6 +36,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::active_connections,
       commands::run_query,
       commands::cancel_query,
+      commands::table_rows,
       commands::schema_snapshot,
     ])
     .error_handling(tauri_specta::ErrorHandlingMode::Result)

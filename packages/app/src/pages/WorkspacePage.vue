@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import SchemaTree from '@/components/SchemaTree.vue'
+import TableGrid from '@/components/TableGrid.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -125,16 +126,20 @@ function selectTable(schema: string, table: TableInfo) {
       </ScrollArea>
     </aside>
 
-    <main class="flex min-w-0 flex-1 items-center justify-center">
-      <div v-if="selectedTable" class="text-center" data-testid="table-placeholder">
-        <p class="font-mono text-lg">
-          {{ selectedTable.schema }}.{{ selectedTable.table.name }}
-        </p>
-        <p class="mt-1 text-sm text-muted-foreground">
-          {{ selectedTable.table.columns.length }} columns - table browser coming soon
-        </p>
-      </div>
-      <div v-else class="text-center text-muted-foreground">
+    <main class="flex min-w-0 flex-1 flex-col">
+      <template v-if="selectedTable">
+        <header class="flex items-center gap-2 border-b px-3 py-1.5 font-mono text-xs text-muted-foreground">
+          <span data-testid="table-title">{{ selectedTable.schema }}.{{ selectedTable.table.name }}</span>
+          <span class="text-muted-foreground/60">{{ selectedTable.table.columns.length }} columns</span>
+        </header>
+        <TableGrid
+          class="min-h-0 flex-1"
+          :connection-id="id"
+          :schema="selectedTable.schema"
+          :table="selectedTable.table"
+        />
+      </template>
+      <div v-else class="flex flex-1 items-center justify-center text-muted-foreground">
         <p class="font-mono text-sm">
           soquel=#<span class="ml-1 text-muted-foreground/60">select a table</span>
         </p>

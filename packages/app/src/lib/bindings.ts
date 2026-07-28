@@ -18,6 +18,7 @@ export const commands = {
 	activeConnections: () => typedError<string[], Error>(__TAURI_INVOKE("active_connections")),
 	runQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_query", { id, sql })),
 	cancelQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_query", { id })),
+	tableRows: (id: string, request: TableRowsRequest) => typedError<QueryResult, Error>(__TAURI_INVOKE("table_rows", { id, request })),
 	schemaSnapshot: (id: string) => typedError<SchemaSnapshot, Error>(__TAURI_INVOKE("schema_snapshot", { id })),
 };
 
@@ -89,6 +90,13 @@ export type SchemaSnapshot = {
 	schemas: SchemaInfo[],
 };
 
+export type SortDirection = "asc" | "desc";
+
+export type SortSpec = {
+	column: string,
+	direction: SortDirection,
+};
+
 export type StatementResult = {
 	columns: string[],
 	rows: ((string | null)[])[],
@@ -107,6 +115,14 @@ export type TableInfo = {
 };
 
 export type TableKind = "table" | "view" | "materialized-view";
+
+export type TableRowsRequest = {
+	schema: string,
+	table: string,
+	limit: number,
+	offset: number,
+	sort: SortSpec | null,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

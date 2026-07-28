@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::error::Error;
@@ -30,12 +30,37 @@ pub struct QueryResult {
   pub duration_ms: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SortDirection {
+  Asc,
+  Desc,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SortSpec {
+  pub column: String,
+  pub direction: SortDirection,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRowsRequest {
+  pub schema: String,
+  pub table: String,
+  pub limit: u32,
+  pub offset: u32,
+  pub sort: Option<SortSpec>,
+}
+
 /// SQL capability surface; only connections whose connector declares
 /// `Capability::SqlQuery` expose it.
 #[async_trait::async_trait]
 pub trait SqlQuery: Send + Sync {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
   async fn cancel(&self) -> Result<(), Error>;
+  async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]

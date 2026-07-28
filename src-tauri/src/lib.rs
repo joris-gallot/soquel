@@ -5,7 +5,7 @@ use tauri::Manager;
 
 use crate::connectors::Connection;
 use crate::profiles::ProfileStore;
-use crate::secrets::{InMemoryStore, KeyringStore, SecretStore};
+use crate::secrets::{FileStore, InMemoryStore, KeyringStore, SecretStore};
 
 mod commands;
 mod connectors;
@@ -73,9 +73,11 @@ pub fn run() {
         Err(_) => app.path().app_data_dir()?,
       };
       let store = ProfileStore::load(data_dir.join("connections.json"))?;
-      // e2e/CI have no OS keychain.
+      // Keychain-less environments: e2e/CI (ephemeral) and WSL dev (plaintext file, opt-in).
       let secrets: Box<dyn SecretStore> = if std::env::var("SOQUEL_EPHEMERAL_SECRETS").is_ok() {
         Box::new(InMemoryStore::default())
+      } else if std::env::var("SOQUEL_INSECURE_FILE_SECRETS").is_ok() {
+        Box::new(FileStore::load(data_dir.join("secrets.json"))?)
       } else {
         Box::new(KeyringStore)
       };

@@ -23,11 +23,20 @@ pub enum Error {
 
 impl From<tokio_postgres::Error> for Error {
   fn from(err: tokio_postgres::Error) -> Self {
-    // db_error carries the useful message; err.to_string() alone is often just "db error".
+    // db_error carries the server message; otherwise walk the source chain,
+    // where the actual cause lives ("invalid configuration" alone says nothing).
     let message = err
       .as_db_error()
       .map(|db| db.message().to_string())
-      .unwrap_or_else(|| err.to_string());
+      .unwrap_or_else(|| {
+        let mut message = err.to_string();
+        let mut source = std::error::Error::source(&err);
+        while let Some(cause) = source {
+          message.push_str(&format!(": {cause}"));
+          source = cause.source();
+        }
+        message
+      });
     Error::Database { message }
   }
 }

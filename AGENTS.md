@@ -44,9 +44,19 @@ pnpm test:e2e      # wdio drives the built debug binary via tauri-driver (Linux/
 cargo check --manifest-path src-tauri/Cargo.toml   # fast Rust validation
 cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
-# driver integration test, needs a reachable Postgres:
-SOQUEL_TEST_PG=postgres://user:pass@localhost:5432/db cargo test --manifest-path src-tauri/Cargo.toml query_roundtrip
+
+pnpm db:test           # start the test databases (docker-compose.test.yml), seeded + throwaway
+pnpm test:integration  # cargo integration_* tests against them
+pnpm db:test:down
 ```
+
+## Testing
+
+Weight: Rust integration against real databases is the core; unit tests for pure logic; e2e stays a thin smoke layer.
+
+- `docker-compose.test.yml`: one service per connector kind, seeded from `scripts/test-seeds/<engine>.sql`. Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458.
+- Rust integration tests are named `integration_<engine>_*`, each gated by its env var (`SOQUEL_TEST_PG`, later `SOQUEL_TEST_MYSQL`, ...) and skipped silently when unset. `pnpm test:integration` wires the env vars to the compose databases.
+- e2e specs take DB coordinates from `packages/app/e2e/fixtures.ts` (never hardcode), and need `pnpm db:test` up.
 
 ## Tauri specifics
 

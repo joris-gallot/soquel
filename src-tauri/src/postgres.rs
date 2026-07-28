@@ -113,9 +113,10 @@ fn collect_statements(messages: Vec<SimpleQueryMessage>) -> Vec<StatementResult>
 mod tests {
   use super::*;
 
-  // Runs only with SOQUEL_TEST_PG=postgres://user:pass@host:port/db set.
+  // Convention: integration_* tests run via `pnpm test:integration` (needs `pnpm db:test`),
+  // each gated by its connector's env var, and skip silently otherwise.
   #[tokio::test]
-  async fn query_roundtrip_against_real_postgres() {
+  async fn integration_postgres_query_roundtrip() {
     let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
       return;
     };

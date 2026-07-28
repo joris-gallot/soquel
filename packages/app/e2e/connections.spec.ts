@@ -1,6 +1,7 @@
 import { $, browser } from '@wdio/globals'
+import { TEST_DBS } from './fixtures'
 
-const HELMO_PG = { host: 'localhost', port: '5440', database: 'helmo', user: 'helmo', password: 'helmo' }
+const PG = TEST_DBS.postgres
 
 describe('connection manager', () => {
   it('starts on the empty state', async () => {
@@ -10,12 +11,12 @@ describe('connection manager', () => {
 
   it('creates a connection after a successful test', async () => {
     await $('[data-testid="new-connection"]').click()
-    await $('[data-testid="field-name"]').setValue('helmo local')
-    await $('[data-testid="field-host"]').setValue(HELMO_PG.host)
-    await $('[data-testid="field-port"]').setValue(HELMO_PG.port)
-    await $('[data-testid="field-database"]').setValue(HELMO_PG.database)
-    await $('[data-testid="field-user"]').setValue(HELMO_PG.user)
-    await $('[data-testid="field-password"]').setValue(HELMO_PG.password)
+    await $('[data-testid="field-name"]').setValue('test pg')
+    await $('[data-testid="field-host"]').setValue(PG.host)
+    await $('[data-testid="field-port"]').setValue(PG.port)
+    await $('[data-testid="field-database"]').setValue(PG.database)
+    await $('[data-testid="field-user"]').setValue(PG.user)
+    await $('[data-testid="field-password"]').setValue(PG.password)
 
     await $('[data-testid="test-connection"]').click()
     await browser.waitUntil(

@@ -1,0 +1,23 @@
+# Test databases, one service per connector kind, seeded from scripts/test-seeds/.
+# Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458.
+name: soquel-test
+
+services:
+  postgres:
+    image: postgres:18.4-alpine
+    ports:
+      - '5455:5432'
+    environment:
+      POSTGRES_USER: soquel
+      POSTGRES_PASSWORD: soquel
+      POSTGRES_DB: soquel_test
+    volumes:
+      - ./scripts/test-seeds/postgres.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    # Throwaway data: fresh seed on every up.
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U soquel -d soquel_test]
+      interval: 2s
+      timeout: 3s
+      retries: 15

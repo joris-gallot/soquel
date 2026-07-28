@@ -16,7 +16,11 @@ Two architecture rules that must hold:
 ## Layout
 
 - `packages/app` - Vue 3 + vue-router + shadcn-vue (Reka UI) + Tailwind v4, Vite on port 5173.
-- `src-tauri` - Rust core. `src/commands.rs` holds the command layer.
+- `src-tauri` - Rust core. `src/commands.rs` holds the command layer, `src/error.rs` the normalized error enum.
+
+### Command layer
+
+Commands are annotated `#[tauri::command] #[specta::specta]`, return `Result<T, Error>`, and are registered in `specta_builder()` (`src-tauri/src/lib.rs`). TypeScript bindings are generated to `packages/app/src/lib/bindings.ts` (committed, eslint-ignored): automatically on `tauri dev`, or headless via `cargo test --manifest-path src-tauri/Cargo.toml export_typescript_bindings`. The frontend imports `commands` from the bindings and never calls `invoke` directly. Error handling is `ErrorHandlingMode::Result`: bindings return `{ status: 'ok', data } | { status: 'error', error: { kind, message } }`. New error variants go on the `Error` enum in `error.rs`, tagged by `kind`.
 
 No server/backend package: this is a desktop app. Data-layer conventions from the profile (Hono/tRPC/Drizzle/knex) don't apply here.
 

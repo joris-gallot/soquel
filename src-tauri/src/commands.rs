@@ -1,4 +1,7 @@
+use crate::error::Error;
+
 #[tauri::command]
-pub fn ping() -> String {
-    "pong".to_string()
+#[specta::specta]
+pub fn ping() -> Result<String, Error> {
+    Ok("pong".to_string())
 }

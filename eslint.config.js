@@ -8,5 +8,6 @@ export default antfu({
     '**/node_modules/**',
     'src-tauri/target/**',
     'src-tauri/gen/**',
+    'packages/app/src/lib/bindings.ts',
   ],
 })

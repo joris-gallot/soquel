@@ -15,11 +15,18 @@ crate-type = [
 ]
 
 [build-dependencies]
-tauri-build = { version = "2.6.3" }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = [ "derive" ] }
 log = "0.4"
-tauri = { version = "2.11.3" }
+tauri = { version = "2.11.3", features = [ "specta" ] }
 tauri-plugin-log = "2"
+specta = { version = "=2.0.0-rc.25", features = [ "derive" ] }
+specta-typescript = "0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = [
+  "derive",
+  "typescript"
+] }
+thiserror = "2"

@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { invoke } from '@tauri-apps/api/core'
 import { useAsyncState } from '@vueuse/core'
+import { commands } from '@/lib/bindings'
 
-const { state: pong, isLoading } = useAsyncState(() => invoke<string>('ping'), null)
+const { state: pong, isLoading } = useAsyncState(async () => {
+  const result = await commands.ping()
+  return result.status === 'ok' ? result.data : null
+}, null)
 </script>
 
 <template>

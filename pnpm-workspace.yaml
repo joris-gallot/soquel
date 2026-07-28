@@ -1,0 +1,14 @@
+shellEmulator: true
+
+trustPolicy: no-downgrade
+
+# babel pulls a pre-provenance semver@6 that trips the policy.
+trustPolicyExclude:
+  - semver
+
+packages:
+  - packages/*
+
+allowBuilds:
+  esbuild: true
+  vue-demi: true

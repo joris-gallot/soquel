@@ -1,0 +1,52 @@
+@~/.claude/stack/web-saas.md
+
+# soquel
+
+Guidance for agents in this repo. Shared stack conventions are imported above; everything below is soquel-specific and overrides the profile where they differ.
+
+## What this is
+
+Soquel is a next generation database client (TablePlus alternative): a Tauri 2 desktop app. The Rust core owns everything heavy and sensitive (DB drivers, SSH tunnels, connection pools, result streaming, credentials); the Vue webview is a thin client. v1 targets Postgres + SSH tunnels + table browser + SQL editor; MySQL and Redis come later behind a capability-based connector trait.
+
+Two architecture rules that must hold:
+
+- **Typed command layer is the only IPC boundary.** Every operation is a Tauri command with a normalized error shape. Commands are pure and independently callable: this surface later becomes the agent/MCP tool surface, the UI is just its first client.
+- **Secrets never cross into the webview.** Credentials live in the Rust core and the OS keychain.
+
+## Layout
+
+- `packages/app` - Vue 3 + vue-router + shadcn-vue (Reka UI) + Tailwind v4, Vite on port 5173.
+- `src-tauri` - Rust core. `src/commands.rs` holds the command layer.
+
+No server/backend package: this is a desktop app. Data-layer conventions from the profile (Hono/tRPC/Drizzle/knex) don't apply here.
+
+## Commands
+
+Run from the repo root.
+
+```bash
+pnpm install
+pnpm dev:app       # vite only (webview in a browser, no Rust)
+pnpm dev           # tauri dev: builds the Rust core, launches the app, serves vite
+pnpm build         # pnpm -r build (frontend)
+pnpm build:desktop # tauri build (bundles the app)
+pnpm typecheck     # vue-tsc across the workspace
+pnpm lint          # eslint . (lint:fix to autofix)
+pnpm test          # vitest across the workspace
+
+cargo check --manifest-path src-tauri/Cargo.toml   # fast Rust validation
+cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+## Tauri specifics
+
+- Linux dev needs the Tauri v2 system prerequisites (webkit2gtk-4.1 etc.); `tauri dev` under WSL runs the Linux build via WSLg, not representative of Windows/macOS.
+- `tauri.conf.json`: dev server is vite on 5173 (strictPort); `beforeDevCommand`/`beforeBuildCommand` drive the app package through pnpm filters.
+- Add Tauri plugins with `pnpm tauri add <name>`; their permissions go in `src-tauri/capabilities/default.json`.
+- No remote assets in the webview (fonts, scripts): the app must work offline and keep a strict CSP. Bundle everything.
+
+## UI
+
+- shadcn-vue components via CLI from `packages/app`: `pnpm exec shadcn-vue add <name>` (check the registry before hand-rolling).
+- Use the `frontend-design` skill for UI work; the app identity (theme, typography) is defined in `packages/app/src/style.css`.

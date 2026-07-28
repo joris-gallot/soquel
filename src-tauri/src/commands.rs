@@ -151,7 +151,11 @@ pub fn create_connection(
 ) -> Result<ConnectionProfile, Error> {
   let profile = state.profiles.lock().unwrap().create(&input)?;
   if let Some(password) = &input.password {
-    state.secrets.set(&profile.id, password)?;
+    // No orphan profile when the keychain is unavailable.
+    if let Err(err) = state.secrets.set(&profile.id, password) {
+      let _ = state.profiles.lock().unwrap().delete(&profile.id);
+      return Err(err);
+    }
   }
   Ok(profile)
 }

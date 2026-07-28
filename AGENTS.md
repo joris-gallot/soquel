@@ -32,6 +32,7 @@ Run from the repo root.
 pnpm install
 pnpm dev:app       # vite only (webview in a browser, no Rust)
 pnpm dev           # tauri dev: builds the Rust core, launches the app, serves vite
+pnpm dev:wsl       # same with in-memory secrets (WSL has no OS keychain)
 pnpm build         # pnpm -r build (frontend)
 pnpm build:desktop # tauri build (bundles the app)
 pnpm typecheck     # vue-tsc across the workspace

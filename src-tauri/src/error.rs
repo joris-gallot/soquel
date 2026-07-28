@@ -51,7 +51,7 @@ impl From<serde_json::Error> for Error {
 impl From<keyring::Error> for Error {
   fn from(err: keyring::Error) -> Self {
     Error::Secret {
-      message: err.to_string(),
+      message: format!("keychain: {err}"),
     }
   }
 }

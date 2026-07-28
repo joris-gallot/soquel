@@ -112,6 +112,7 @@ fn collect_statements(messages: Vec<SimpleQueryMessage>) -> Vec<StatementResult>
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::profiles::ConnectorKind;
 
   // Convention: integration_* tests run via `pnpm test:integration` (needs `pnpm db:test`),
   // each gated by its connector's env var, and skip silently otherwise.
@@ -140,5 +141,54 @@ mod tests {
       result.statements[1].rows[0],
       vec![Some("a".to_string()), None]
     );
+  }
+
+  fn profile_from_env_url(url: &str) -> ConnectionProfile {
+    let config: Config = url.parse().unwrap();
+    let tokio_postgres::config::Host::Tcp(host) = &config.get_hosts()[0] else {
+      panic!("expected a tcp host");
+    };
+    ConnectionProfile {
+      id: String::new(),
+      name: "test".to_string(),
+      env: crate::profiles::Env::Dev,
+      kind: ConnectorKind::Postgres,
+      host: host.clone(),
+      port: config.get_ports()[0],
+      database: config.get_dbname().unwrap().to_string(),
+      user: config.get_user().unwrap().to_string(),
+    }
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_auth_failure_maps_to_database_error() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
+      return;
+    };
+    let profile = profile_from_env_url(&url);
+    let result = PostgresConnector
+      .connect(&profile, Some("definitely-wrong"))
+      .await;
+    let Err(Error::Database { message }) = result.map(|_| ()) else {
+      panic!("expected a database error");
+    };
+    assert!(
+      message.contains("password authentication failed"),
+      "unhelpful message: {message}"
+    );
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_unreachable_maps_to_database_error() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
+      return;
+    };
+    let mut profile = profile_from_env_url(&url);
+    profile.port = 59999;
+    let result = PostgresConnector.connect(&profile, None).await;
+    let Err(Error::Database { message }) = result.map(|_| ()) else {
+      panic!("expected a database error");
+    };
+    assert!(!message.is_empty());
   }
 }

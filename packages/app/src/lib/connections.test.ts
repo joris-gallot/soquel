@@ -1,0 +1,80 @@
+import { describe, expect, it } from 'vitest'
+import { connectionSchema, parsePostgresUrl, toConnectionInput } from './connections'
+import { zodFieldErrors } from './validation'
+
+describe('parsePostgresUrl', () => {
+  it('parses a full postgres:// url', () => {
+    expect(parsePostgresUrl('postgres://joris:s3cret@db.internal:5433/analytics')).toEqual({
+      host: 'db.internal',
+      port: 5433,
+      database: 'analytics',
+      user: 'joris',
+      password: 's3cret',
+    })
+  })
+
+  it('accepts the postgresql:// protocol', () => {
+    expect(parsePostgresUrl('postgresql://u@h/db')).toMatchObject({ host: 'h', user: 'u' })
+  })
+
+  it('defaults the port to 5432 when absent', () => {
+    expect(parsePostgresUrl('postgres://u:p@host/db')).toMatchObject({ port: 5432 })
+  })
+
+  it('decodes percent-encoded credentials and database', () => {
+    expect(parsePostgresUrl('postgres://user%40corp:p%40ss@h:5432/my%20db')).toMatchObject({
+      user: 'user@corp',
+      password: 'p@ss',
+      database: 'my db',
+    })
+  })
+
+  it('rejects other protocols', () => {
+    expect(parsePostgresUrl('mysql://u:p@h:3306/db')).toBeNull()
+  })
+
+  it('rejects garbage', () => {
+    expect(parsePostgresUrl('not a url')).toBeNull()
+  })
+})
+
+describe('connectionSchema', () => {
+  const valid = {
+    name: 'local',
+    env: 'dev',
+    kind: 'postgres',
+    host: 'localhost',
+    port: '5432',
+    database: 'app',
+    user: 'postgres',
+    password: '',
+  }
+
+  it('coerces the port from a text input', () => {
+    const parsed = connectionSchema.parse(valid)
+    expect(parsed.port).toBe(5432)
+  })
+
+  it('maps missing required fields to per-field messages', () => {
+    const result = connectionSchema.safeParse({ ...valid, name: '', host: '', database: '' })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const fields = zodFieldErrors(result.error)
+      expect(fields.name).toBe('Name is required')
+      expect(fields.host).toBe('Host is required')
+      expect(fields.database).toBe('Database is required')
+    }
+  })
+
+  it('rejects an out-of-range port', () => {
+    const result = connectionSchema.safeParse({ ...valid, port: '70000' })
+    expect(result.success).toBe(false)
+  })
+
+  it('turns an empty password into null for the command input', () => {
+    const input = toConnectionInput(connectionSchema.parse(valid))
+    expect(input.password).toBeNull()
+    const withPassword = toConnectionInput(connectionSchema.parse({ ...valid, password: 'x' }))
+    expect(withPassword.password).toBe('x')
+  })
+})

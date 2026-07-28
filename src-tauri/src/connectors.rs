@@ -8,74 +8,74 @@ use crate::profiles::{ConnectionProfile, ConnectorKind};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {
-    SqlQuery,
-    Introspection,
-    // Constructed once the Redis connector lands.
-    #[allow(dead_code)]
-    KvBrowse,
+  SqlQuery,
+  Introspection,
+  // Constructed once the Redis connector lands.
+  #[allow(dead_code)]
+  KvBrowse,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StatementResult {
-    pub columns: Vec<String>,
-    pub rows: Vec<Vec<Option<String>>>,
-    pub rows_affected: f64,
+  pub columns: Vec<String>,
+  pub rows: Vec<Vec<Option<String>>>,
+  pub rows_affected: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryResult {
-    pub statements: Vec<StatementResult>,
-    pub duration_ms: f64,
+  pub statements: Vec<StatementResult>,
+  pub duration_ms: f64,
 }
 
 /// SQL capability surface; only connections whose connector declares
 /// `Capability::SqlQuery` expose it.
 #[async_trait::async_trait]
 pub trait SqlQuery: Send + Sync {
-    async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
-    async fn cancel(&self) -> Result<(), Error>;
+  async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
+  async fn cancel(&self) -> Result<(), Error>;
 }
 
 /// A live connection to a database, produced by a `Connector`.
 #[async_trait::async_trait]
 pub trait Connection: Send + Sync {
-    async fn health(&self) -> Result<(), Error>;
-    async fn close(&self) -> Result<(), Error>;
-    fn sql(&self) -> Option<&dyn SqlQuery> {
-        None
-    }
+  async fn health(&self) -> Result<(), Error>;
+  async fn close(&self) -> Result<(), Error>;
+  fn sql(&self) -> Option<&dyn SqlQuery> {
+    None
+  }
 }
 
 /// A database kind the app knows how to talk to. Capabilities drive the UI:
 /// no capability may assume SQL (Redis browses keys, not tables).
 #[async_trait::async_trait]
 pub trait Connector: Send + Sync {
-    fn capabilities(&self) -> &'static [Capability];
-    async fn connect(
-        &self,
-        profile: &ConnectionProfile,
-        secret: Option<&str>,
-    ) -> Result<Box<dyn Connection>, Error>;
+  fn capabilities(&self) -> &'static [Capability];
+  async fn connect(
+    &self,
+    profile: &ConnectionProfile,
+    secret: Option<&str>,
+  ) -> Result<Box<dyn Connection>, Error>;
 }
 
 // Exhaustive match: adding a ConnectorKind refuses to compile until it gets a connector.
 pub fn connector_for(kind: ConnectorKind) -> &'static dyn Connector {
-    match kind {
-        ConnectorKind::Postgres => &PostgresConnector,
-    }
+  match kind {
+    ConnectorKind::Postgres => &PostgresConnector,
+  }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn postgres_declares_sql_capabilities() {
-        let caps = connector_for(ConnectorKind::Postgres).capabilities();
-        assert!(caps.contains(&Capability::SqlQuery));
-        assert!(caps.contains(&Capability::Introspection));
-        assert!(!caps.contains(&Capability::KvBrowse));
-    }
+  #[test]
+  fn postgres_declares_sql_capabilities() {
+    let caps = connector_for(ConnectorKind::Postgres).capabilities();
+    assert!(caps.contains(&Capability::SqlQuery));
+    assert!(caps.contains(&Capability::Introspection));
+    assert!(!caps.contains(&Capability::KvBrowse));
+  }
 }

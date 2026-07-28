@@ -9,8 +9,34 @@ use specta::Type;
     rename_all_fields = "camelCase"
 )]
 pub enum Error {
-    // Unconstructed until the first fallible command lands.
-    #[allow(dead_code)]
     #[error("{message}")]
-    Internal { message: String },
+    NotFound { message: String },
+    #[error("{message}")]
+    Storage { message: String },
+    #[error("{message}")]
+    Secret { message: String },
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Storage {
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::Storage {
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<keyring::Error> for Error {
+    fn from(err: keyring::Error) -> Self {
+        Error::Secret {
+            message: err.to_string(),
+        }
+    }
 }

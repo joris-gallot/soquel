@@ -1,9 +1,30 @@
+use std::sync::Mutex;
+
+use tauri::Manager;
+
+use crate::profiles::ProfileStore;
+use crate::secrets::{KeyringStore, SecretStore};
+
 mod commands;
 mod error;
+mod profiles;
+mod secrets;
+
+pub struct AppState {
+    pub profiles: Mutex<ProfileStore>,
+    pub secrets: Box<dyn SecretStore>,
+}
 
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::new()
-        .commands(tauri_specta::collect_commands![commands::ping])
+        .commands(tauri_specta::collect_commands![
+            commands::ping,
+            commands::list_connections,
+            commands::get_connection,
+            commands::create_connection,
+            commands::update_connection,
+            commands::delete_connection,
+        ])
         .error_handling(tauri_specta::ErrorHandlingMode::Result)
 }
 
@@ -29,6 +50,11 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            let store = ProfileStore::load(app.path().app_data_dir()?.join("connections.json"))?;
+            app.manage(AppState {
+                profiles: Mutex::new(store),
+                secrets: Box::new(KeyringStore),
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

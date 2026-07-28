@@ -5,11 +5,43 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	ping: () => typedError<string, Error>(__TAURI_INVOKE("ping")),
+	listConnections: () => typedError<ConnectionProfile[], Error>(__TAURI_INVOKE("list_connections")),
+	getConnection: (id: string) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("get_connection", { id })),
+	createConnection: (input: ConnectionInput) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("create_connection", { input })),
+	updateConnection: (id: string, input: ConnectionInput) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("update_connection", { id, input })),
+	deleteConnection: (id: string) => typedError<null, Error>(__TAURI_INVOKE("delete_connection", { id })),
 };
 
 /* Types */
+/**  Secrets ride in on the input but are stored in the OS keychain, never in the profile. */
+export type ConnectionInput = {
+	name: string,
+	env: Env,
+	kind: ConnectorKind,
+	host: string,
+	port: number,
+	database: string,
+	user: string,
+	password: string | null,
+};
+
+export type ConnectionProfile = {
+	id: string,
+	name: string,
+	env: Env,
+	kind: ConnectorKind,
+	host: string,
+	port: number,
+	database: string,
+	user: string,
+};
+
+export type ConnectorKind = "postgres";
+
+export type Env = "dev" | "staging" | "prod";
+
 /**  Normalized error shape crossing the IPC boundary. */
-export type Error = { kind: "internal"; message: string };
+export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

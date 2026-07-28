@@ -20,6 +20,7 @@ src-tauri/gen/schemas/
 .DS_Store
 
 coverage/
+packages/app/e2e/screenshots/
 
 .env*
 !.env.example

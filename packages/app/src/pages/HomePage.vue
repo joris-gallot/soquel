@@ -18,7 +18,7 @@ const { state: pong, isLoading } = useAsyncState(async () => {
       <p class="text-sm text-muted-foreground">
         next generation database client
       </p>
-      <p class="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+      <p data-testid="core-status" class="flex items-center gap-2 font-mono text-xs text-muted-foreground">
         <span
           class="inline-block size-1.5 rounded-full"
           :class="pong ? 'bg-[oklch(0.72_0.11_240)]' : 'bg-muted-foreground/40'"

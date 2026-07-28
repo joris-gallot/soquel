@@ -39,16 +39,20 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .error_handling(tauri_specta::ErrorHandlingMode::Result)
 }
 
+// Anchored to the crate dir: the binary's cwd is wherever the runner spawned it.
+#[cfg(debug_assertions)]
+const BINDINGS_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../packages/app/src/lib/bindings.ts"
+);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = specta_builder();
 
     #[cfg(debug_assertions)]
     builder
-        .export(
-            specta_typescript::Typescript::default(),
-            "../packages/app/src/lib/bindings.ts",
-        )
+        .export(specta_typescript::Typescript::default(), BINDINGS_PATH)
         .expect("failed to export typescript bindings");
 
     tauri::Builder::default()
@@ -81,7 +85,7 @@ mod tests {
         super::specta_builder()
             .export(
                 specta_typescript::Typescript::default(),
-                "../packages/app/src/lib/bindings.ts",
+                super::BINDINGS_PATH,
             )
             .expect("failed to export typescript bindings");
     }

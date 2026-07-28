@@ -1,11 +1,17 @@
 import type { ChildProcess } from 'node:child_process'
 import { spawn, spawnSync } from 'node:child_process'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
 let tauriDriver: ChildProcess | undefined
 let exiting = false
+
+// Isolate e2e runs from the real app data and the OS keychain.
+const E2E_DATA_DIR = path.join(os.tmpdir(), 'soquel-e2e-data')
+process.env.SOQUEL_DATA_DIR = E2E_DATA_DIR
+process.env.SOQUEL_EPHEMERAL_SECRETS = '1'
 
 export const config: WebdriverIO.Config = {
   hostname: '127.0.0.1',
@@ -26,6 +32,7 @@ export const config: WebdriverIO.Config = {
 
   // The webdriver session drives a built binary, not a dev server.
   onPrepare: () => {
+    fs.rmSync(E2E_DATA_DIR, { recursive: true, force: true })
     spawnSync('pnpm', ['tauri', 'build', '--debug', '--no-bundle'], {
       cwd: path.resolve(import.meta.dirname, '../..'),
       stdio: 'inherit',

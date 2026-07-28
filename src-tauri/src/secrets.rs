@@ -39,39 +39,31 @@ impl SecretStore for KeyringStore {
     }
 }
 
-#[cfg(test)]
-pub mod testing {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
+/// Ephemeral store for e2e/CI environments without an OS keychain.
+#[derive(Default)]
+pub struct InMemoryStore(std::sync::Mutex<std::collections::HashMap<String, String>>);
 
-    use super::*;
+impl SecretStore for InMemoryStore {
+    fn set(&self, id: &str, secret: &str) -> Result<(), Error> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), secret.to_string());
+        Ok(())
+    }
 
-    #[derive(Default)]
-    pub struct InMemoryStore(Mutex<HashMap<String, String>>);
+    fn get(&self, id: &str) -> Result<Option<String>, Error> {
+        Ok(self.0.lock().unwrap().get(id).cloned())
+    }
 
-    impl SecretStore for InMemoryStore {
-        fn set(&self, id: &str, secret: &str) -> Result<(), Error> {
-            self.0
-                .lock()
-                .unwrap()
-                .insert(id.to_string(), secret.to_string());
-            Ok(())
-        }
-
-        fn get(&self, id: &str) -> Result<Option<String>, Error> {
-            Ok(self.0.lock().unwrap().get(id).cloned())
-        }
-
-        fn delete(&self, id: &str) -> Result<(), Error> {
-            self.0.lock().unwrap().remove(id);
-            Ok(())
-        }
+    fn delete(&self, id: &str) -> Result<(), Error> {
+        self.0.lock().unwrap().remove(id);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::testing::InMemoryStore;
     use super::*;
 
     #[test]

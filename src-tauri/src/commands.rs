@@ -19,6 +19,38 @@ pub fn connector_capabilities(kind: ConnectorKind) -> Result<Vec<Capability>, Er
     Ok(connector_for(kind).capabilities().to_vec())
 }
 
+/// Ephemeral connect + health check; never touches the active connections.
+#[tauri::command]
+#[specta::specta]
+pub async fn test_connection(
+    state: State<'_, AppState>,
+    input: ConnectionInput,
+    existing_id: Option<String>,
+) -> Result<(), Error> {
+    let secret = match &input.password {
+        Some(password) => Some(password.clone()),
+        None => match &existing_id {
+            Some(id) => state.secrets.get(id)?,
+            None => None,
+        },
+    };
+    let profile = ConnectionProfile {
+        id: String::new(),
+        name: input.name.clone(),
+        env: input.env,
+        kind: input.kind,
+        host: input.host.clone(),
+        port: input.port,
+        database: input.database.clone(),
+        user: input.user.clone(),
+    };
+    let connection = connector_for(input.kind)
+        .connect(&profile, secret.as_deref())
+        .await?;
+    connection.health().await?;
+    connection.close().await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn connect(state: State<'_, AppState>, id: String) -> Result<(), Error> {

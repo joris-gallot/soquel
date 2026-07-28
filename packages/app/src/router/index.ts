@@ -5,8 +5,8 @@ export const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'home',
-      component: () => import('@/pages/HomePage.vue'),
+      name: 'connections',
+      component: () => import('@/pages/ConnectionsPage.vue'),
     },
   ],
 })

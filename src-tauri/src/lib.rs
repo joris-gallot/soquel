@@ -5,7 +5,7 @@ use tauri::Manager;
 
 use crate::connectors::Connection;
 use crate::profiles::ProfileStore;
-use crate::secrets::{KeyringStore, SecretStore};
+use crate::secrets::{InMemoryStore, KeyringStore, SecretStore};
 
 mod commands;
 mod connectors;
@@ -30,6 +30,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::create_connection,
             commands::update_connection,
             commands::delete_connection,
+            commands::test_connection,
             commands::connect,
             commands::disconnect,
             commands::active_connections,
@@ -65,10 +66,22 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            let store = ProfileStore::load(app.path().app_data_dir()?.join("connections.json"))?;
+            // SOQUEL_DATA_DIR isolates e2e runs from the real app data.
+            let data_dir = match std::env::var("SOQUEL_DATA_DIR") {
+                Ok(dir) => std::path::PathBuf::from(dir),
+                Err(_) => app.path().app_data_dir()?,
+            };
+            let store = ProfileStore::load(data_dir.join("connections.json"))?;
+            // e2e/CI have no OS keychain.
+            let secrets: Box<dyn SecretStore> = if std::env::var("SOQUEL_EPHEMERAL_SECRETS").is_ok()
+            {
+                Box::new(InMemoryStore::default())
+            } else {
+                Box::new(KeyringStore)
+            };
             app.manage(AppState {
                 profiles: Mutex::new(store),
-                secrets: Box::new(KeyringStore),
+                secrets,
                 connections: tokio::sync::Mutex::new(HashMap::new()),
             });
             Ok(())

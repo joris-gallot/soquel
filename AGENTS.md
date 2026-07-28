@@ -37,6 +37,9 @@ pnpm build:desktop # tauri build (bundles the app)
 pnpm typecheck     # vue-tsc across the workspace
 pnpm lint          # eslint . (lint:fix to autofix)
 pnpm test          # vitest across the workspace
+pnpm test:e2e      # wdio drives the built debug binary via tauri-driver (Linux/Windows only)
+                   # isolated app data (SOQUEL_DATA_DIR) + in-memory secrets (SOQUEL_EPHEMERAL_SECRETS)
+                   # screenshots land in packages/app/e2e/screenshots/ (gitignored)
 
 cargo check --manifest-path src-tauri/Cargo.toml   # fast Rust validation
 cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings

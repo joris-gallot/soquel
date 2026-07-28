@@ -11,6 +11,8 @@ export const commands = {
 	createConnection: (input: ConnectionInput) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("create_connection", { input })),
 	updateConnection: (id: string, input: ConnectionInput) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("update_connection", { id, input })),
 	deleteConnection: (id: string) => typedError<null, Error>(__TAURI_INVOKE("delete_connection", { id })),
+	/**  Ephemeral connect + health check; never touches the active connections. */
+	testConnection: (input: ConnectionInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_connection", { input, existingId })),
 	connect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("connect", { id })),
 	disconnect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("disconnect", { id })),
 	activeConnections: () => typedError<string[], Error>(__TAURI_INVOKE("active_connections")),

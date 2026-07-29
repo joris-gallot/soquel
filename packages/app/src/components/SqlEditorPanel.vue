@@ -24,7 +24,7 @@ import { soquelEditorTheme } from '@/lib/codemirror'
 import { pushHistory } from '@/lib/query-history'
 import { DEFAULT_SCHEMA, snapshotToNamespace } from '@/lib/sql-schema'
 
-const props = defineProps<{ connectionId: string, snapshot?: SchemaSnapshot | null }>()
+const props = defineProps<{ connectionId: string, tabId: string, snapshot?: SchemaSnapshot | null }>()
 
 const { run, cancel } = useSqlSessions()
 
@@ -32,7 +32,8 @@ const host = useTemplateRef('host')
 let view: EditorView | undefined
 const language = new Compartment()
 
-const doc = useLocalStorage(`soquel:editor:${props.connectionId}`, '')
+// Tab ids persist across restarts, so drafts follow their tab.
+const doc = useLocalStorage(`soquel:editor:${props.connectionId}:${props.tabId}`, '')
 const historyEntries = useLocalStorage<HistoryEntry[]>(`soquel:history:${props.connectionId}`, [])
 
 const running = ref(false)
@@ -109,7 +110,7 @@ async function runQuery() {
   running.value = true
   error.value = null
   try {
-    result.value = await run(props.connectionId, statementSql)
+    result.value = await run(props.connectionId, props.tabId, statementSql)
     activeStatement.value = '0'
     historyEntries.value = pushHistory(historyEntries.value, {
       sql: statementSql,
@@ -134,7 +135,7 @@ async function runQuery() {
 
 async function cancelQuery() {
   try {
-    await cancel(props.connectionId)
+    await cancel(props.connectionId, props.tabId)
   }
   catch {
     // The query may have finished in the meantime; the run itself reports.

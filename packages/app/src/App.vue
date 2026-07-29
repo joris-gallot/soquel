@@ -23,7 +23,10 @@ const { state: pong, isLoading } = useAsyncState(async () => {
   <TooltipProvider :delay-duration="300">
     <div class="flex h-screen flex-col">
       <div class="min-h-0 flex-1">
-        <RouterView />
+        <!-- Keyed: workspace->workspace navigation must remount (connect + per-connection tabs). -->
+        <RouterView v-slot="{ Component }">
+          <component :is="Component" :key="$route.fullPath" />
+        </RouterView>
       </div>
       <footer class="flex items-center gap-2 border-t px-4 py-1 font-mono text-[11px] text-muted-foreground">
         <span

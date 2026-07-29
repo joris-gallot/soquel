@@ -1,5 +1,8 @@
-import { $, browser } from '@wdio/globals'
+import { $, $$, browser } from '@wdio/globals'
 import { TEST_DBS } from './fixtures'
+
+/// WebDriver unicode for the Control key (avoids importing webdriverio's Key enum).
+export const CTRL = '\u{E009}'
 
 export async function createPostgresConnection(name: string) {
   const pg = TEST_DBS.postgres
@@ -22,37 +25,74 @@ export async function deleteFirstConnection() {
   await $('[data-testid="empty-state"]').waitForExist()
 }
 
-/// Replaces the editor content. One insertText event: per-key typing drops
-/// keystrokes under WebKitWebDriver.
+/// First displayed match: inactive tabs keep their panels mounted but hidden,
+/// so bare selectors can land on an invisible duplicate.
+export async function visible(selector: string) {
+  for (const element of await $$(selector)) {
+    if (await element.isDisplayed())
+      return element
+  }
+  throw new Error(`no visible element for ${selector}`)
+}
+
+export async function clickVisible(selector: string) {
+  await (await visible(selector)).click()
+}
+
+/// Replaces the visible editor's content. One insertText event: per-key typing
+/// drops keystrokes under WebKitWebDriver.
 export async function typeSql(sql: string) {
-  // The panel is hidden while the data view is up, and a hidden CM6 is not clickable.
-  await $('[data-testid="view-sql"]').click()
-  await $('[data-testid="sql-input"] .cm-content').click()
+  // Make some sql tab active: the current one, else the first, else a new one.
+  const activeSql = $('[data-testid="tab-bar"] [data-testid^="tab-sql"][data-active]')
+  if (!(await activeSql.isExisting())) {
+    const anySql = $('[data-testid^="tab-sql"]')
+    if (await anySql.isExisting())
+      await anySql.click()
+    else
+      await $('[data-testid="new-sql-tab"]').click()
+  }
+  await (await visible('[data-testid="sql-input"] .cm-content')).click()
   // Ctrl+A through CodeMirror's own keymap: execCommand('selectAll') can land
   // outside the editor and leave the previous statement in place.
-  await browser.keys(['', 'a'])
+  await browser.keys([CTRL, 'a'])
   await browser.execute(text => document.execCommand('insertText', false, text), sql)
   await browser.waitUntil(
-    async () => {
-      const content = await browser.execute(
-        () => document.querySelector('[data-testid="sql-input"] .cm-content')?.textContent ?? '',
-      )
-      return content.trim() === sql
-    },
+    async () => (await visibleText('[data-testid="sql-input"] .cm-content')).trim() === sql,
     { timeout: 10_000, timeoutMsg: `the editor never held exactly "${sql}"` },
   )
 }
 
-export async function waitForText(selector: string, text: string, timeout = 10_000) {
-  // textContent via execute: WebKitWebDriver's getText returns '' on truncated spans.
+// textContent via execute: WebKitWebDriver's getText returns '' on truncated
+// spans. Skips elements hidden by v-show (offsetParent is null).
+async function visibleText(selector: string): Promise<string> {
+  return await browser.execute((sel) => {
+    for (const element of document.querySelectorAll(sel)) {
+      if (element instanceof HTMLElement && element.offsetParent === null)
+        continue
+      return element.textContent ?? ''
+    }
+    return ''
+  }, selector)
+}
+
+/// Rows of the visible grid only: hidden tabs keep their grids mounted.
+export async function waitForVisibleRows(count: number, timeout = 10_000) {
   await browser.waitUntil(
     async () => {
-      const value = await browser.execute(
-        sel => document.querySelector(sel)?.textContent ?? '',
-        selector,
-      )
-      return value.includes(text)
+      const rows = await browser.execute(() => {
+        const body = [...document.querySelectorAll('[data-testid="grid-body"]')]
+          .find(el => el instanceof HTMLElement && el.offsetParent !== null)
+        return body ? body.querySelectorAll('tr').length : -1
+      })
+      return rows === count
     },
+    { timeout, timeoutMsg: `the visible grid never held ${count} rows` },
+  )
+}
+
+export async function waitForText(selector: string, text: string, timeout = 10_000) {
+  await browser.waitUntil(
+    async () => (await visibleText(selector)).includes(text),
     {
       timeout,
       timeoutMsg: `${selector} never contained "${text}"`,

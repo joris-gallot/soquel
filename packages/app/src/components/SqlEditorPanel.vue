@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import {
   CommandDialog,
   CommandEmpty,
+  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -140,6 +141,10 @@ async function cancelQuery() {
   }
 }
 
+function formatTime(at: number) {
+  return new Date(at).toLocaleTimeString()
+}
+
 function loadFromHistory(entry: HistoryEntry) {
   historyOpen.value = false
   view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: entry.sql } })
@@ -232,22 +237,26 @@ function loadFromHistory(entry: HistoryEntry) {
     </div>
 
     <CommandDialog v-model:open="historyOpen">
-      <CommandInput placeholder="Search query history…" />
-      <CommandList>
+      <CommandInput placeholder="Search query history…" data-testid="history-search" />
+      <CommandList data-testid="history-list">
         <CommandEmpty>No queries yet.</CommandEmpty>
-        <CommandItem
-          v-for="(entry, index) in historyEntries"
-          :key="`${entry.at}-${index}`"
-          :value="`${entry.sql} ${index}`"
-          @select="loadFromHistory(entry)"
-        >
-          <span class="truncate font-mono text-xs" :class="entry.ok ? '' : 'text-destructive'">
-            {{ entry.sql }}
-          </span>
-          <span class="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
-            {{ new Date(entry.at).toLocaleTimeString() }}
-          </span>
-        </CommandItem>
+        <CommandGroup>
+          <CommandItem
+            v-for="(entry, index) in historyEntries"
+            :key="`${entry.at}-${index}`"
+            :value="`${entry.sql} ${index}`"
+            data-testid="history-item"
+            @select="loadFromHistory(entry)"
+          >
+            <!-- flex-1 (not ml-auto on the time): CommandItem's trailing check icon also claims ml-auto. -->
+            <span class="min-w-0 flex-1 truncate font-mono text-xs" :class="entry.ok ? '' : 'text-destructive'">
+              {{ entry.sql }}
+            </span>
+            <span class="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+              {{ formatTime(entry.at) }}
+            </span>
+          </CommandItem>
+        </CommandGroup>
       </CommandList>
     </CommandDialog>
   </div>

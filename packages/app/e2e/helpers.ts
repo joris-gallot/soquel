@@ -22,6 +22,27 @@ export async function deleteFirstConnection() {
   await $('[data-testid="empty-state"]').waitForExist()
 }
 
+/// Replaces the editor content. One insertText event: per-key typing drops
+/// keystrokes under WebKitWebDriver.
+export async function typeSql(sql: string) {
+  // The panel is hidden while the data view is up, and a hidden CM6 is not clickable.
+  await $('[data-testid="view-sql"]').click()
+  await $('[data-testid="sql-input"] .cm-content').click()
+  // Ctrl+A through CodeMirror's own keymap: execCommand('selectAll') can land
+  // outside the editor and leave the previous statement in place.
+  await browser.keys(['', 'a'])
+  await browser.execute(text => document.execCommand('insertText', false, text), sql)
+  await browser.waitUntil(
+    async () => {
+      const content = await browser.execute(
+        () => document.querySelector('[data-testid="sql-input"] .cm-content')?.textContent ?? '',
+      )
+      return content.trim() === sql
+    },
+    { timeout: 10_000, timeoutMsg: `the editor never held exactly "${sql}"` },
+  )
+}
+
 export async function waitForText(selector: string, text: string, timeout = 10_000) {
   // textContent via execute: WebKitWebDriver's getText returns '' on truncated spans.
   await browser.waitUntil(

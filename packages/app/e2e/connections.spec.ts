@@ -46,7 +46,9 @@ describe('connection manager', () => {
   it('groups connections into collapsible sections', async () => {
     await $('[data-testid="row-menu"]').click()
     await $('[data-testid="row-edit"]').click()
-    await setEditorValue('[data-testid="field-group"]', 'clients')
+    await $('[data-testid="field-group"]').click()
+    await $('[data-testid="new-group-option"]').click()
+    await setEditorValue('[data-testid="field-new-group"]', 'clients')
     await $('[data-testid="save-connection"]').click()
     await $('[data-testid="field-group"]').waitForExist({ reverse: true })
 

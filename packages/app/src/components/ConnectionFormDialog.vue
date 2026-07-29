@@ -39,6 +39,17 @@ const knownGroups = computed(() =>
   [...new Set(connections.value.map(profile => profile.group).filter((group): group is string => group !== null))].sort(),
 )
 
+const NO_GROUP = 'none'
+const NEW_GROUP = '__new__'
+const groupChoice = ref<string>(NO_GROUP)
+const newGroup = ref('')
+
+function groupValue(): string {
+  if (groupChoice.value === NEW_GROUP)
+    return newGroup.value
+  return groupChoice.value === NO_GROUP ? '' : groupChoice.value
+}
+
 function emptyValues(): ConnectionFormValues {
   return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', tunnelId: NO_TUNNEL, group: '', password: '' }
 }
@@ -57,6 +68,9 @@ watch(open, (isOpen) => {
   testResult.value = null
   importUrl.value = ''
   refreshTunnels()
+  const group = props.profile?.group ?? null
+  groupChoice.value = group === null ? NO_GROUP : group
+  newGroup.value = ''
   values.value = props.profile
     ? {
         name: props.profile.name,
@@ -85,6 +99,7 @@ function applyUrl() {
 }
 
 function parse(): ConnectionInput | null {
+  values.value.group = groupValue()
   const result = connectionSchema.safeParse(values.value)
   if (!result.success) {
     errors.value = zodFieldErrors(result.error)
@@ -248,17 +263,29 @@ async function save() {
 
         <div class="grid grid-cols-2 gap-3">
           <div class="space-y-1.5">
-            <Label for="conn-group">Group</Label>
+            <Label>Group</Label>
+            <Select v-model="groupChoice">
+              <SelectTrigger data-testid="field-group" class="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem :value="NO_GROUP">
+                  none
+                </SelectItem>
+                <SelectItem v-for="group in knownGroups" :key="group" :value="group">
+                  {{ group }}
+                </SelectItem>
+                <SelectItem :value="NEW_GROUP" data-testid="new-group-option">
+                  + new group
+                </SelectItem>
+              </SelectContent>
+            </Select>
             <Input
-              id="conn-group"
-              v-model="values.group"
-              data-testid="field-group"
-              list="known-groups"
-              placeholder="none"
+              v-if="groupChoice === NEW_GROUP"
+              v-model="newGroup"
+              data-testid="field-new-group"
+              placeholder="group name"
             />
-            <datalist id="known-groups">
-              <option v-for="group in knownGroups" :key="group" :value="group" />
-            </datalist>
           </div>
           <div class="space-y-1.5">
             <Label>SSH tunnel</Label>
@@ -276,33 +303,33 @@ async function save() {
               </SelectContent>
             </Select>
           </div>
-
-          <HostKeyTrustPanel />
-
-          <p
-            v-if="testResult"
-            data-testid="test-result"
-            class="font-mono text-xs"
-            :class="testResult.ok ? 'text-emerald-500' : 'text-destructive'"
-          >
-            {{ testResult.message }}
-          </p>
-
-          <DialogFooter class="gap-2 sm:justify-between">
-            <Button
-              type="button"
-              variant="outline"
-              data-testid="test-connection"
-              :disabled="testing"
-              @click="runTest"
-            >
-              {{ testing ? 'Testing…' : 'Test connection' }}
-            </Button>
-            <Button type="submit" data-testid="save-connection" :disabled="saving">
-              {{ profile ? 'Save changes' : 'Create connection' }}
-            </Button>
-          </DialogFooter>
         </div>
+
+        <HostKeyTrustPanel />
+
+        <p
+          v-if="testResult"
+          data-testid="test-result"
+          class="font-mono text-xs"
+          :class="testResult.ok ? 'text-emerald-500' : 'text-destructive'"
+        >
+          {{ testResult.message }}
+        </p>
+
+        <DialogFooter class="gap-2 sm:justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            data-testid="test-connection"
+            :disabled="testing"
+            @click="runTest"
+          >
+            {{ testing ? 'Testing…' : 'Test connection' }}
+          </Button>
+          <Button type="submit" data-testid="save-connection" :disabled="saving">
+            {{ profile ? 'Save changes' : 'Create connection' }}
+          </Button>
+        </DialogFooter>
       </form>
     </DialogContent>
   </Dialog>

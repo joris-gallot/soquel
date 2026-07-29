@@ -58,6 +58,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::update_tunnel,
       commands::delete_tunnel,
       commands::test_tunnel,
+      commands::default_ssh_keys,
       commands::trust_host_key,
     ])
     .error_handling(tauri_specta::ErrorHandlingMode::Result)

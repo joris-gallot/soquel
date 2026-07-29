@@ -349,6 +349,12 @@ pub async fn test_tunnel(
 
 #[tauri::command]
 #[specta::specta]
+pub fn default_ssh_keys() -> Result<Vec<String>, Error> {
+  Ok(ssh::default_key_paths())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn trust_host_key(
   state: State<'_, AppState>,
   host: String,

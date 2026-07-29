@@ -23,7 +23,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useTunnels } from '@/composables/useTunnels'
-import { CommandError } from '@/lib/result'
+import { commands } from '@/lib/bindings'
+import { CommandError, unwrap } from '@/lib/result'
 import { SSH_AUTH_HINTS, SSH_AUTH_LABELS, SSH_AUTH_METHODS, SSH_AUTH_NEEDS_SECRET, toTunnelInput, tunnelSchema } from '@/lib/tunnels'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -42,12 +43,14 @@ const errors = ref<Record<string, string>>({})
 const saving = ref(false)
 const testing = ref(false)
 const testResult = ref<{ ok: boolean, message: string } | null>(null)
+const defaultKeys = ref<string[]>([])
 
-watch(open, (isOpen) => {
+watch(open, async (isOpen) => {
   if (!isOpen)
     return
   errors.value = {}
   testResult.value = null
+  defaultKeys.value = unwrap(await commands.defaultSshKeys())
   values.value = props.tunnel
     ? {
         name: props.tunnel.name,
@@ -59,6 +62,12 @@ watch(open, (isOpen) => {
         secret: '',
       }
     : emptyValues()
+})
+
+// Prefill the first identity OpenSSH itself would try, once the user asks for a key.
+watch(() => values.value.method, (method) => {
+  if (method === 'key-file' && values.value.keyPath === '')
+    values.value.keyPath = defaultKeys.value[0] ?? ''
 })
 
 function parse(): TunnelInput | null {
@@ -192,6 +201,21 @@ async function save() {
           <p v-if="errors.keyPath" class="text-xs text-destructive">
             {{ errors.keyPath }}
           </p>
+          <p v-if="defaultKeys.length === 0" class="text-xs text-muted-foreground">
+            No key found in ~/.ssh. Generate one with
+            <span class="font-mono">ssh-keygen -t ed25519</span>, or pick another authentication method.
+          </p>
+          <div v-else-if="defaultKeys.length > 1" class="flex flex-wrap gap-1">
+            <button
+              v-for="key in defaultKeys"
+              :key="key"
+              type="button"
+              class="rounded border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
+              @click="values.keyPath = key"
+            >
+              {{ key }}
+            </button>
+          </div>
         </div>
 
         <div v-if="SSH_AUTH_NEEDS_SECRET[values.method]" class="space-y-1.5">

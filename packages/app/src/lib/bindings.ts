@@ -30,6 +30,7 @@ export const commands = {
 	 *  without touching a database (no channel is opened until a client connects).
 	 */
 	testTunnel: (input: TunnelInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_tunnel", { input, existingId })),
+	defaultSshKeys: () => typedError<string[], Error>(__TAURI_INVOKE("default_ssh_keys")),
 	trustHostKey: (host: string, port: number, key: string) => typedError<null, Error>(__TAURI_INVOKE("trust_host_key", { host, port, key })),
 };
 

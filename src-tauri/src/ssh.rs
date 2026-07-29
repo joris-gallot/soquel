@@ -303,6 +303,31 @@ pub fn parse_public_key(raw: &str) -> Result<ssh_key::PublicKey, Error> {
   })
 }
 
+// OpenSSH's own default identity order.
+const DEFAULT_KEY_NAMES: [&str; 5] = [
+  "id_ed25519",
+  "id_ecdsa",
+  "id_ecdsa_sk",
+  "id_ed25519_sk",
+  "id_rsa",
+];
+
+/// Default identity files that actually exist, tilde-form for display.
+pub fn default_key_paths() -> Vec<String> {
+  match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+    Some(home) => key_paths_in(std::path::Path::new(&home)),
+    None => Vec::new(),
+  }
+}
+
+fn key_paths_in(home: &std::path::Path) -> Vec<String> {
+  DEFAULT_KEY_NAMES
+    .iter()
+    .filter(|name| home.join(".ssh").join(name).is_file())
+    .map(|name| format!("~/.ssh/{name}"))
+    .collect()
+}
+
 fn expand_tilde(path: &str) -> PathBuf {
   if let Some(rest) = path.strip_prefix("~/") {
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
@@ -340,6 +365,22 @@ mod tests {
     "/../scripts/test-ssh/id_ed25519_pp"
   );
   const TEST_KEY_PP_PASSPHRASE: &str = "soquel-test";
+
+  #[test]
+  fn default_keys_list_only_existing_files_in_openssh_order() {
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    assert!(key_paths_in(home.path()).is_empty());
+
+    std::fs::write(ssh.join("id_rsa"), "x").unwrap();
+    std::fs::write(ssh.join("id_ed25519"), "x").unwrap();
+    std::fs::create_dir(ssh.join("id_ecdsa")).unwrap();
+    assert_eq!(
+      key_paths_in(home.path()),
+      vec!["~/.ssh/id_ed25519", "~/.ssh/id_rsa"]
+    );
+  }
 
   fn tunnel_from_env(key_path: &str) -> Option<TunnelProfile> {
     let addr = std::env::var("SOQUEL_TEST_SSH").ok()?;

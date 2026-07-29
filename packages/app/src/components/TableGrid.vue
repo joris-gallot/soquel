@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import {
   Select,
   SelectContent,
@@ -15,9 +16,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { commands } from '@/lib/bindings'
 import { FILTER_OP_LABELS, FILTER_OPS_BY_KIND, filterLabel, OP_NEEDS_VALUE } from '@/lib/filters'
 import { formatEstimatedRows } from '@/lib/format'
+import { highlightJson } from '@/lib/highlight-json'
 import { unwrap } from '@/lib/result'
 
 const props = defineProps<{
@@ -83,6 +86,12 @@ const inspectedPretty = computed(() => {
     return cell.value
   }
 })
+
+const inspectedHtml = computed(() =>
+  inspected.value?.column.kind === 'json' && inspectedPretty.value !== null
+    ? highlightJson(inspectedPretty.value)
+    : null,
+)
 
 async function fetchRows() {
   loading.value = true
@@ -194,8 +203,8 @@ function previousPage() {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0" data-testid="grid">
-    <div class="flex min-w-0 flex-1 flex-col">
+  <ResizablePanelGroup direction="horizontal" auto-save-id="soquel-grid" class="h-full min-h-0" data-testid="grid">
+    <ResizablePanel id="grid-rows" :min-size="30" class="flex min-w-0 flex-col">
       <div
         v-if="filters.length > 0"
         class="flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5"
@@ -402,51 +411,63 @@ function previousPage() {
           <ChevronRight />
         </Button>
       </footer>
-    </div>
+    </ResizablePanel>
 
-    <aside
-      v-if="inspected"
-      class="flex w-80 shrink-0 flex-col border-l"
-      data-testid="cell-inspector"
-    >
-      <header class="flex items-center gap-2 border-b px-3 py-1.5">
-        <span class="min-w-0 truncate font-mono text-xs font-medium">{{ inspected.column.name }}</span>
-        <span class="font-mono text-[10px] text-muted-foreground">{{ inspected.column.dataType }}</span>
-        <span class="flex-1" />
-        <Button
-          v-if="inspected.value !== null"
-          size="icon-sm"
-          variant="ghost"
-          :aria-label="copied ? 'Copied' : 'Copy value'"
-          data-testid="inspector-copy"
-          @click="copy(inspected.value)"
-        >
-          <Copy :class="copied ? 'text-emerald-500' : ''" />
-        </Button>
-        <Button
-          v-if="fkByColumn.has(inspected.column.name) && inspected.value !== null"
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Open referenced row"
-          data-testid="inspector-hop"
-          @click="hopFrom(inspected.rowIndex, inspected.column.name)"
-        >
-          <ArrowUpRight />
-        </Button>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Close inspector"
-          data-testid="inspector-close"
-          @click="selectedCell = null"
-        >
-          <X />
-        </Button>
-      </header>
-      <div class="min-h-0 flex-1 overflow-auto p-3">
-        <span v-if="inspected.value === null" class="font-mono text-xs text-muted-foreground/60 italic">NULL</span>
-        <pre v-else class="font-mono text-xs break-all whitespace-pre-wrap" data-testid="inspector-value">{{ inspectedPretty }}</pre>
-      </div>
-    </aside>
-  </div>
+    <template v-if="inspected">
+      <ResizableHandle with-handle />
+      <ResizablePanel id="grid-inspector" :default-size="28" :min-size="15" :max-size="60">
+        <aside class="flex h-full min-h-0 flex-col" data-testid="cell-inspector">
+          <header class="flex items-center gap-2 border-b px-3 py-1.5">
+            <span class="min-w-0 truncate font-mono text-xs font-medium">{{ inspected.column.name }}</span>
+            <span class="font-mono text-[10px] text-muted-foreground">{{ inspected.column.dataType }}</span>
+            <span class="flex-1" />
+            <!-- Controlled open: the tooltip only flashes "Copied" after a click. -->
+            <Tooltip v-if="inspected.value !== null" :open="copied">
+              <TooltipTrigger as-child>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Copy value"
+                  data-testid="inspector-copy"
+                  @click="copy(inspected.value)"
+                >
+                  <Copy />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Copied</TooltipContent>
+            </Tooltip>
+            <Tooltip v-if="fkByColumn.has(inspected.column.name) && inspected.value !== null">
+              <TooltipTrigger as-child>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Open referenced row"
+                  data-testid="inspector-hop"
+                  @click="hopFrom(inspected.rowIndex, inspected.column.name)"
+                >
+                  <ArrowUpRight />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Open referenced row</TooltipContent>
+            </Tooltip>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Close inspector"
+              data-testid="inspector-close"
+              @click="selectedCell = null"
+            >
+              <X />
+            </Button>
+          </header>
+          <div class="min-h-0 flex-1 overflow-auto p-3">
+            <span v-if="inspected.value === null" class="font-mono text-xs text-muted-foreground/60 italic">NULL</span>
+            <!-- eslint-disable-next-line vue/no-v-html -- highlightJson escapes every text node -->
+            <pre v-else-if="inspectedHtml" class="font-mono text-xs break-all whitespace-pre-wrap" data-testid="inspector-value" v-html="inspectedHtml" />
+            <pre v-else class="font-mono text-xs break-all whitespace-pre-wrap" data-testid="inspector-value">{{ inspectedPretty }}</pre>
+          </div>
+        </aside>
+      </ResizablePanel>
+    </template>
+  </ResizablePanelGroup>
 </template>

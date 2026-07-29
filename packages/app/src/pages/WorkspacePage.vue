@@ -10,6 +10,7 @@ import TableGrid from '@/components/TableGrid.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useConnections } from '@/composables/useConnections'
@@ -94,64 +95,68 @@ function openSqlView() {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0">
-    <aside class="flex w-64 shrink-0 flex-col border-r bg-sidebar">
-      <header class="flex items-center gap-1.5 border-b px-2 py-2">
-        <Tooltip>
-          <TooltipTrigger as-child>
-            <Button size="icon-sm" variant="ghost" aria-label="Back to connections" data-testid="workspace-back" @click="router.push({ name: 'connections' })">
-              <ArrowLeft />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Connections</TooltipContent>
-        </Tooltip>
-        <span class="min-w-0 flex-1 truncate font-mono text-sm" data-testid="workspace-name">
-          {{ profile?.name }}
-        </span>
-        <Badge
-          v-if="profile"
-          variant="outline"
-          class="font-mono text-[10px]"
-          :class="ENV_BADGE_CLASSES[profile.env]"
-        >
-          {{ profile.env }}
-        </Badge>
-        <Tooltip>
-          <TooltipTrigger as-child>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Refresh schema"
-              data-testid="refresh-schema"
-              :disabled="pending[id]"
-              @click="refreshSchema"
-            >
-              <RefreshCw :class="pending[id] ? 'animate-spin' : ''" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Refresh schema</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger as-child>
-            <Button size="icon-sm" variant="ghost" aria-label="Disconnect" data-testid="workspace-disconnect" @click="leave">
-              <Unplug />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Disconnect</TooltipContent>
-        </Tooltip>
-      </header>
-      <div class="px-2 py-2">
-        <Input v-model="filter" placeholder="filter tables" class="h-7 font-mono text-xs" data-testid="tree-filter" />
-      </div>
-      <ScrollArea class="min-h-0 flex-1">
-        <SchemaTree v-if="snapshot" :snapshot="snapshot" :filter="filter" @select="selectTable" />
-        <p v-else class="px-4 py-6 font-mono text-xs text-muted-foreground">
-          loading schema…
-        </p>
-      </ScrollArea>
-    </aside>
+  <ResizablePanelGroup direction="horizontal" auto-save-id="soquel-workspace" class="h-full min-h-0">
+    <ResizablePanel id="workspace-sidebar" :default-size="20" :min-size="12" :max-size="40">
+      <aside class="flex h-full min-h-0 flex-col bg-sidebar">
+        <header class="flex items-center gap-1.5 border-b px-2 py-2">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button size="icon-sm" variant="ghost" aria-label="Back to connections" data-testid="workspace-back" @click="router.push({ name: 'connections' })">
+                <ArrowLeft />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Connections</TooltipContent>
+          </Tooltip>
+          <span class="min-w-0 flex-1 truncate font-mono text-sm" data-testid="workspace-name">
+            {{ profile?.name }}
+          </span>
+          <Badge
+            v-if="profile"
+            variant="outline"
+            class="font-mono text-[10px]"
+            :class="ENV_BADGE_CLASSES[profile.env]"
+          >
+            {{ profile.env }}
+          </Badge>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Refresh schema"
+                data-testid="refresh-schema"
+                :disabled="pending[id]"
+                @click="refreshSchema"
+              >
+                <RefreshCw :class="pending[id] ? 'animate-spin' : ''" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Refresh schema</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button size="icon-sm" variant="ghost" aria-label="Disconnect" data-testid="workspace-disconnect" @click="leave">
+                <Unplug />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Disconnect</TooltipContent>
+          </Tooltip>
+        </header>
+        <div class="px-2 py-2">
+          <Input v-model="filter" placeholder="filter tables" class="h-7 font-mono text-xs" data-testid="tree-filter" />
+        </div>
+        <ScrollArea class="min-h-0 flex-1">
+          <SchemaTree v-if="snapshot" :snapshot="snapshot" :filter="filter" @select="selectTable" />
+          <p v-else class="px-4 py-6 font-mono text-xs text-muted-foreground">
+            loading schema…
+          </p>
+        </ScrollArea>
+      </aside>
+    </ResizablePanel>
 
-    <main class="flex min-w-0 flex-1 flex-col">
+    <ResizableHandle with-handle />
+
+    <ResizablePanel id="workspace-main" class="flex min-w-0 flex-col">
       <header class="flex items-center gap-2 border-b px-3 py-1.5 font-mono text-xs text-muted-foreground">
         <button
           type="button"
@@ -203,6 +208,6 @@ function openSqlView() {
           soquel=#<span class="ml-1 text-muted-foreground/60">select a table or open sql</span>
         </p>
       </div>
-    </main>
-  </div>
+    </ResizablePanel>
+  </ResizablePanelGroup>
 </template>

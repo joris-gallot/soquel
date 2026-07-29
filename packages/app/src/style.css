@@ -128,6 +128,26 @@
     --sql-comment: oklch(0.55 0 0);
 }
 
+/* Highlighted values (inspector): @lezer classHighlighter token classes. */
+.tok-propertyName {
+    color: var(--sql-keyword);
+}
+
+.tok-string {
+    color: var(--sql-string);
+}
+
+.tok-number,
+.tok-bool,
+.tok-atom,
+.tok-null {
+    color: var(--sql-number);
+}
+
+.tok-punctuation {
+    color: var(--muted-foreground);
+}
+
 @layer base {
     * {
         @apply border-border outline-ring/50;

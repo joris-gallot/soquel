@@ -3,6 +3,7 @@ import type { ConnectionInput, ConnectionProfile } from '@/lib/bindings'
 import type { ConnectionFormValues } from '@/lib/connections'
 import { ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
+import HostKeyTrustPanel from '@/components/HostKeyTrustPanel.vue'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -22,7 +23,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useConnections } from '@/composables/useConnections'
-import { connectionSchema, ENVS, parsePostgresUrl, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { useTunnels } from '@/composables/useTunnels'
+import { connectionSchema, ENVS, NO_TUNNEL, parsePostgresUrl, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
 const props = defineProps<{ profile?: ConnectionProfile | null }>()
@@ -30,9 +33,10 @@ const emit = defineEmits<{ saved: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
 const { create, update, test } = useConnections()
+const { tunnels, refresh: refreshTunnels } = useTunnels()
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', password: '' }
+  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', tunnelId: NO_TUNNEL, password: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -48,6 +52,7 @@ watch(open, (isOpen) => {
   errors.value = {}
   testResult.value = null
   importUrl.value = ''
+  refreshTunnels()
   values.value = props.profile
     ? {
         name: props.profile.name,
@@ -58,6 +63,7 @@ watch(open, (isOpen) => {
         database: props.profile.database,
         user: props.profile.user,
         sslMode: props.profile.sslMode ?? 'prefer',
+        tunnelId: props.profile.tunnelId ?? NO_TUNNEL,
         password: '',
       }
     : emptyValues()
@@ -94,7 +100,11 @@ async function runTest() {
     testResult.value = { ok: true, message: 'Connection OK' }
   }
   catch (error) {
-    testResult.value = { ok: false, message: error instanceof Error ? error.message : String(error) }
+    // The host key panel owns this failure mode.
+    if (error instanceof CommandError && error.kind === 'host-key-untrusted')
+      testResult.value = null
+    else
+      testResult.value = { ok: false, message: error instanceof Error ? error.message : String(error) }
   }
   finally {
     testing.value = false
@@ -230,6 +240,25 @@ async function save() {
             />
           </div>
         </div>
+
+        <div class="space-y-1.5">
+          <Label>SSH tunnel</Label>
+          <Select v-model="values.tunnelId">
+            <SelectTrigger data-testid="field-tunnel" class="w-full">
+              <SelectValue placeholder="none" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem :value="NO_TUNNEL">
+                none
+              </SelectItem>
+              <SelectItem v-for="tunnel in tunnels" :key="tunnel.id" :value="tunnel.id">
+                {{ tunnel.name }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <HostKeyTrustPanel />
 
         <p
           v-if="testResult"

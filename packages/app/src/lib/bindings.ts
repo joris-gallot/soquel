@@ -20,6 +20,17 @@ export const commands = {
 	cancelQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_query", { id })),
 	tableRows: (id: string, request: TableRowsRequest) => typedError<QueryResult, Error>(__TAURI_INVOKE("table_rows", { id, request })),
 	schemaSnapshot: (id: string) => typedError<SchemaSnapshot, Error>(__TAURI_INVOKE("schema_snapshot", { id })),
+	listTunnels: () => typedError<TunnelProfile[], Error>(__TAURI_INVOKE("list_tunnels")),
+	getTunnel: (id: string) => typedError<TunnelProfile, Error>(__TAURI_INVOKE("get_tunnel", { id })),
+	createTunnel: (input: TunnelInput) => typedError<TunnelProfile, Error>(__TAURI_INVOKE("create_tunnel", { input })),
+	updateTunnel: (id: string, input: TunnelInput) => typedError<TunnelProfile, Error>(__TAURI_INVOKE("update_tunnel", { id, input })),
+	deleteTunnel: (id: string) => typedError<null, Error>(__TAURI_INVOKE("delete_tunnel", { id })),
+	/**
+	 *  Ephemeral tunnel bring-up: validates the host key and the credentials
+	 *  without touching a database (no channel is opened until a client connects).
+	 */
+	testTunnel: (input: TunnelInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_tunnel", { input, existingId })),
+	trustHostKey: (host: string, port: number, key: string) => typedError<null, Error>(__TAURI_INVOKE("trust_host_key", { host, port, key })),
 };
 
 /* Types */
@@ -48,6 +59,7 @@ export type ConnectionInput = {
 	database: string,
 	user: string,
 	sslMode?: SslMode,
+	tunnelId?: string | null,
 	password: string | null,
 };
 
@@ -61,6 +73,7 @@ export type ConnectionProfile = {
 	database: string,
 	user: string,
 	sslMode?: SslMode,
+	tunnelId?: string | null,
 };
 
 export type ConnectorKind = "postgres";
@@ -68,7 +81,7 @@ export type ConnectorKind = "postgres";
 export type Env = "dev" | "staging" | "prod";
 
 /**  Normalized error shape crossing the IPC boundary. */
-export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string };
+export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean };
 
 export type ForeignKeyInfo = {
 	name: string,
@@ -118,6 +131,10 @@ export type SortSpec = {
 	direction: SortDirection,
 };
 
+export type SshAuth = { method: "agent" } | { method: "key-file"; path: string } | { method: "password" } | 
+/**  No credential: the server authorizes the connection on its own. */
+{ method: "none" };
+
 /**
  *  libpq semantics: `require` encrypts without verifying the certificate,
  *  only `verify-full` checks the chain and hostname.
@@ -149,6 +166,28 @@ export type TableRowsRequest = {
 	limit: number,
 	offset: number,
 	sort: SortSpec | null,
+};
+
+/**
+ *  The secret (key passphrase or password) rides in on the input but is
+ *  stored in the SecretStore, never in the tunnel profile.
+ */
+export type TunnelInput = {
+	name: string,
+	host: string,
+	port: number,
+	user: string,
+	auth: SshAuth,
+	secret: string | null,
+};
+
+export type TunnelProfile = {
+	id: string,
+	name: string,
+	host: string,
+	port: number,
+	user: string,
+	auth: SshAuth,
 };
 
 /* Tauri Specta runtime */

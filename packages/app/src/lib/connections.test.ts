@@ -59,6 +59,7 @@ describe('connectionSchema', () => {
     database: 'app',
     user: 'postgres',
     sslMode: 'prefer',
+    tunnelId: '',
     password: '',
   }
 
@@ -88,5 +89,14 @@ describe('connectionSchema', () => {
     expect(input.password).toBeNull()
     const withPassword = toConnectionInput(connectionSchema.parse({ ...valid, password: 'x' }))
     expect(withPassword.password).toBe('x')
+  })
+
+  it('turns the no-tunnel sentinel into null for the command input', () => {
+    expect(toConnectionInput(connectionSchema.parse(valid)).tunnelId).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: 'none' })).tunnelId).toBeNull()
+    // Reka Select can clear the model to undefined; the schema falls back to no tunnel.
+    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: undefined })).tunnelId).toBeNull()
+    const withTunnel = toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: 't-1' }))
+    expect(withTunnel.tunnelId).toBe('t-1')
   })
 })

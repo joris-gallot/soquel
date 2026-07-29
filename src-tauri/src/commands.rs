@@ -7,7 +7,47 @@ use crate::connectors::{
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind};
-use crate::AppState;
+use crate::ssh::{self, SshTunnel, TunnelTarget};
+use crate::tunnels::{TunnelInput, TunnelProfile};
+use crate::{ActiveConnection, AppState};
+
+fn tunnel_secret_id(tunnel_id: &str) -> String {
+  format!("tunnel:{tunnel_id}")
+}
+
+/// Resolve a profile's tunnel (if any) and rewrite host/port to the local
+/// forward so the connector never knows a tunnel exists.
+async fn open_tunnel(
+  state: &State<'_, AppState>,
+  profile: &ConnectionProfile,
+) -> Result<(Option<SshTunnel>, ConnectionProfile), Error> {
+  let Some(tunnel_id) = &profile.tunnel_id else {
+    return Ok((None, profile.clone()));
+  };
+  let tunnel = state.tunnels.lock().unwrap().get(tunnel_id)?;
+  let secret = state.secrets.get(&tunnel_secret_id(tunnel_id))?;
+  let known_key = state
+    .known_hosts
+    .lock()
+    .unwrap()
+    .get(&tunnel.host, tunnel.port)
+    .map(|raw| ssh::parse_public_key(&raw))
+    .transpose()?;
+  let opened = SshTunnel::open(
+    &tunnel,
+    secret.as_deref(),
+    known_key,
+    TunnelTarget {
+      host: profile.host.clone(),
+      port: profile.port,
+    },
+  )
+  .await?;
+  let mut local = profile.clone();
+  local.host = "127.0.0.1".to_string();
+  local.port = opened.local_port;
+  Ok((Some(opened), local))
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -46,9 +86,11 @@ pub async fn test_connection(
     database: input.database.clone(),
     user: input.user.clone(),
     ssl_mode: input.ssl_mode,
+    tunnel_id: input.tunnel_id.clone(),
   };
+  let (_tunnel, local) = open_tunnel(&state, &profile).await?;
   let connection = connector_for(input.kind)
-    .connect(&profile, secret.as_deref())
+    .connect(&local, secret.as_deref())
     .await?;
   connection.health().await?;
   connection.close().await
@@ -59,19 +101,26 @@ pub async fn test_connection(
 pub async fn connect(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   let profile = state.profiles.lock().unwrap().get(&id)?;
   let secret = state.secrets.get(&id)?;
+  let (tunnel, local) = open_tunnel(&state, &profile).await?;
   let connection = connector_for(profile.kind)
-    .connect(&profile, secret.as_deref())
+    .connect(&local, secret.as_deref())
     .await?;
-  state.connections.lock().await.insert(id, connection.into());
+  state.connections.lock().await.insert(
+    id,
+    ActiveConnection {
+      connection: connection.into(),
+      _tunnel: tunnel,
+    },
+  );
   Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Error> {
-  let connection = state.connections.lock().await.remove(&id);
-  match connection {
-    Some(connection) => connection.close().await,
+  let active = state.connections.lock().await.remove(&id);
+  match active {
+    Some(active) => active.connection.close().await,
     None => Ok(()),
   }
 }
@@ -131,7 +180,7 @@ async fn active(state: &State<'_, AppState>, id: &str) -> Result<Arc<dyn Connect
     .lock()
     .await
     .get(id)
-    .cloned()
+    .map(|active| active.connection.clone())
     .ok_or_else(|| Error::NotFound {
       message: format!("connection {id} is not active"),
     })
@@ -191,4 +240,121 @@ pub fn update_connection(
 pub fn delete_connection(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   state.profiles.lock().unwrap().delete(&id)?;
   state.secrets.delete(&id)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn list_tunnels(state: State<'_, AppState>) -> Result<Vec<TunnelProfile>, Error> {
+  Ok(state.tunnels.lock().unwrap().list())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_tunnel(state: State<'_, AppState>, id: String) -> Result<TunnelProfile, Error> {
+  state.tunnels.lock().unwrap().get(&id)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn create_tunnel(state: State<'_, AppState>, input: TunnelInput) -> Result<TunnelProfile, Error> {
+  let tunnel = state.tunnels.lock().unwrap().create(&input)?;
+  if let Some(secret) = &input.secret {
+    // No orphan tunnel when the keychain is unavailable.
+    if let Err(err) = state.secrets.set(&tunnel_secret_id(&tunnel.id), secret) {
+      let _ = state.tunnels.lock().unwrap().delete(&tunnel.id);
+      return Err(err);
+    }
+  }
+  Ok(tunnel)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn update_tunnel(
+  state: State<'_, AppState>,
+  id: String,
+  input: TunnelInput,
+) -> Result<TunnelProfile, Error> {
+  let tunnel = state.tunnels.lock().unwrap().update(&id, &input)?;
+  if let Some(secret) = &input.secret {
+    state.secrets.set(&tunnel_secret_id(&tunnel.id), secret)?;
+  }
+  Ok(tunnel)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn delete_tunnel(state: State<'_, AppState>, id: String) -> Result<(), Error> {
+  let used_by: Vec<String> = state
+    .profiles
+    .lock()
+    .unwrap()
+    .list()
+    .into_iter()
+    .filter(|p| p.tunnel_id.as_deref() == Some(id.as_str()))
+    .map(|p| p.name)
+    .collect();
+  if !used_by.is_empty() {
+    return Err(Error::Storage {
+      message: format!("tunnel is used by {}", used_by.join(", ")),
+    });
+  }
+  state.tunnels.lock().unwrap().delete(&id)?;
+  state.secrets.delete(&tunnel_secret_id(&id))
+}
+
+/// Ephemeral tunnel bring-up: validates the host key and the credentials
+/// without touching a database (no channel is opened until a client connects).
+#[tauri::command]
+#[specta::specta]
+pub async fn test_tunnel(
+  state: State<'_, AppState>,
+  input: TunnelInput,
+  existing_id: Option<String>,
+) -> Result<(), Error> {
+  let secret = match &input.secret {
+    Some(secret) => Some(secret.clone()),
+    None => match &existing_id {
+      Some(id) => state.secrets.get(&tunnel_secret_id(id))?,
+      None => None,
+    },
+  };
+  let tunnel = TunnelProfile {
+    id: String::new(),
+    name: input.name.clone(),
+    host: input.host.clone(),
+    port: input.port,
+    user: input.user.clone(),
+    auth: input.auth.clone(),
+  };
+  let known_key = state
+    .known_hosts
+    .lock()
+    .unwrap()
+    .get(&tunnel.host, tunnel.port)
+    .map(|raw| ssh::parse_public_key(&raw))
+    .transpose()?;
+  SshTunnel::open(
+    &tunnel,
+    secret.as_deref(),
+    known_key,
+    TunnelTarget {
+      host: "127.0.0.1".to_string(),
+      port: 1,
+    },
+  )
+  .await
+  .map(|_| ())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn trust_host_key(
+  state: State<'_, AppState>,
+  host: String,
+  port: u16,
+  key: String,
+) -> Result<(), Error> {
+  ssh::parse_public_key(&key)?;
+  state.known_hosts.lock().unwrap().trust(&host, port, &key)
 }

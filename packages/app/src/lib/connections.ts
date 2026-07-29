@@ -5,6 +5,8 @@ export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
 
 export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-full'] as const satisfies readonly SslMode[]
 
+export const NO_TUNNEL = 'none'
+
 export const ENV_BADGE_CLASSES: Record<Env, string> = {
   dev: 'border-transparent bg-muted text-muted-foreground',
   staging: 'border-amber-500/30 bg-amber-500/10 text-amber-500',
@@ -20,6 +22,8 @@ export const connectionSchema = z.object({
   database: z.string().min(1, 'Database is required'),
   user: z.string().min(1, 'User is required'),
   sslMode: z.enum(SSL_MODES),
+  // Reka Select reserves '' for clearing, so "no tunnel" is a sentinel value.
+  tunnelId: z.string().catch(NO_TUNNEL),
   password: z.string(),
 })
 
@@ -33,11 +37,16 @@ export interface ConnectionFormValues {
   database: string
   user: string
   sslMode: SslMode
+  tunnelId: string
   password: string
 }
 
 export function toConnectionInput(values: z.output<typeof connectionSchema>): ConnectionInput {
-  return { ...values, password: values.password === '' ? null : values.password }
+  return {
+    ...values,
+    tunnelId: values.tunnelId === NO_TUNNEL || values.tunnelId === '' ? null : values.tunnelId,
+    password: values.password === '' ? null : values.password,
+  }
 }
 
 // libpq's sslmode values mapped onto the app's coarser set.

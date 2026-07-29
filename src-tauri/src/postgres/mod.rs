@@ -548,6 +548,7 @@ pub mod tests {
       database: config.get_dbname().unwrap().to_string(),
       user: config.get_user().unwrap().to_string(),
       ssl_mode: SslMode::Prefer,
+      tunnel_id: None,
     }
   }
 

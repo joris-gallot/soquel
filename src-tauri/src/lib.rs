@@ -4,20 +4,34 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 use crate::connectors::Connection;
+use crate::known_hosts::KnownHostsStore;
 use crate::profiles::ProfileStore;
 use crate::secrets::{FileStore, InMemoryStore, KeyringStore, SecretStore};
+use crate::ssh::SshTunnel;
+use crate::tunnels::TunnelStore;
 
 mod commands;
 mod connectors;
 mod error;
+mod known_hosts;
 mod postgres;
 mod profiles;
 mod secrets;
+mod ssh;
+mod tunnels;
+
+/// A connected database plus the tunnel carrying it: dropped together.
+pub struct ActiveConnection {
+  pub connection: Arc<dyn Connection>,
+  pub _tunnel: Option<SshTunnel>,
+}
 
 pub struct AppState {
   pub profiles: Mutex<ProfileStore>,
+  pub tunnels: Mutex<TunnelStore>,
+  pub known_hosts: Mutex<KnownHostsStore>,
   pub secrets: Box<dyn SecretStore>,
-  pub connections: tokio::sync::Mutex<HashMap<String, Arc<dyn Connection>>>,
+  pub connections: tokio::sync::Mutex<HashMap<String, ActiveConnection>>,
 }
 
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
@@ -38,6 +52,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::cancel_query,
       commands::table_rows,
       commands::schema_snapshot,
+      commands::list_tunnels,
+      commands::get_tunnel,
+      commands::create_tunnel,
+      commands::update_tunnel,
+      commands::delete_tunnel,
+      commands::test_tunnel,
+      commands::trust_host_key,
     ])
     .error_handling(tauri_specta::ErrorHandlingMode::Result)
 }
@@ -74,6 +95,8 @@ pub fn run() {
         Err(_) => app.path().app_data_dir()?,
       };
       let store = ProfileStore::load(data_dir.join("connections.json"))?;
+      let tunnels = TunnelStore::load(data_dir.join("tunnels.json"))?;
+      let known_hosts = KnownHostsStore::load(data_dir.join("known_hosts.json"))?;
       // Keychain-less environments: e2e/CI (ephemeral) and WSL dev (plaintext file, opt-in).
       let secrets: Box<dyn SecretStore> = if std::env::var("SOQUEL_EPHEMERAL_SECRETS").is_ok() {
         Box::new(InMemoryStore::default())
@@ -84,6 +107,8 @@ pub fn run() {
       };
       app.manage(AppState {
         profiles: Mutex::new(store),
+        tunnels: Mutex::new(tunnels),
+        known_hosts: Mutex::new(known_hosts),
         secrets,
         connections: tokio::sync::Mutex::new(HashMap::new()),
       });

@@ -21,3 +21,19 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+  # Bastion for tunnel tests: forwards to the postgres service over the compose network.
+  sshd:
+    image: panubo/sshd:1.5.0
+    ports:
+      - '5458:22'
+    environment:
+      SSH_USERS: tunnel:1000:1000
+      TCP_FORWARDING: 'true'
+    volumes:
+      - ./scripts/test-ssh/authorized_keys:/etc/authorized_keys/tunnel:ro
+    healthcheck:
+      test: [CMD-SHELL, nc -z 127.0.0.1 22]
+      interval: 2s
+      timeout: 3s
+      retries: 15

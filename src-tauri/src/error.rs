@@ -19,6 +19,17 @@ pub enum Error {
   Unsupported { message: String },
   #[error("{message}")]
   Database { message: String },
+  #[error("{message}")]
+  Tunnel { message: String },
+  #[error("{message}")]
+  HostKeyUntrusted {
+    message: String,
+    host: String,
+    port: u16,
+    fingerprint: String,
+    key: String,
+    previously_trusted: bool,
+  },
 }
 
 impl From<tokio_postgres::Error> for Error {

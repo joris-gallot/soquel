@@ -4,6 +4,7 @@ import { useAsyncState } from '@vueuse/core'
 import { TooltipProvider } from 'reka-ui'
 import { ref } from 'vue'
 import CommandPalette from '@/components/CommandPalette.vue'
+import HostKeyDialog from '@/components/HostKeyDialog.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { useTheme } from '@/composables/useTheme'
 import { commands } from '@/lib/bindings'
@@ -51,6 +52,7 @@ const { state: pong, isLoading } = useAsyncState(async () => {
         </button>
       </footer>
       <CommandPalette ref="palette" />
+      <HostKeyDialog />
       <Toaster />
     </div>
   </TooltipProvider>

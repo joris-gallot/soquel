@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { ConnectionProfile } from '@/lib/bindings'
-import { MoreHorizontal, Plug, Plus, Unplug } from '@lucide/vue'
+import type { ConnectionProfile, TunnelProfile } from '@/lib/bindings'
+import { Cable, MoreHorizontal, Plug, Plus, Unplug } from '@lucide/vue'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import ConnectionFormDialog from '@/components/ConnectionFormDialog.vue'
+import TunnelFormDialog from '@/components/TunnelFormDialog.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -15,16 +16,25 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useConnections } from '@/composables/useConnections'
+import { useTunnels } from '@/composables/useTunnels'
 import { ENV_BADGE_CLASSES } from '@/lib/connections'
+import { CommandError } from '@/lib/result'
+import { SSH_AUTH_LABELS } from '@/lib/tunnels'
 
 const router = useRouter()
 const { connections, activeIds, refresh, remove, connect, disconnect } = useConnections()
+const { tunnels, refresh: refreshTunnels, remove: removeTunnel } = useTunnels()
 
 const formOpen = ref(false)
 const editing = ref<ConnectionProfile | null>(null)
 const busyId = ref<string | null>(null)
+const tunnelFormOpen = ref(false)
+const editingTunnel = ref<TunnelProfile | null>(null)
 
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  refreshTunnels()
+})
 
 function openCreate() {
   editing.value = null
@@ -48,7 +58,9 @@ async function toggle(profile: ConnectionProfile) {
     }
   }
   catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+    // The host-key trust dialog owns this failure mode.
+    if (!(error instanceof CommandError && error.kind === 'host-key-untrusted'))
+      toast.error(error instanceof Error ? error.message : String(error))
   }
   finally {
     busyId.value = null
@@ -66,6 +78,25 @@ async function openWorkspace(profile: ConnectionProfile) {
 async function removeProfile(profile: ConnectionProfile) {
   try {
     await remove(profile.id)
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
+}
+
+function openCreateTunnel() {
+  editingTunnel.value = null
+  tunnelFormOpen.value = true
+}
+
+function openEditTunnel(tunnel: TunnelProfile) {
+  editingTunnel.value = tunnel
+  tunnelFormOpen.value = true
+}
+
+async function removeTunnelProfile(tunnel: TunnelProfile) {
+  try {
+    await removeTunnel(tunnel.id)
   }
   catch (error) {
     toast.error(error instanceof Error ? error.message : String(error))
@@ -160,7 +191,62 @@ async function removeProfile(profile: ConnectionProfile) {
       </li>
     </ul>
 
+    <section class="mt-10">
+      <header class="mb-4 flex items-center justify-between">
+        <h2 class="font-mono text-sm text-muted-foreground">
+          ssh tunnels
+        </h2>
+        <Button size="sm" variant="secondary" data-testid="new-tunnel" @click="openCreateTunnel">
+          <Plus />
+          New tunnel
+        </Button>
+      </header>
+
+      <p v-if="tunnels.length === 0" class="text-sm text-muted-foreground">
+        No tunnels. Reach databases behind a bastion by referencing a tunnel from a connection.
+      </p>
+
+      <ul v-else class="divide-y rounded-lg border">
+        <li
+          v-for="tunnel in tunnels"
+          :key="tunnel.id"
+          data-testid="tunnel-row"
+          class="flex items-center gap-3 px-4 py-3"
+        >
+          <Cable class="size-4 shrink-0 text-muted-foreground" />
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <span class="truncate text-sm font-medium">{{ tunnel.name }}</span>
+              <Badge variant="outline" class="font-mono text-[10px]">
+                {{ SSH_AUTH_LABELS[tunnel.auth.method] }}
+              </Badge>
+            </div>
+            <p class="truncate font-mono text-xs text-muted-foreground">
+              ssh://{{ tunnel.user }}@{{ tunnel.host }}:{{ tunnel.port }}
+            </p>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button size="icon-sm" variant="ghost" data-testid="tunnel-menu" aria-label="Tunnel actions">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem data-testid="tunnel-edit" @click="openEditTunnel(tunnel)">
+                Edit
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem data-testid="tunnel-delete" variant="destructive" @click="removeTunnelProfile(tunnel)">
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </li>
+      </ul>
+    </section>
+
     <ConnectionFormDialog v-model:open="formOpen" :profile="editing" />
+    <TunnelFormDialog v-model:open="tunnelFormOpen" :tunnel="editingTunnel" />
   </div>
 </template>
 

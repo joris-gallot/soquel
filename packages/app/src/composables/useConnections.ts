@@ -1,5 +1,6 @@
 import type { ConnectionInput, ConnectionProfile } from '@/lib/bindings'
 import { ref } from 'vue'
+import { useHostKeyTrust } from '@/composables/useHostKeyTrust'
 import { commands } from '@/lib/bindings'
 import { unwrap } from '@/lib/result'
 
@@ -29,8 +30,16 @@ export function useConnections() {
     await refresh()
   }
 
+  const { intercept } = useHostKeyTrust()
+
   async function connect(id: string) {
-    unwrap(await commands.connect(id))
+    try {
+      unwrap(await commands.connect(id))
+    }
+    catch (error) {
+      intercept(error, () => connect(id))
+      throw error
+    }
     await refresh()
   }
 
@@ -40,7 +49,13 @@ export function useConnections() {
   }
 
   async function test(input: ConnectionInput, existingId?: string) {
-    unwrap(await commands.testConnection(input, existingId ?? null))
+    try {
+      unwrap(await commands.testConnection(input, existingId ?? null))
+    }
+    catch (error) {
+      intercept(error, () => test(input, existingId))
+      throw error
+    }
   }
 
   return { connections, activeIds, refresh, create, update, remove, connect, disconnect, test }

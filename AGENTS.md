@@ -56,7 +56,7 @@ pnpm db:test:down
 Weight: Rust integration against real databases is the core; unit tests for pure logic; e2e stays a thin smoke layer.
 
 - `docker-compose.test.yml`: one service per connector kind, seeded from `scripts/test-seeds/<engine>.sql`. Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458.
-- Rust integration tests are named `integration_<engine>_*`, each gated by its env var (`SOQUEL_TEST_PG`, later `SOQUEL_TEST_MYSQL`, ...) and skipped silently when unset. `pnpm test:integration` wires the env vars to the compose databases.
+- Rust integration tests are named `integration_<engine>_*`, each gated by its env var (`SOQUEL_TEST_PG`, `SOQUEL_TEST_SSH`, later `SOQUEL_TEST_MYSQL`, ...) and skipped silently when unset. `pnpm test:integration` wires the env vars to the compose databases. SSH tunnel tests use the sshd service (key auth via the committed throwaway keypair in `scripts/test-ssh/`).
 - e2e specs take DB coordinates from `packages/app/e2e/fixtures.ts` (never hardcode), and need `pnpm db:test` up.
 
 ## Tauri specifics

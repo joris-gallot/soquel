@@ -34,7 +34,12 @@ uuid = { version = "1", features = [ "v4" ] }
 keyring = "4.1"
 async-trait = "0.1"
 tokio-postgres = "0.7"
-tokio = { version = "1", features = [ "sync" ] }
+tokio = { version = "1", features = [
+  "sync",
+  "net",
+  "io-util"
+] }
+russh = { version = "0.61", default-features = false, features = [ "ring" ] }
 deadpool = "0.13"
 rustls = { version = "0.23", default-features = false, features = [
   "ring",

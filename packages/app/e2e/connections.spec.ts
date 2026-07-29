@@ -1,6 +1,6 @@
 import { $, browser } from '@wdio/globals'
 import { TEST_DBS } from './fixtures'
-import { waitForText } from './helpers'
+import { setEditorValue, waitForText } from './helpers'
 
 const PG = TEST_DBS.postgres
 
@@ -41,6 +41,22 @@ describe('connection manager', () => {
 
     await $('[data-testid="toggle-connection"]').click()
     await $('[data-testid="status-disconnected"]').waitForExist()
+  })
+
+  it('groups connections into collapsible sections', async () => {
+    await $('[data-testid="row-menu"]').click()
+    await $('[data-testid="row-edit"]').click()
+    await setEditorValue('[data-testid="field-group"]', 'clients')
+    await $('[data-testid="save-connection"]').click()
+    await $('[data-testid="field-group"]').waitForExist({ reverse: true })
+
+    await waitForText('[data-testid="group-clients"]', 'clients (1)')
+    await $('[data-testid="connection-row"]').waitForExist()
+
+    await $('[data-testid="group-clients"]').click()
+    await $('[data-testid="connection-row"]').waitForExist({ reverse: true })
+    await $('[data-testid="group-clients"]').click()
+    await $('[data-testid="connection-row"]').waitForExist()
   })
 
   it('deletes the connection', async () => {

@@ -1,4 +1,4 @@
-import type { ConnectionInput, Env, SslMode } from '@/lib/bindings'
+import type { ConnectionInput, ConnectionProfile, Env, SslMode } from '@/lib/bindings'
 import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
@@ -24,6 +24,7 @@ export const connectionSchema = z.object({
   sslMode: z.enum(SSL_MODES),
   // Reka Select reserves '' for clearing, so "no tunnel" is a sentinel value.
   tunnelId: z.string().catch(NO_TUNNEL),
+  group: z.string(),
   password: z.string(),
 })
 
@@ -38,6 +39,7 @@ export interface ConnectionFormValues {
   user: string
   sslMode: SslMode
   tunnelId: string
+  group: string
   password: string
 }
 
@@ -45,6 +47,7 @@ export function toConnectionInput(values: z.output<typeof connectionSchema>): Co
   return {
     ...values,
     tunnelId: values.tunnelId === NO_TUNNEL || values.tunnelId === '' ? null : values.tunnelId,
+    group: values.group.trim() === '' ? null : values.group.trim(),
     password: values.password === '' ? null : values.password,
   }
 }
@@ -83,4 +86,25 @@ export function parsePostgresUrl(raw: string): Partial<ConnectionFormValues> | n
   if (sslmode && sslmode in URL_SSL_MODES)
     parsed.sslMode = URL_SSL_MODES[sslmode as LibpqSslMode]
   return parsed
+}
+
+export interface ConnectionSection {
+  group: string | null
+  profiles: ConnectionProfile[]
+}
+
+/// Ungrouped first, then groups alphabetically; stored order within a section.
+export function groupConnections(profiles: ConnectionProfile[]): ConnectionSection[] {
+  const sections = new Map<string | null, ConnectionProfile[]>()
+  for (const profile of profiles) {
+    const key = profile.group ?? null
+    const bucket = sections.get(key) ?? []
+    bucket.push(profile)
+    sections.set(key, bucket)
+  }
+  const named = [...sections.keys()]
+    .filter((group): group is string => group !== null)
+    .sort((a, b) => a.localeCompare(b))
+  const order: (string | null)[] = sections.has(null) ? [null, ...named] : named
+  return order.map(group => ({ group, profiles: sections.get(group)! }))
 }

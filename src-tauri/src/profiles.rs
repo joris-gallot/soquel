@@ -47,6 +47,8 @@ pub struct ConnectionProfile {
   pub ssl_mode: SslMode,
   #[serde(default)]
   pub tunnel_id: Option<String>,
+  #[serde(default)]
+  pub group: Option<String>,
 }
 
 /// Secrets ride in on the input but are stored in the OS keychain, never in the profile.
@@ -64,6 +66,8 @@ pub struct ConnectionInput {
   pub ssl_mode: SslMode,
   #[serde(default)]
   pub tunnel_id: Option<String>,
+  #[serde(default)]
+  pub group: Option<String>,
   pub password: Option<String>,
 }
 
@@ -117,6 +121,7 @@ impl ProfileStore {
       user: input.user.clone(),
       ssl_mode: input.ssl_mode,
       tunnel_id: input.tunnel_id.clone(),
+      group: input.group.clone(),
     };
     self.profiles.push(profile.clone());
     self.save()?;
@@ -140,6 +145,7 @@ impl ProfileStore {
     profile.user = input.user.clone();
     profile.ssl_mode = input.ssl_mode;
     profile.tunnel_id = input.tunnel_id.clone();
+    profile.group = input.group.clone();
     let updated = profile.clone();
     self.save()?;
     Ok(updated)
@@ -172,6 +178,7 @@ mod tests {
       user: "postgres".to_string(),
       ssl_mode: SslMode::Prefer,
       tunnel_id: None,
+      group: None,
       password: None,
     }
   }
@@ -209,6 +216,7 @@ mod tests {
     let profile: ConnectionProfile = serde_json::from_str(raw).unwrap();
     assert_eq!(profile.ssl_mode, SslMode::Prefer);
     assert_eq!(profile.tunnel_id, None);
+    assert_eq!(profile.group, None);
   }
 
   #[test]

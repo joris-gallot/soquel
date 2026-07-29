@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Moon, Plug, Plus, Sun } from '@lucide/vue'
 import { useMagicKeys, whenever } from '@vueuse/core'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import {
@@ -15,10 +15,13 @@ import {
 } from '@/components/ui/command'
 import { useConnections } from '@/composables/useConnections'
 import { useTheme } from '@/composables/useTheme'
+import { groupConnections } from '@/lib/connections'
 
 const router = useRouter()
 const { connections, connect, activeIds } = useConnections()
 const { mode, toggle } = useTheme()
+
+const sections = computed(() => groupConnections(connections.value))
 
 const open = ref(false)
 
@@ -66,11 +69,15 @@ defineExpose({ open })
     <CommandInput placeholder="Search connections and actions…" data-testid="palette-input" />
     <CommandList>
       <CommandEmpty>Nothing found.</CommandEmpty>
-      <CommandGroup heading="Connections">
+      <CommandGroup
+        v-for="section in sections"
+        :key="section.group ?? ''"
+        :heading="section.group ?? 'Connections'"
+      >
         <CommandItem
-          v-for="profile in connections"
+          v-for="profile in section.profiles"
           :key="profile.id"
-          :value="`connect ${profile.name} ${profile.host} ${profile.database}`"
+          :value="`connect ${section.group ?? ''} ${profile.name} ${profile.host} ${profile.database}`"
           @select="quickConnect(profile.id)"
         >
           <Plug />

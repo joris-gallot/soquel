@@ -88,6 +88,7 @@ export type ConnectionInput = {
 	user: string,
 	sslMode?: SslMode,
 	tunnelId?: string | null,
+	group?: string | null,
 	password: string | null,
 };
 
@@ -102,6 +103,7 @@ export type ConnectionProfile = {
 	user: string,
 	sslMode?: SslMode,
 	tunnelId?: string | null,
+	group?: string | null,
 };
 
 export type ConnectorKind = "postgres";

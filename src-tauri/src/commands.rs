@@ -88,6 +88,7 @@ pub async fn test_connection(
     user: input.user.clone(),
     ssl_mode: input.ssl_mode,
     tunnel_id: input.tunnel_id.clone(),
+    group: input.group.clone(),
   };
   let (_tunnel, local) = open_tunnel(&state, &profile).await?;
   let connection = connector_for(input.kind)

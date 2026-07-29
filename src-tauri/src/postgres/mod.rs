@@ -1795,6 +1795,7 @@ pub mod tests {
       user: config.get_user().unwrap().to_string(),
       ssl_mode: SslMode::Prefer,
       tunnel_id: None,
+      group: None,
     }
   }
 

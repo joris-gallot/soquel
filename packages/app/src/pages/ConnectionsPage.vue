@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import type { ConnectionProfile, TunnelProfile } from '@/lib/bindings'
-import { Cable, MoreHorizontal, Plug, Plus, Unplug } from '@lucide/vue'
-import { onMounted, ref } from 'vue'
+import { Cable, ChevronDown, ChevronRight, MoreHorizontal, Plug, Plus, Unplug } from '@lucide/vue'
+import { useLocalStorage } from '@vueuse/core'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import ConnectionFormDialog from '@/components/ConnectionFormDialog.vue'
 import TunnelFormDialog from '@/components/TunnelFormDialog.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,13 +19,22 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { ENV_BADGE_CLASSES } from '@/lib/connections'
+import { ENV_BADGE_CLASSES, groupConnections } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { SSH_AUTH_LABELS } from '@/lib/tunnels'
 
 const router = useRouter()
 const { connections, activeIds, refresh, remove, connect, disconnect } = useConnections()
 const { tunnels, refresh: refreshTunnels, remove: removeTunnel } = useTunnels()
+
+const sections = computed(() => groupConnections(connections.value))
+const collapsed = useLocalStorage<string[]>('soquel:collapsed-groups', [])
+
+function toggleGroup(group: string) {
+  collapsed.value = collapsed.value.includes(group)
+    ? collapsed.value.filter(name => name !== group)
+    : [...collapsed.value, group]
+}
 
 const formOpen = ref(false)
 const editing = ref<ConnectionProfile | null>(null)
@@ -134,62 +145,82 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
       </Button>
     </div>
 
-    <ul v-else class="divide-y rounded-lg border">
-      <li
-        v-for="profile in connections"
-        :key="profile.id"
-        data-testid="connection-row"
-        class="flex items-center gap-3 px-4 py-3"
+    <div v-else class="divide-y rounded-lg border">
+      <Collapsible
+        v-for="section in sections"
+        :key="section.group ?? ''"
+        :open="section.group === null || !collapsed.includes(section.group)"
+        @update:open="section.group !== null && toggleGroup(section.group)"
       >
-        <span
-          class="size-2 shrink-0 rounded-full"
-          :class="activeIds.has(profile.id) ? 'bg-[oklch(0.72_0.11_240)]' : 'bg-muted-foreground/30'"
-          :data-testid="activeIds.has(profile.id) ? 'status-connected' : 'status-disconnected'"
-        />
-        <button
-          type="button"
-          class="min-w-0 flex-1 text-left"
-          :data-testid="`open-${profile.name}`"
-          @click="openWorkspace(profile)"
+        <CollapsibleTrigger
+          v-if="section.group !== null"
+          class="flex w-full cursor-pointer items-center gap-1.5 bg-muted/40 px-3 py-1.5 font-mono text-xs text-muted-foreground hover:text-foreground"
+          :data-testid="`group-${section.group}`"
         >
-          <div class="flex items-center gap-2">
-            <span class="truncate text-sm font-medium">{{ profile.name }}</span>
-            <Badge variant="outline" class="font-mono text-[10px]" :class="ENV_BADGE_CLASSES[profile.env]">
-              {{ profile.env }}
-            </Badge>
-          </div>
-          <p class="truncate font-mono text-xs text-muted-foreground">
-            {{ profile.kind }}://{{ profile.user }}@{{ profile.host }}:{{ profile.port }}/{{ profile.database }}
-          </p>
-        </button>
-        <Button
-          size="sm"
-          variant="ghost"
-          data-testid="toggle-connection"
-          :disabled="busyId === profile.id"
-          @click="toggle(profile)"
-        >
-          <component :is="activeIds.has(profile.id) ? Unplug : Plug" />
-          {{ activeIds.has(profile.id) ? 'Disconnect' : 'Connect' }}
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger as-child>
-            <Button size="icon-sm" variant="ghost" data-testid="row-menu" aria-label="Connection actions">
-              <MoreHorizontal />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem data-testid="row-edit" @click="openEdit(profile)">
-              Edit
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem data-testid="row-delete" variant="destructive" @click="removeProfile(profile)">
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </li>
-    </ul>
+          <component :is="collapsed.includes(section.group) ? ChevronRight : ChevronDown" class="size-3" />
+          {{ section.group }}
+          <span class="text-muted-foreground/60">({{ section.profiles.length }})</span>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <ul class="divide-y">
+            <li
+              v-for="profile in section.profiles"
+              :key="profile.id"
+              data-testid="connection-row"
+              class="flex items-center gap-3 px-4 py-3"
+            >
+              <span
+                class="size-2 shrink-0 rounded-full"
+                :class="activeIds.has(profile.id) ? 'bg-[oklch(0.72_0.11_240)]' : 'bg-muted-foreground/30'"
+                :data-testid="activeIds.has(profile.id) ? 'status-connected' : 'status-disconnected'"
+              />
+              <button
+                type="button"
+                class="min-w-0 flex-1 text-left"
+                :data-testid="`open-${profile.name}`"
+                @click="openWorkspace(profile)"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="truncate text-sm font-medium">{{ profile.name }}</span>
+                  <Badge variant="outline" class="font-mono text-[10px]" :class="ENV_BADGE_CLASSES[profile.env]">
+                    {{ profile.env }}
+                  </Badge>
+                </div>
+                <p class="truncate font-mono text-xs text-muted-foreground">
+                  {{ profile.kind }}://{{ profile.user }}@{{ profile.host }}:{{ profile.port }}/{{ profile.database }}
+                </p>
+              </button>
+              <Button
+                size="sm"
+                variant="ghost"
+                data-testid="toggle-connection"
+                :disabled="busyId === profile.id"
+                @click="toggle(profile)"
+              >
+                <component :is="activeIds.has(profile.id) ? Unplug : Plug" />
+                {{ activeIds.has(profile.id) ? 'Disconnect' : 'Connect' }}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button size="icon-sm" variant="ghost" data-testid="row-menu" aria-label="Connection actions">
+                    <MoreHorizontal />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem data-testid="row-edit" @click="openEdit(profile)">
+                    Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem data-testid="row-delete" variant="destructive" @click="removeProfile(profile)">
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </li>
+          </ul>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
 
     <section class="mt-10">
       <header class="mb-4 flex items-center justify-between">

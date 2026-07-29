@@ -1,6 +1,40 @@
+import type { ConnectionProfile } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { connectionSchema, parsePostgresUrl, toConnectionInput } from './connections'
+import { connectionSchema, groupConnections, parsePostgresUrl, toConnectionInput } from './connections'
 import { zodFieldErrors } from './validation'
+
+function profile(name: string, group: string | null): ConnectionProfile {
+  return {
+    id: name,
+    name,
+    env: 'dev',
+    kind: 'postgres',
+    host: 'h',
+    port: 5432,
+    database: 'db',
+    user: 'u',
+    sslMode: 'prefer',
+    tunnelId: null,
+    group,
+  }
+}
+
+describe('groupConnections', () => {
+  it('puts ungrouped first, then groups alphabetically', () => {
+    const sections = groupConnections([
+      profile('c1', 'zeta'),
+      profile('c2', null),
+      profile('c3', 'alpha'),
+      profile('c4', 'zeta'),
+    ])
+    expect(sections.map(s => s.group)).toEqual([null, 'alpha', 'zeta'])
+    expect(sections[2].profiles.map(p => p.name)).toEqual(['c1', 'c4'])
+  })
+
+  it('omits the ungrouped section when everything is grouped', () => {
+    expect(groupConnections([profile('c1', 'a')]).map(s => s.group)).toEqual(['a'])
+  })
+})
 
 describe('parsePostgresUrl', () => {
   it('parses a full postgres:// url', () => {
@@ -60,6 +94,7 @@ describe('connectionSchema', () => {
     user: 'postgres',
     sslMode: 'prefer',
     tunnelId: '',
+    group: '',
     password: '',
   }
 
@@ -89,6 +124,11 @@ describe('connectionSchema', () => {
     expect(input.password).toBeNull()
     const withPassword = toConnectionInput(connectionSchema.parse({ ...valid, password: 'x' }))
     expect(withPassword.password).toBe('x')
+  })
+
+  it('trims the group and turns blank into null', () => {
+    expect(toConnectionInput(connectionSchema.parse(valid)).group).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse({ ...valid, group: '  clients ' })).group).toBe('clients')
   })
 
   it('turns the no-tunnel sentinel into null for the command input', () => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ConnectionInput, ConnectionProfile } from '@/lib/bindings'
 import type { ConnectionFormValues } from '@/lib/connections'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import HostKeyTrustPanel from '@/components/HostKeyTrustPanel.vue'
 import { Button } from '@/components/ui/button'
@@ -32,11 +32,15 @@ const props = defineProps<{ profile?: ConnectionProfile | null }>()
 const emit = defineEmits<{ saved: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
-const { create, update, test } = useConnections()
+const { connections, create, update, test } = useConnections()
 const { tunnels, refresh: refreshTunnels } = useTunnels()
 
+const knownGroups = computed(() =>
+  [...new Set(connections.value.map(profile => profile.group).filter((group): group is string => group !== null))].sort(),
+)
+
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', tunnelId: NO_TUNNEL, password: '' }
+  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', tunnelId: NO_TUNNEL, group: '', password: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -64,6 +68,7 @@ watch(open, (isOpen) => {
         user: props.profile.user,
         sslMode: props.profile.sslMode ?? 'prefer',
         tunnelId: props.profile.tunnelId ?? NO_TUNNEL,
+        group: props.profile.group ?? '',
         password: '',
       }
     : emptyValues()
@@ -241,48 +246,63 @@ async function save() {
           </div>
         </div>
 
-        <div class="space-y-1.5">
-          <Label>SSH tunnel</Label>
-          <Select v-model="values.tunnelId">
-            <SelectTrigger data-testid="field-tunnel" class="w-full">
-              <SelectValue placeholder="none" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem :value="NO_TUNNEL">
-                none
-              </SelectItem>
-              <SelectItem v-for="tunnel in tunnels" :key="tunnel.id" :value="tunnel.id">
-                {{ tunnel.name }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="space-y-1.5">
+            <Label for="conn-group">Group</Label>
+            <Input
+              id="conn-group"
+              v-model="values.group"
+              data-testid="field-group"
+              list="known-groups"
+              placeholder="none"
+            />
+            <datalist id="known-groups">
+              <option v-for="group in knownGroups" :key="group" :value="group" />
+            </datalist>
+          </div>
+          <div class="space-y-1.5">
+            <Label>SSH tunnel</Label>
+            <Select v-model="values.tunnelId">
+              <SelectTrigger data-testid="field-tunnel" class="w-full">
+                <SelectValue placeholder="none" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem :value="NO_TUNNEL">
+                  none
+                </SelectItem>
+                <SelectItem v-for="tunnel in tunnels" :key="tunnel.id" :value="tunnel.id">
+                  {{ tunnel.name }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-        <HostKeyTrustPanel />
+          <HostKeyTrustPanel />
 
-        <p
-          v-if="testResult"
-          data-testid="test-result"
-          class="font-mono text-xs"
-          :class="testResult.ok ? 'text-emerald-500' : 'text-destructive'"
-        >
-          {{ testResult.message }}
-        </p>
-
-        <DialogFooter class="gap-2 sm:justify-between">
-          <Button
-            type="button"
-            variant="outline"
-            data-testid="test-connection"
-            :disabled="testing"
-            @click="runTest"
+          <p
+            v-if="testResult"
+            data-testid="test-result"
+            class="font-mono text-xs"
+            :class="testResult.ok ? 'text-emerald-500' : 'text-destructive'"
           >
-            {{ testing ? 'Testing…' : 'Test connection' }}
-          </Button>
-          <Button type="submit" data-testid="save-connection" :disabled="saving">
-            {{ profile ? 'Save changes' : 'Create connection' }}
-          </Button>
-        </DialogFooter>
+            {{ testResult.message }}
+          </p>
+
+          <DialogFooter class="gap-2 sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              data-testid="test-connection"
+              :disabled="testing"
+              @click="runTest"
+            >
+              {{ testing ? 'Testing…' : 'Test connection' }}
+            </Button>
+            <Button type="submit" data-testid="save-connection" :disabled="saving">
+              {{ profile ? 'Save changes' : 'Create connection' }}
+            </Button>
+          </DialogFooter>
+        </div>
       </form>
     </DialogContent>
   </Dialog>

@@ -95,6 +95,16 @@ pub trait SqlQuery: Send + Sync {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
   async fn cancel(&self) -> Result<(), Error>;
   async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error>;
+  async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error>;
+}
+
+/// A dedicated client outside the pool: session state (SET, transactions)
+/// sticks, and cancel targets only this session.
+#[async_trait::async_trait]
+pub trait SqlSession: Send + Sync {
+  async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
+  async fn cancel(&self) -> Result<(), Error>;
+  async fn close(&self) -> Result<(), Error>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]

@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import SchemaTree from '@/components/SchemaTree.vue'
+import SqlEditorPanel from '@/components/SqlEditorPanel.vue'
 import TableGrid from '@/components/TableGrid.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,18 +14,23 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useConnections } from '@/composables/useConnections'
 import { useSchema } from '@/composables/useSchema'
+import { useSqlSessions } from '@/composables/useSqlSessions'
 import { ENV_BADGE_CLASSES } from '@/lib/connections'
 
 const route = useRoute()
 const router = useRouter()
 const { connections, activeIds, refresh, connect, disconnect } = useConnections()
 const { snapshots, pending, load, evict } = useSchema()
+const { evict: evictSession } = useSqlSessions()
 
 const id = computed(() => String(route.params.id))
 const profile = computed(() => connections.value.find(p => p.id === id.value))
 const snapshot = computed(() => snapshots.value[id.value])
 const filter = ref('')
 const selectedTable = ref<{ schema: string, table: TableInfo } | null>(null)
+const centerView = ref<'table' | 'sql'>('table')
+// Mounted lazily on first use, then kept alive via v-show.
+const editorOpened = ref(false)
 
 onMounted(async () => {
   await refresh()
@@ -56,6 +62,7 @@ async function leave() {
   try {
     await disconnect(id.value)
     evict(id.value)
+    evictSession(id.value)
   }
   catch (error) {
     toast.error(error instanceof Error ? error.message : String(error))
@@ -65,6 +72,12 @@ async function leave() {
 
 function selectTable(schema: string, table: TableInfo) {
   selectedTable.value = { schema, table }
+  centerView.value = 'table'
+}
+
+function openSqlView() {
+  editorOpened.value = true
+  centerView.value = 'sql'
 }
 </script>
 
@@ -127,21 +140,53 @@ function selectTable(schema: string, table: TableInfo) {
     </aside>
 
     <main class="flex min-w-0 flex-1 flex-col">
-      <template v-if="selectedTable">
-        <header class="flex items-center gap-2 border-b px-3 py-1.5 font-mono text-xs text-muted-foreground">
+      <header class="flex items-center gap-2 border-b px-3 py-1.5 font-mono text-xs text-muted-foreground">
+        <button
+          type="button"
+          class="rounded px-1.5 py-0.5"
+          :class="centerView === 'table' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground disabled:opacity-40'"
+          :disabled="!selectedTable"
+          data-testid="view-data"
+          @click="centerView = 'table'"
+        >
+          data
+        </button>
+        <button
+          type="button"
+          class="rounded px-1.5 py-0.5"
+          :class="centerView === 'sql' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground'"
+          data-testid="view-sql"
+          @click="openSqlView"
+        >
+          sql
+        </button>
+        <template v-if="centerView === 'table' && selectedTable">
+          <span class="text-muted-foreground/40">·</span>
           <span data-testid="table-title">{{ selectedTable.schema }}.{{ selectedTable.table.name }}</span>
           <span class="text-muted-foreground/60">{{ selectedTable.table.columns.length }} columns</span>
-        </header>
-        <TableGrid
-          class="min-h-0 flex-1"
-          :connection-id="id"
-          :schema="selectedTable.schema"
-          :table="selectedTable.table"
-        />
-      </template>
-      <div v-else class="flex flex-1 items-center justify-center text-muted-foreground">
+        </template>
+      </header>
+
+      <TableGrid
+        v-if="selectedTable && centerView === 'table'"
+        class="min-h-0 flex-1"
+        :connection-id="id"
+        :schema="selectedTable.schema"
+        :table="selectedTable.table"
+      />
+      <SqlEditorPanel
+        v-if="editorOpened"
+        v-show="centerView === 'sql'"
+        class="min-h-0 flex-1"
+        :connection-id="id"
+        :snapshot="snapshot"
+      />
+      <div
+        v-if="centerView === 'table' && !selectedTable"
+        class="flex flex-1 items-center justify-center text-muted-foreground"
+      >
         <p class="font-mono text-sm">
-          soquel=#<span class="ml-1 text-muted-foreground/60">select a table</span>
+          soquel=#<span class="ml-1 text-muted-foreground/60">select a table or open sql</span>
         </p>
       </div>
     </main>

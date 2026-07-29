@@ -34,6 +34,26 @@ describe('workspace', () => {
     await browser.saveScreenshot('./e2e/screenshots/workspace-grid-sorted.png')
   })
 
+  it('runs sql in the editor', async () => {
+    await $('[data-testid="view-sql"]').click()
+    await $('[data-testid="sql-editor"]').waitForExist()
+
+    await $('[data-testid="sql-input"] .cm-content').click()
+    // Single insertText event: per-key typing drops keystrokes under WebKitWebDriver.
+    await browser.execute(() =>
+      document.execCommand('insertText', false, 'select count(*) as customer_count from app.customers'))
+    await waitForText('[data-testid="sql-input"]', 'customer_count')
+    await $('[data-testid="run-query"]').click()
+
+    await waitForText('[data-testid="sql-results"]', 'customer_count')
+    await waitForText('[data-testid="sql-results"]', '3')
+    await browser.saveScreenshot('./e2e/screenshots/workspace-sql.png')
+
+    // Back to the data view: grid state survived.
+    await $('[data-testid="view-data"]').click()
+    await waitForText('[data-testid="table-title"]', 'app.customers')
+  })
+
   it('opens the command palette', async () => {
     await $('[data-testid="open-palette"]').click()
     await $('[data-testid="palette-input"]').waitForExist()

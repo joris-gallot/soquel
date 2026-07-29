@@ -84,6 +84,10 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+    --sql-keyword: oklch(0.5 0.13 240);
+    --sql-string: oklch(0.52 0.11 150);
+    --sql-number: oklch(0.53 0.12 70);
+    --sql-comment: oklch(0.62 0 0);
 }
 
 .dark {
@@ -118,6 +122,10 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+    --sql-keyword: oklch(0.72 0.11 240);
+    --sql-string: oklch(0.75 0.1 150);
+    --sql-number: oklch(0.78 0.11 70);
+    --sql-comment: oklch(0.55 0 0);
 }
 
 @layer base {

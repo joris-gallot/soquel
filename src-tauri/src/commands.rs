@@ -3,13 +3,14 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::connectors::{
-  connector_for, Capability, Connection, QueryResult, SchemaSnapshot, SqlQuery, TableRowsRequest,
+  connector_for, Capability, Connection, QueryResult, SchemaSnapshot, SqlQuery, SqlSession,
+  TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind};
 use crate::ssh::{self, SshTunnel, TunnelTarget};
 use crate::tunnels::{TunnelInput, TunnelProfile};
-use crate::{ActiveConnection, AppState};
+use crate::{ActiveConnection, AppState, SessionEntry};
 
 fn tunnel_secret_id(tunnel_id: &str) -> String {
   format!("tunnel:{tunnel_id}")
@@ -118,11 +119,85 @@ pub async fn connect(state: State<'_, AppState>, id: String) -> Result<(), Error
 #[tauri::command]
 #[specta::specta]
 pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Error> {
+  let orphaned: Vec<Arc<dyn SqlSession>> = {
+    let mut sessions = state.sessions.lock().await;
+    let ids: Vec<String> = sessions
+      .iter()
+      .filter(|(_, entry)| entry.connection_id == id)
+      .map(|(session_id, _)| session_id.clone())
+      .collect();
+    ids
+      .iter()
+      .filter_map(|session_id| sessions.remove(session_id))
+      .map(|entry| entry.session)
+      .collect()
+  };
+  for session in orphaned {
+    let _ = session.close().await;
+  }
   let active = state.connections.lock().await.remove(&id);
   match active {
     Some(active) => active.connection.close().await,
     None => Ok(()),
   }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn open_sql_session(
+  state: State<'_, AppState>,
+  connection_id: String,
+) -> Result<String, Error> {
+  let connection = active(&state, &connection_id).await?;
+  let session = sql_surface(&connection)?.open_session().await?;
+  let id = uuid::Uuid::new_v4().to_string();
+  state.sessions.lock().await.insert(
+    id.clone(),
+    SessionEntry {
+      connection_id,
+      session: session.into(),
+    },
+  );
+  Ok(id)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn run_session_query(
+  state: State<'_, AppState>,
+  id: String,
+  sql: String,
+) -> Result<QueryResult, Error> {
+  session(&state, &id).await?.run_query(&sql).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn cancel_session_query(state: State<'_, AppState>, id: String) -> Result<(), Error> {
+  session(&state, &id).await?.cancel().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn close_sql_session(state: State<'_, AppState>, id: String) -> Result<(), Error> {
+  let entry = state.sessions.lock().await.remove(&id);
+  match entry {
+    Some(entry) => entry.session.close().await,
+    None => Ok(()),
+  }
+}
+
+// Clone the Arc out so queries never hold the map lock.
+async fn session(state: &State<'_, AppState>, id: &str) -> Result<Arc<dyn SqlSession>, Error> {
+  state
+    .sessions
+    .lock()
+    .await
+    .get(id)
+    .map(|entry| entry.session.clone())
+    .ok_or_else(|| Error::NotFound {
+      message: format!("sql session {id} is not open"),
+    })
 }
 
 #[tauri::command]

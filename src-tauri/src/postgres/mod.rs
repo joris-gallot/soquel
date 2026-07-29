@@ -9,7 +9,7 @@ use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, SimpleQueryMessa
 
 use crate::connectors::{
   Capability, ColumnKind, Connection, Connector, Introspect, QueryColumn, QueryResult,
-  ServerNotice, SortDirection, SqlQuery, StatementResult, TableRowsRequest,
+  ServerNotice, SortDirection, SqlQuery, SqlSession, StatementResult, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SslMode};
@@ -61,31 +61,61 @@ pub(super) struct PgManager {
   ssl_mode: SslMode,
 }
 
+async fn connect_pg(config: &Config, ssl_mode: SslMode) -> Result<PooledPg, Error> {
+  let tls = tls::connector(ssl_mode)?;
+  let (client, mut connection) = config.connect(tls).await?;
+  let notices: Arc<Mutex<Vec<ServerNotice>>> = Arc::default();
+  let sink = notices.clone();
+  tauri::async_runtime::spawn(async move {
+    while let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
+      match message {
+        Ok(AsyncMessage::Notice(notice)) => sink.lock().unwrap().push(ServerNotice {
+          severity: notice.severity().to_string(),
+          message: notice.message().to_string(),
+        }),
+        Ok(_) => {}
+        Err(err) => {
+          log::warn!("postgres connection closed: {err}");
+          break;
+        }
+      }
+    }
+  });
+  Ok(PooledPg { client, notices })
+}
+
+/// Prepare-for-types, run over the simple protocol, drain this client's notices.
+async fn run_script(pg: &PooledPg, sql: &str) -> Result<QueryResult, Error> {
+  pg.notices.lock().unwrap().clear();
+  let start = Instant::now();
+  // Single statements get type metadata from a prepare; multi-statement
+  // scripts fail to prepare and degrade to names only.
+  let types = pg.client.prepare(sql).await.ok().map(|statement| {
+    statement
+      .columns()
+      .iter()
+      .map(|c| c.type_().clone())
+      .collect::<Vec<_>>()
+  });
+  let messages = pg.client.simple_query(sql).await?;
+  let mut statements = collect_statements(messages);
+  if let (Some(types), [statement]) = (&types, &mut statements[..]) {
+    apply_types(statement, types);
+  }
+  let notices = std::mem::take(&mut *pg.notices.lock().unwrap());
+  Ok(QueryResult {
+    statements,
+    notices,
+    duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+  })
+}
+
 impl managed::Manager for PgManager {
   type Type = PooledPg;
   type Error = Error;
 
   async fn create(&self) -> Result<PooledPg, Error> {
-    let tls = tls::connector(self.ssl_mode)?;
-    let (client, mut connection) = self.config.connect(tls).await?;
-    let notices: Arc<Mutex<Vec<ServerNotice>>> = Arc::default();
-    let sink = notices.clone();
-    tauri::async_runtime::spawn(async move {
-      while let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
-        match message {
-          Ok(AsyncMessage::Notice(notice)) => sink.lock().unwrap().push(ServerNotice {
-            severity: notice.severity().to_string(),
-            message: notice.message().to_string(),
-          }),
-          Ok(_) => {}
-          Err(err) => {
-            log::warn!("postgres connection closed: {err}");
-            break;
-          }
-        }
-      }
-    });
-    Ok(PooledPg { client, notices })
+    connect_pg(&self.config, self.ssl_mode).await
   }
 
   async fn recycle(&self, pg: &mut PooledPg, _: &Metrics) -> RecycleResult<Error> {
@@ -139,29 +169,35 @@ impl PostgresConnection {
 
   async fn execute_script(&self, sql: &str) -> Result<QueryResult, Error> {
     let pg = self.checkout().await?;
-    pg.notices.lock().unwrap().clear();
     let _guard = self.register_cancel(pg.client.cancel_token());
-    let start = Instant::now();
-    // Single statements get type metadata from a prepare; multi-statement
-    // scripts fail to prepare and degrade to names only.
-    let types = pg.client.prepare(sql).await.ok().map(|statement| {
-      statement
-        .columns()
-        .iter()
-        .map(|c| c.type_().clone())
-        .collect::<Vec<_>>()
-    });
-    let messages = pg.client.simple_query(sql).await?;
-    let mut statements = collect_statements(messages);
-    if let (Some(types), [statement]) = (&types, &mut statements[..]) {
-      apply_types(statement, types);
-    }
-    let notices = std::mem::take(&mut *pg.notices.lock().unwrap());
-    Ok(QueryResult {
-      statements,
-      notices,
-      duration_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    run_script(&pg, sql).await
+  }
+}
+
+pub struct PostgresSession {
+  pg: PooledPg,
+  ssl_mode: SslMode,
+  cancel: CancelToken,
+}
+
+#[async_trait::async_trait]
+impl SqlSession for PostgresSession {
+  async fn run_query(&self, sql: &str) -> Result<QueryResult, Error> {
+    run_script(&self.pg, sql).await
+  }
+
+  async fn cancel(&self) -> Result<(), Error> {
+    self
+      .cancel
+      .clone()
+      .cancel_query(tls::connector(self.ssl_mode)?)
+      .await?;
+    Ok(())
+  }
+
+  // Dropping the client terminates the connection task.
+  async fn close(&self) -> Result<(), Error> {
+    Ok(())
   }
 }
 
@@ -234,6 +270,16 @@ impl SqlQuery for PostgresConnection {
       request.offset
     ));
     self.run_query(&sql).await
+  }
+
+  async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error> {
+    let manager = self.pool.manager();
+    let pg = connect_pg(&manager.config, manager.ssl_mode).await?;
+    Ok(Box::new(PostgresSession {
+      cancel: pg.client.cancel_token(),
+      ssl_mode: manager.ssl_mode,
+      pg,
+    }))
   }
 }
 
@@ -476,6 +522,52 @@ pub mod tests {
       message.contains("canceling statement due to user request"),
       "unexpected message: {message}"
     );
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_postgres_session_pins_state() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let session = pg.open_session().await.unwrap();
+    session
+      .run_query("SET soquel.flag = 'pinned'")
+      .await
+      .unwrap();
+    let shown = session.run_query("SHOW soquel.flag").await.unwrap();
+    assert_eq!(
+      shown.statements[0].rows[0][0].as_deref(),
+      Some("pinned"),
+      "session state must stick across its own runs"
+    );
+    // Custom GUCs are per-backend: the pool must not know this one.
+    assert!(pg.run_query("SHOW soquel.flag").await.is_err());
+    session.close().await.unwrap();
+    pg.run_query("SELECT 1").await.unwrap();
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_postgres_session_cancel_kills_query() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let session: Arc<dyn SqlSession> = pg.open_session().await.unwrap().into();
+    let slow = tokio::spawn({
+      let session = session.clone();
+      async move { session.run_query("SELECT pg_sleep(30)").await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    session.cancel().await.unwrap();
+    let Err(Error::Database { message }) = slow.await.unwrap() else {
+      panic!("expected the canceled query to fail");
+    };
+    assert!(
+      message.contains("canceling statement due to user request"),
+      "unexpected message: {message}"
+    );
+    // The session survives a cancel.
+    session.run_query("SELECT 1").await.unwrap();
   }
 
   #[tokio::test]

@@ -19,6 +19,7 @@ export const commands = {
 	runQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_query", { id, sql })),
 	cancelQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_query", { id })),
 	tableRows: (id: string, request: TableRowsRequest) => typedError<QueryResult, Error>(__TAURI_INVOKE("table_rows", { id, request })),
+	applyTableChanges: (id: string, changes: TableChanges) => typedError<ApplyResult, Error>(__TAURI_INVOKE("apply_table_changes", { id, changes })),
 	schemaSnapshot: (id: string) => typedError<SchemaSnapshot, Error>(__TAURI_INVOKE("schema_snapshot", { id })),
 	openSqlSession: (connectionId: string) => typedError<string, Error>(__TAURI_INVOKE("open_sql_session", { connectionId })),
 	runSessionQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_session_query", { id, sql })),
@@ -39,7 +40,20 @@ export const commands = {
 };
 
 /* Types */
+export type ApplyResult = {
+	updated: number,
+	inserted: number,
+	deleted: number,
+	durationMs: number | null,
+};
+
 export type Capability = "sql-query" | "introspection" | "kv-browse";
+
+export type CellValue = {
+	column: string,
+	/**  None writes NULL. */
+	value: string | null,
+};
 
 export type ColumnFilter = {
 	column: string,
@@ -124,6 +138,20 @@ export type QueryResult = {
 	durationMs: number | null,
 };
 
+export type RowDelete = {
+	key: CellValue[],
+};
+
+export type RowInsert = {
+	/**  Omitted columns take their DEFAULT. */
+	values: CellValue[],
+};
+
+export type RowUpdate = {
+	key: CellValue[],
+	set: CellValue[],
+};
+
 export type SchemaInfo = {
 	name: string,
 	tables: TableInfo[],
@@ -161,6 +189,14 @@ export type StatementResult = {
 	rowsAffected: number | null,
 };
 
+export type TableChanges = {
+	schema: string,
+	table: string,
+	updates: RowUpdate[],
+	inserts: RowInsert[],
+	deletes: RowDelete[],
+};
+
 export type TableInfo = {
 	name: string,
 	kind: TableKind,
@@ -181,6 +217,8 @@ export type TableRowsRequest = {
 	offset: number,
 	sort: SortSpec | null,
 	filters?: ColumnFilter[],
+	/**  ctid-keyed editing for tables without a primary key. */
+	includeCtid?: boolean,
 };
 
 /**

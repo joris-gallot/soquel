@@ -112,6 +112,56 @@ pub struct TableRowsRequest {
   pub sort: Option<SortSpec>,
   #[serde(default)]
   pub filters: Vec<ColumnFilter>,
+  /// ctid-keyed editing for tables without a primary key.
+  #[serde(default)]
+  pub include_ctid: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CellValue {
+  pub column: String,
+  /// None writes NULL.
+  pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RowUpdate {
+  pub key: Vec<CellValue>,
+  pub set: Vec<CellValue>,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RowInsert {
+  /// Omitted columns take their DEFAULT.
+  pub values: Vec<CellValue>,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RowDelete {
+  pub key: Vec<CellValue>,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableChanges {
+  pub schema: String,
+  pub table: String,
+  pub updates: Vec<RowUpdate>,
+  pub inserts: Vec<RowInsert>,
+  pub deletes: Vec<RowDelete>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyResult {
+  pub updated: u32,
+  pub inserted: u32,
+  pub deleted: u32,
+  pub duration_ms: f64,
 }
 
 /// SQL capability surface; only connections whose connector declares
@@ -121,6 +171,7 @@ pub trait SqlQuery: Send + Sync {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
   async fn cancel(&self) -> Result<(), Error>;
   async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error>;
+  async fn apply_changes(&self, changes: &TableChanges) -> Result<ApplyResult, Error>;
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error>;
 }
 

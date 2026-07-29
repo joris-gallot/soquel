@@ -34,6 +34,7 @@ uuid = { version = "1", features = [ "v4" ] }
 keyring = "4.1"
 async-trait = "0.1"
 tokio-postgres = "0.7"
+futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1", features = [
   "sync",
   "net",

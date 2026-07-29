@@ -1,5 +1,5 @@
 import { $, $$, browser, expect } from '@wdio/globals'
-import { clickVisible, createPostgresConnection, CTRL, deleteFirstConnection, typeSql, visible, waitForText, waitForVisibleRows } from './helpers'
+import { beginCellEdit, clickVisible, createPostgresConnection, CTRL, deleteFirstConnection, setEditorValue, typeSql, visible, waitForText, waitForToastsGone, waitForVisibleRows } from './helpers'
 
 describe('workspace', () => {
   it('opens a workspace with the schema tree after connecting', async () => {
@@ -153,9 +153,9 @@ describe('workspace', () => {
     await typeSql('select 1 as first; select 2 as second')
     await clickVisible('[data-testid="run-query"]')
 
+    await waitForText('[data-testid="sql-results"]', 'first')
     const tabs = await $$('[data-testid="sql-results"] [role="tab"]')
     expect(tabs).toHaveLength(2)
-    await waitForText('[data-testid="sql-results"]', 'first')
 
     await tabs[1].click()
     await waitForText('[data-testid="sql-results"]', 'second')
@@ -173,6 +173,81 @@ describe('workspace', () => {
     await $('[data-testid="history-list"]').waitForExist({ reverse: true })
     await waitForText('[data-testid="sql-input"]', 'customer_count')
     await browser.saveScreenshot('./e2e/screenshots/workspace-sql-history.png')
+  })
+
+  it('edits a cell through the preview transaction', async () => {
+    await $('[data-testid="tab-app.customers"]').click()
+    await waitForText('[data-testid="table-title"]', 'app.customers')
+
+    // Sorted name desc from the earlier test: first row is Grace Hopper.
+    await beginCellEdit('[data-testid="grid-body"] tr:first-child td:nth-child(2)')
+    await setEditorValue('[data-testid="cell-editor"]', 'Grace Renamed')
+    await browser.keys(['Enter'])
+
+    await waitForText('[data-testid="apply-changes"]', 'Apply (1)')
+    await clickVisible('[data-testid="apply-changes"]')
+    await waitForText('[data-testid="sql-preview"]', 'UPDATE "app"."customers" SET "name" = \'Grace Renamed\'')
+    await $('[data-testid="confirm-apply"]').click()
+    await waitForText('[data-testid="grid-body"] tr:first-child', 'Grace Renamed')
+    await browser.saveScreenshot('./e2e/screenshots/workspace-edit.png')
+
+    // Restore the fixture for the remaining specs.
+    await beginCellEdit('[data-testid="grid-body"] tr:first-child td:nth-child(2)')
+    await setEditorValue('[data-testid="cell-editor"]', 'Grace Hopper')
+    await browser.keys(['Enter'])
+    await clickVisible('[data-testid="apply-changes"]')
+    await $('[data-testid="confirm-apply"]').click()
+    await waitForText('[data-testid="grid-body"] tr:first-child', 'Grace Hopper')
+    await waitForToastsGone()
+  })
+
+  it('discards a pending insert without applying', async () => {
+    await clickVisible('[data-testid="add-row"]')
+    await $('[data-testid="insert-row"]').waitForExist()
+    await clickVisible('[data-testid="remove-insert"]')
+    await $('[data-testid="insert-row"]').waitForExist({ reverse: true })
+    await $('[data-testid="apply-changes"]').waitForExist({ reverse: true })
+  })
+
+  it('inserts a row, then deletes it, both through apply', async () => {
+    await clickVisible('[data-testid="add-row"]')
+    await setEditorValue('[data-testid="insert-name"]', 'Temp Person')
+    await clickVisible('[data-testid="apply-changes"]')
+    await waitForText('[data-testid="sql-preview"]', 'INSERT INTO "app"."customers" ("name")')
+    await $('[data-testid="confirm-apply"]').click()
+    // name desc: Temp Person sorts before Grace Hopper.
+    await waitForText('[data-testid="grid-body"] tr:first-child', 'Temp Person')
+    await waitForVisibleRows(4)
+    await waitForToastsGone()
+
+    await clickVisible('[data-testid="grid-body"] tr:first-child td:nth-child(2)')
+    await clickVisible('[data-testid="delete-row"]')
+    await clickVisible('[data-testid="apply-changes"]')
+    await waitForText('[data-testid="sql-preview"]', 'DELETE FROM "app"."customers"')
+    await $('[data-testid="confirm-apply"]').click()
+    await waitForVisibleRows(3)
+    await waitForToastsGone()
+  })
+
+  it('edits a pk-less table via ctid', async () => {
+    await $('[data-testid="tree-filter"]').setValue('audit')
+    await $('[data-testid="table-public.audit_log"]').click()
+    await waitForText('[data-testid="table-title"]', 'public.audit_log')
+
+    await (await visible('[data-testid="no-pk-banner"]')).waitForExist()
+    await clickVisible('[data-testid="enable-ctid"]')
+    await waitForVisibleRows(2)
+
+    // Unique value: audit_log mutations persist across e2e runs (no reseed).
+    const edited = `ctid edit ${Date.now()}`
+    await beginCellEdit('[data-testid="grid-body"] tr:first-child td:nth-child(2)')
+    await setEditorValue('[data-testid="cell-editor"]', edited)
+    await browser.keys(['Enter'])
+    await clickVisible('[data-testid="apply-changes"]')
+    await waitForText('[data-testid="sql-preview"]', '"ctid" = ')
+    await $('[data-testid="confirm-apply"]').click()
+    await waitForText('[data-testid="grid-body"]', edited)
+    await waitForToastsGone()
   })
 
   it('opens the command palette', async () => {

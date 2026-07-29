@@ -34,6 +34,12 @@ CREATE TABLE public.settings (
   value jsonb NOT NULL
 );
 
+-- No primary key on purpose: exercises the ctid-based editing path.
+CREATE TABLE public.audit_log (
+  at timestamptz NOT NULL DEFAULT now(),
+  message text NOT NULL
+);
+
 INSERT INTO app.customers (name, email, tags, meta) VALUES
   ('Ada Lovelace', 'ada@example.com', '{vip,eu}', '{"plan": "pro", "seats": 3}'),
   ('Alan Turing', 'alan@example.com', '{eu}', '{"plan": "free"}'),
@@ -47,3 +53,7 @@ INSERT INTO app.orders (customer_id, amount, note, receipt) VALUES
 INSERT INTO public.settings (key, value) VALUES
   ('theme', '"dark"'),
   ('limits', '{"maxRows": 500}');
+
+INSERT INTO public.audit_log (message) VALUES
+  ('first entry'),
+  ('second entry');

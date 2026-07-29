@@ -57,6 +57,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::run_query,
       commands::cancel_query,
       commands::table_rows,
+      commands::apply_table_changes,
       commands::schema_snapshot,
       commands::open_sql_session,
       commands::run_session_query,

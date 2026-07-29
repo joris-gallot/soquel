@@ -8,9 +8,9 @@ use tokio_postgres::types::{Kind as PgKind, Type as PgType};
 use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, SimpleQueryMessage};
 
 use crate::connectors::{
-  Capability, ColumnFilter, ColumnKind, Connection, Connector, FilterOp, Introspect, QueryColumn,
-  QueryResult, ServerNotice, SortDirection, SqlQuery, SqlSession, StatementResult,
-  TableRowsRequest,
+  ApplyResult, Capability, CellValue, ColumnFilter, ColumnKind, Connection, Connector, FilterOp,
+  Introspect, QueryColumn, QueryResult, ServerNotice, SortDirection, SqlQuery, SqlSession,
+  StatementResult, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SslMode};
@@ -273,7 +273,7 @@ impl SqlQuery for PostgresConnection {
 
     // ::text keeps the server's canonical formatting (arrays, timestamps, bytea)
     // while the extended protocol carries the filter parameters.
-    let projection = columns
+    let mut projection = columns
       .iter()
       .map(|(name, _)| {
         let ident = quote_ident(name);
@@ -281,6 +281,9 @@ impl SqlQuery for PostgresConnection {
       })
       .collect::<Vec<_>>()
       .join(", ");
+    if request.include_ctid {
+      projection = format!("\"ctid\"::text AS \"ctid\", {projection}");
+    }
     let mut sql = format!(
       "SELECT {projection} FROM {}.{}{where_clause}",
       quote_ident(&request.schema),
@@ -318,15 +321,23 @@ impl SqlQuery for PostgresConnection {
       .collect();
     let rows = pg.client.query_typed(&sql, &bind).await?;
 
+    let mut result_columns: Vec<QueryColumn> = columns
+      .iter()
+      .map(|(name, ty)| QueryColumn {
+        name: name.clone(),
+        data_type: Some(type_name(ty)),
+        kind: column_kind(ty),
+      })
+      .collect();
+    if request.include_ctid {
+      result_columns.insert(0, QueryColumn {
+        name: "ctid".to_string(),
+        data_type: Some("tid".to_string()),
+        kind: ColumnKind::Other,
+      });
+    }
     let statement = StatementResult {
-      columns: columns
-        .iter()
-        .map(|(name, ty)| QueryColumn {
-          name: name.clone(),
-          data_type: Some(type_name(ty)),
-          kind: column_kind(ty),
-        })
-        .collect(),
+      columns: result_columns,
       rows_affected: rows.len() as f64,
       rows: rows
         .iter()
@@ -339,6 +350,46 @@ impl SqlQuery for PostgresConnection {
       notices,
       duration_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
+  }
+
+  async fn apply_changes(&self, changes: &TableChanges) -> Result<ApplyResult, Error> {
+    let pg = self.checkout().await?;
+    let base = format!(
+      "SELECT * FROM {}.{}",
+      quote_ident(&changes.schema),
+      quote_ident(&changes.table)
+    );
+    let prepared = pg.client.prepare(&base).await?;
+    let columns: Vec<(String, PgType)> = prepared
+      .columns()
+      .iter()
+      .map(|c| (c.name().to_string(), c.type_().clone()))
+      .collect();
+    let statements = build_change_statements(&changes.schema, &changes.table, &columns, changes)?;
+    if statements.is_empty() {
+      return Err(Error::Unsupported {
+        message: "no changes to apply".to_string(),
+      });
+    }
+
+    let start = Instant::now();
+    pg.client.batch_execute("BEGIN").await?;
+    match run_change_statements(&pg, &statements).await {
+      Ok((updated, inserted, deleted)) => {
+        pg.client.batch_execute("COMMIT").await?;
+        Ok(ApplyResult {
+          updated,
+          inserted,
+          deleted,
+          duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+        })
+      }
+      Err(err) => {
+        // The pooled client must go back clean.
+        let _ = pg.client.batch_execute("ROLLBACK").await;
+        Err(err)
+      }
+    }
   }
 
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error> {
@@ -355,6 +406,173 @@ impl SqlQuery for PostgresConnection {
 // Identifiers come from the UI: quoting is the injection boundary.
 fn quote_ident(ident: &str) -> String {
   format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChangeKind {
+  Update,
+  Insert,
+  Delete,
+}
+
+#[derive(Debug)]
+struct ChangeStatement {
+  sql: String,
+  params: Vec<Option<String>>,
+  kind: ChangeKind,
+}
+
+/// Fixed order: updates, then deletes, then inserts.
+fn build_change_statements(
+  schema: &str,
+  table: &str,
+  columns: &[(String, PgType)],
+  changes: &TableChanges,
+) -> Result<Vec<ChangeStatement>, Error> {
+  let target = format!("{}.{}", quote_ident(schema), quote_ident(table));
+  let mut statements = Vec::new();
+
+  for update in &changes.updates {
+    if update.set.is_empty() || update.key.is_empty() {
+      return Err(Error::Unsupported {
+        message: "an update needs at least one changed cell and a key".to_string(),
+      });
+    }
+    let mut params = Vec::new();
+    let mut sets = Vec::new();
+    for cell in &update.set {
+      let cast = change_cast(columns, &cell.column)?;
+      params.push(cell.value.clone());
+      sets.push(format!(
+        "{} = ${}::{cast}",
+        quote_ident(&cell.column),
+        params.len()
+      ));
+    }
+    let key = key_clause(columns, &update.key, &mut params)?;
+    statements.push(ChangeStatement {
+      sql: format!("UPDATE {target} SET {} WHERE {key}", sets.join(", ")),
+      params,
+      kind: ChangeKind::Update,
+    });
+  }
+
+  for delete in &changes.deletes {
+    if delete.key.is_empty() {
+      return Err(Error::Unsupported {
+        message: "a delete needs a key".to_string(),
+      });
+    }
+    let mut params = Vec::new();
+    let key = key_clause(columns, &delete.key, &mut params)?;
+    statements.push(ChangeStatement {
+      sql: format!("DELETE FROM {target} WHERE {key}"),
+      params,
+      kind: ChangeKind::Delete,
+    });
+  }
+
+  for insert in &changes.inserts {
+    let mut params = Vec::new();
+    let statement = if insert.values.is_empty() {
+      format!("INSERT INTO {target} DEFAULT VALUES")
+    }
+    else {
+      let mut names = Vec::new();
+      let mut values = Vec::new();
+      for cell in &insert.values {
+        let cast = change_cast(columns, &cell.column)?;
+        params.push(cell.value.clone());
+        names.push(quote_ident(&cell.column));
+        values.push(format!("${}::{cast}", params.len()));
+      }
+      format!(
+        "INSERT INTO {target} ({}) VALUES ({})",
+        names.join(", "),
+        values.join(", ")
+      )
+    };
+    statements.push(ChangeStatement {
+      sql: statement,
+      params,
+      kind: ChangeKind::Insert,
+    });
+  }
+
+  Ok(statements)
+}
+
+// ctid is a system column: absent from the prepared list, valid as a key.
+fn change_cast(columns: &[(String, PgType)], column: &str) -> Result<String, Error> {
+  if column == "ctid" {
+    return Ok("tid".to_string());
+  }
+  columns
+    .iter()
+    .find(|(name, _)| name == column)
+    .map(|(_, ty)| type_name(ty))
+    .ok_or_else(|| Error::Unsupported {
+      message: format!("unknown column {column}"),
+    })
+}
+
+/// NULL-safe key comparison: PK values are never NULL, but ctid-less tables
+/// may key on nullable columns.
+fn key_clause(
+  columns: &[(String, PgType)],
+  key: &[CellValue],
+  params: &mut Vec<Option<String>>,
+) -> Result<String, Error> {
+  let mut clauses = Vec::new();
+  for cell in key {
+    let cast = change_cast(columns, &cell.column)?;
+    params.push(cell.value.clone());
+    clauses.push(format!(
+      "{} IS NOT DISTINCT FROM ${}::{cast}",
+      quote_ident(&cell.column),
+      params.len()
+    ));
+  }
+  Ok(clauses.join(" AND "))
+}
+
+async fn run_change_statements(
+  pg: &PooledPg,
+  statements: &[ChangeStatement],
+) -> Result<(u32, u32, u32), Error> {
+  use futures_util::TryStreamExt;
+
+  let (mut updated, mut inserted, mut deleted) = (0u32, 0u32, 0u32);
+  for statement in statements {
+    let params = statement
+      .params
+      .iter()
+      .map(|value| (value, PgType::TEXT));
+    let stream = pg.client.query_typed_raw(&statement.sql, params).await?;
+    futures_util::pin_mut!(stream);
+    while stream.try_next().await?.is_some() {}
+    let affected = stream.rows_affected().unwrap_or(0);
+    match statement.kind {
+      ChangeKind::Update | ChangeKind::Delete => {
+        if affected != 1 {
+          return Err(Error::Database {
+            message: format!(
+              "a {} matched {affected} rows instead of exactly 1; nothing was applied",
+              if statement.kind == ChangeKind::Update { "row update" } else { "row delete" }
+            ),
+          });
+        }
+        if statement.kind == ChangeKind::Update {
+          updated += 1;
+        }
+        else {
+          deleted += 1;
+        }
+      }
+      ChangeKind::Insert => inserted += u32::try_from(affected).unwrap_or(0),
+    }
+  }
+  Ok((updated, inserted, deleted))
 }
 
 /// AND-ed WHERE clause + bound parameter values, `$1`-numbered in order.
@@ -642,6 +860,117 @@ pub mod tests {
     assert_eq!(params, vec!["%50\\%\\_\\\\%".to_string()]);
   }
 
+  fn cell(column: &str, value: Option<&str>) -> CellValue {
+    CellValue {
+      column: column.to_string(),
+      value: value.map(str::to_string),
+    }
+  }
+
+  fn no_changes() -> TableChanges {
+    TableChanges {
+      schema: "app".to_string(),
+      table: "customers".to_string(),
+      updates: vec![],
+      inserts: vec![],
+      deletes: vec![],
+    }
+  }
+
+  #[test]
+  fn change_statements_cover_update_delete_insert() {
+    let columns = vec![
+      ("id".to_string(), PgType::INT4),
+      ("name".to_string(), PgType::TEXT),
+      ("meta".to_string(), PgType::JSONB),
+    ];
+    let changes = TableChanges {
+      updates: vec![crate::connectors::RowUpdate {
+        key: vec![cell("id", Some("1"))],
+        set: vec![cell("name", Some("Ada")), cell("meta", None)],
+      }],
+      deletes: vec![crate::connectors::RowDelete {
+        key: vec![cell("id", Some("2"))],
+      }],
+      inserts: vec![
+        crate::connectors::RowInsert {
+          values: vec![cell("name", Some("New"))],
+        },
+        crate::connectors::RowInsert { values: vec![] },
+      ],
+      ..no_changes()
+    };
+    let statements = build_change_statements("app", "customers", &columns, &changes).unwrap();
+    assert_eq!(statements.len(), 4);
+
+    assert_eq!(
+      statements[0].sql,
+      r#"UPDATE "app"."customers" SET "name" = $1::text, "meta" = $2::jsonb WHERE "id" IS NOT DISTINCT FROM $3::int4"#
+    );
+    assert_eq!(
+      statements[0].params,
+      vec![Some("Ada".to_string()), None, Some("1".to_string())]
+    );
+    assert_eq!(statements[0].kind, ChangeKind::Update);
+
+    assert_eq!(
+      statements[1].sql,
+      r#"DELETE FROM "app"."customers" WHERE "id" IS NOT DISTINCT FROM $1::int4"#
+    );
+    assert_eq!(statements[1].kind, ChangeKind::Delete);
+
+    assert_eq!(
+      statements[2].sql,
+      r#"INSERT INTO "app"."customers" ("name") VALUES ($1::text)"#
+    );
+    assert_eq!(
+      statements[3].sql,
+      r#"INSERT INTO "app"."customers" DEFAULT VALUES"#
+    );
+  }
+
+  #[test]
+  fn change_statements_reject_unknown_columns_and_empty_shapes() {
+    let columns = vec![("id".to_string(), PgType::INT4)];
+    let unknown = TableChanges {
+      updates: vec![crate::connectors::RowUpdate {
+        key: vec![cell("id", Some("1"))],
+        set: vec![cell("nope", Some("x"))],
+      }],
+      ..no_changes()
+    };
+    assert!(matches!(
+      build_change_statements("app", "customers", &columns, &unknown),
+      Err(Error::Unsupported { .. })
+    ));
+
+    let empty_key = TableChanges {
+      deletes: vec![crate::connectors::RowDelete { key: vec![] }],
+      ..no_changes()
+    };
+    assert!(matches!(
+      build_change_statements("app", "customers", &columns, &empty_key),
+      Err(Error::Unsupported { .. })
+    ));
+  }
+
+  #[test]
+  fn change_statements_allow_ctid_keys_and_quote_hostile_idents() {
+    let columns = vec![("evil\"; DROP--".to_string(), PgType::TEXT)];
+    let changes = TableChanges {
+      updates: vec![crate::connectors::RowUpdate {
+        key: vec![cell("ctid", Some("(0,1)"))],
+        set: vec![cell("evil\"; DROP--", Some("x"))],
+      }],
+      ..no_changes()
+    };
+    let statements = build_change_statements("app", "t", &columns, &changes).unwrap();
+    assert_eq!(
+      statements[0].sql,
+      r#"UPDATE "app"."t" SET "evil""; DROP--" = $1::text WHERE "ctid" IS NOT DISTINCT FROM $2::tid"#
+    );
+  }
+
   #[test]
   fn column_kind_maps_common_types() {
     assert_eq!(column_kind(&PgType::INT8), ColumnKind::Number);
@@ -841,6 +1170,7 @@ pub mod tests {
           direction: SortDirection::Desc,
         }),
         filters: vec![],
+        include_ctid: false,
       })
       .await
       .unwrap();
@@ -862,6 +1192,7 @@ pub mod tests {
           direction: SortDirection::Desc,
         }),
         filters: vec![],
+        include_ctid: false,
       })
       .await
       .unwrap();
@@ -881,6 +1212,7 @@ pub mod tests {
       offset: 0,
       sort: None,
       filters,
+      include_ctid: false,
     })
     .await
     .unwrap()
@@ -976,6 +1308,138 @@ pub mod tests {
   }
 
   #[tokio::test]
+  async fn integration_postgres_apply_changes_roundtrip_in_one_transaction() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    // Work on rows this test owns so parallel tests stay unaffected.
+    let applied = pg
+      .apply_changes(&TableChanges {
+        inserts: vec![crate::connectors::RowInsert {
+          values: vec![
+            cell("name", Some("Temp Row")),
+            cell("email", Some("temp@example.com")),
+          ],
+        }],
+        ..no_changes()
+      })
+      .await
+      .unwrap();
+    assert_eq!(applied.inserted, 1);
+
+    let update_null = pg
+      .apply_changes(&TableChanges {
+        updates: vec![crate::connectors::RowUpdate {
+          key: vec![cell("email", Some("temp@example.com"))],
+          set: vec![cell("name", Some("Temp Renamed")), cell("meta", None)],
+        }],
+        ..no_changes()
+      })
+      .await
+      .unwrap();
+    assert_eq!(update_null.updated, 1);
+
+    let rows = filtered_rows(
+      &pg,
+      "customers",
+      vec![filter("email", FilterOp::Eq, Some("temp@example.com"))],
+    )
+    .await;
+    assert_eq!(rows.rows[0][1].as_deref(), Some("Temp Renamed"));
+
+    let deleted = pg
+      .apply_changes(&TableChanges {
+        deletes: vec![crate::connectors::RowDelete {
+          key: vec![cell("email", Some("temp@example.com"))],
+        }],
+        ..no_changes()
+      })
+      .await
+      .unwrap();
+    assert_eq!(deleted.deleted, 1);
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_apply_changes_rolls_back_entirely() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    // First update is valid, second matches nothing: NOTHING must stick.
+    let result = pg
+      .apply_changes(&TableChanges {
+        updates: vec![
+          crate::connectors::RowUpdate {
+            key: vec![cell("id", Some("1"))],
+            set: vec![cell("name", Some("Should Not Stick"))],
+          },
+          crate::connectors::RowUpdate {
+            key: vec![cell("id", Some("999999"))],
+            set: vec![cell("name", Some("x"))],
+          },
+        ],
+        ..no_changes()
+      })
+      .await;
+    let Err(Error::Database { message }) = result else {
+      panic!("expected the batch to fail");
+    };
+    assert!(message.contains("matched 0 rows"), "{message}");
+
+    let rows = filtered_rows(&pg, "customers", vec![filter("id", FilterOp::Eq, Some("1"))]).await;
+    assert_eq!(rows.rows[0][1].as_deref(), Some("Ada Lovelace"));
+    // The pooled client came back clean (no open transaction).
+    pg.run_query("SELECT 1").await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_ctid_editing_on_pkless_table() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let inserted = pg
+      .apply_changes(&TableChanges {
+        schema: "public".to_string(),
+        table: "audit_log".to_string(),
+        inserts: vec![crate::connectors::RowInsert {
+          values: vec![cell("message", Some("ctid test row"))],
+        }],
+        ..no_changes()
+      })
+      .await
+      .unwrap();
+    assert_eq!(inserted.inserted, 1);
+
+    let fetched = pg
+      .table_rows(&TableRowsRequest {
+        schema: "public".to_string(),
+        table: "audit_log".to_string(),
+        limit: 100,
+        offset: 0,
+        sort: None,
+        filters: vec![filter("message", FilterOp::Eq, Some("ctid test row"))],
+        include_ctid: true,
+      })
+      .await
+      .unwrap();
+    let statement = &fetched.statements[0];
+    assert_eq!(statement.columns[0].name, "ctid");
+    let ctid = statement.rows[0][0].clone().unwrap();
+
+    let deleted = pg
+      .apply_changes(&TableChanges {
+        schema: "public".to_string(),
+        table: "audit_log".to_string(),
+        deletes: vec![crate::connectors::RowDelete {
+          key: vec![cell("ctid", Some(&ctid))],
+        }],
+        ..no_changes()
+      })
+      .await
+      .unwrap();
+    assert_eq!(deleted.deleted, 1);
+  }
+
+  #[tokio::test]
   async fn integration_postgres_filter_values_cannot_inject_sql() {
     let Some(pg) = test_connection_from_env().await else {
       return;
@@ -1001,9 +1465,15 @@ pub mod tests {
       .await;
       assert!(contains.rows.is_empty(), "{hostile:?} must match nothing");
     }
-    // The table survived every attempt.
-    let intact = filtered_rows(&pg, "customers", vec![]).await;
-    assert_eq!(intact.rows.len(), 3);
+    // The table survived every attempt. (No global count: the write tests
+    // running in parallel insert their own temporary rows.)
+    let intact = filtered_rows(
+      &pg,
+      "customers",
+      vec![filter("name", FilterOp::Eq, Some("Ada Lovelace"))],
+    )
+    .await;
+    assert_eq!(intact.rows.len(), 1);
   }
 
   #[tokio::test]
@@ -1022,6 +1492,7 @@ pub mod tests {
           direction: SortDirection::Desc,
         }),
         filters: vec![filter("amount", FilterOp::Gt, Some("40"))],
+        include_ctid: false,
       })
       .await
       .unwrap();

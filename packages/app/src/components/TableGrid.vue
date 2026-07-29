@@ -1,11 +1,20 @@
 <script setup lang="ts">
 import type { ColumnFilter, FilterOp, SortSpec, StatementResult, TableInfo } from '@/lib/bindings'
-import { ArrowDown, ArrowUp, ArrowUpRight, ChevronLeft, ChevronRight, Copy, Funnel, RefreshCw, X } from '@lucide/vue'
-import { useClipboard } from '@vueuse/core'
+import type { StagedChanges } from '@/lib/staged'
+import { ArrowDown, ArrowUp, ArrowUpRight, Ban, ChevronLeft, ChevronRight, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
+import { useClipboard, useEventListener } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
@@ -22,6 +31,7 @@ import { FILTER_OP_LABELS, FILTER_OPS_BY_KIND, filterLabel, OP_NEEDS_VALUE } fro
 import { formatEstimatedRows } from '@/lib/format'
 import { highlightJson } from '@/lib/highlight-json'
 import { unwrap } from '@/lib/result'
+import { buildTableChanges, emptyStaged, previewSql, stagedCount } from '@/lib/staged'
 
 const props = defineProps<{
   connectionId: string
@@ -47,6 +57,32 @@ const draftValue = ref('')
 
 const selectedCell = ref<{ rowIndex: number, columnIndex: number } | null>(null)
 const { copy, copied } = useClipboard()
+
+const staged = ref<StagedChanges>(emptyStaged())
+const ctidMode = ref(false)
+const editingCell = ref<{ rowIndex: number, columnIndex: number } | null>(null)
+const editingValue = ref('')
+const previewOpen = ref(false)
+const applying = ref(false)
+
+// Views and matviews are read-only; PK-less tables need the ctid opt-in.
+const keyColumns = computed(() =>
+  ctidMode.value ? ['ctid'] : props.table.primaryKey,
+)
+const canEverEdit = computed(() => props.table.kind === 'table')
+const editable = computed(() => canEverEdit.value && keyColumns.value.length > 0)
+const pending = computed(() => stagedCount(staged.value))
+
+// ctid is fetched for keying but never displayed.
+const displayColumns = computed(() =>
+  (statement.value?.columns ?? [])
+    .map((column, index) => ({ column, index }))
+    .filter(({ column }) => column.name !== 'ctid'),
+)
+
+const nullableColumns = computed(() =>
+  new Map(props.table.columns.map(column => [column.name, column.nullable])),
+)
 
 const numericColumns = computed(() =>
   (statement.value?.columns ?? []).map(column => column.kind === 'number'),
@@ -103,6 +139,7 @@ async function fetchRows() {
       offset: offset.value,
       sort: sort.value,
       filters: filters.value,
+      includeCtid: ctidMode.value,
     }))
     statement.value = result.statements[0] ?? null
     durationMs.value = result.durationMs ?? 0
@@ -122,6 +159,9 @@ watch(
     sort.value = null
     filters.value = props.initialFilters ?? []
     selectedCell.value = null
+    staged.value = emptyStaged()
+    editingCell.value = null
+    ctidMode.value = false
     fetchRows()
   },
   { immediate: true },
@@ -135,7 +175,17 @@ watch(() => props.initialFilters, (initial) => {
   }
 })
 
+// Staged edits are keyed by row index: any reordering/refetch would corrupt them.
+function guardPending(): boolean {
+  if (pending.value === 0)
+    return false
+  toast.warning('Apply or discard the staged changes first')
+  return true
+}
+
 function toggleSort(column: string) {
+  if (guardPending())
+    return
   sort.value = sort.value?.column === column && sort.value.direction === 'asc'
     ? { column, direction: 'desc' }
     : { column, direction: 'asc' }
@@ -151,6 +201,8 @@ function openFilter(column: string, kind: (typeof FILTER_OPS_BY_KIND) extends Re
 }
 
 function applyFilter(column: string) {
+  if (guardPending())
+    return
   const filter: ColumnFilter = {
     column,
     op: draftOp.value,
@@ -163,6 +215,8 @@ function applyFilter(column: string) {
 }
 
 function removeFilter(column: string) {
+  if (guardPending())
+    return
   filters.value = filters.value.filter(f => f.column !== column)
   openFilterColumn.value = null
   offset.value = 0
@@ -170,6 +224,8 @@ function removeFilter(column: string) {
 }
 
 function clearFilters() {
+  if (guardPending())
+    return
   filters.value = []
   offset.value = 0
   fetchRows()
@@ -192,14 +248,142 @@ function hopFrom(rowIndex: number, columnName: string) {
 }
 
 function nextPage() {
+  if (guardPending())
+    return
   offset.value += PAGE_SIZE
   fetchRows()
 }
 
 function previousPage() {
+  if (guardPending())
+    return
   offset.value = Math.max(0, offset.value - PAGE_SIZE)
   fetchRows()
 }
+
+function displayedValue(rowIndex: number, columnIndex: number): string | null {
+  const name = statement.value?.columns[columnIndex]?.name
+  const edited = name !== undefined ? staged.value.edits[rowIndex]?.[name] : undefined
+  return edited !== undefined ? edited : statement.value?.rows[rowIndex]?.[columnIndex] ?? null
+}
+
+function isEdited(rowIndex: number, columnIndex: number): boolean {
+  const name = statement.value?.columns[columnIndex]?.name
+  return name !== undefined && staged.value.edits[rowIndex]?.[name] !== undefined
+}
+
+function beginEdit(rowIndex: number, columnIndex: number) {
+  if (!editable.value)
+    return
+  editingCell.value = { rowIndex, columnIndex }
+  editingValue.value = displayedValue(rowIndex, columnIndex) ?? ''
+}
+
+function stageEdit(value: string | null) {
+  const cell = editingCell.value
+  const columns = statement.value?.columns
+  if (!cell || !columns)
+    return
+  const name = columns[cell.columnIndex].name
+  const original = statement.value?.rows[cell.rowIndex]?.[cell.columnIndex] ?? null
+  const edits = { ...(staged.value.edits[cell.rowIndex] ?? {}) }
+  if (value === original)
+    delete edits[name]
+  else
+    edits[name] = value
+  const all = { ...staged.value.edits }
+  if (Object.keys(edits).length === 0)
+    delete all[cell.rowIndex]
+  else
+    all[cell.rowIndex] = edits
+  staged.value = { ...staged.value, edits: all }
+  editingCell.value = null
+}
+
+function addRow(fromRow?: number) {
+  const values: Record<string, string | null> = {}
+  if (fromRow !== undefined && statement.value) {
+    for (const { column, index } of displayColumns.value) {
+      // PK values stay behind: serials/defaults must produce fresh ones.
+      if (!props.table.primaryKey.includes(column.name))
+        values[column.name] = statement.value.rows[fromRow]?.[index] ?? null
+    }
+  }
+  staged.value = { ...staged.value, inserts: [...staged.value.inserts, values] }
+}
+
+function removeInsert(insertIndex: number) {
+  staged.value = {
+    ...staged.value,
+    inserts: staged.value.inserts.filter((_, index) => index !== insertIndex),
+  }
+}
+
+function stageInsertCell(insertIndex: number, column: string, value: string | null) {
+  const inserts = staged.value.inserts.map((row, index) =>
+    index === insertIndex ? { ...row, [column]: value } : row,
+  )
+  staged.value = { ...staged.value, inserts }
+}
+
+function toggleDeleteSelected() {
+  const row = selectedCell.value?.rowIndex
+  if (row === undefined)
+    return
+  const deletes = staged.value.deletes.includes(row)
+    ? staged.value.deletes.filter(index => index !== row)
+    : [...staged.value.deletes, row]
+  staged.value = { ...staged.value, deletes }
+}
+
+function discardAll() {
+  staged.value = emptyStaged()
+  editingCell.value = null
+}
+
+const changes = computed(() => buildTableChanges(
+  staged.value,
+  statement.value?.rows ?? [],
+  statement.value?.columns ?? [],
+  keyColumns.value,
+  props.schema,
+  props.table.name,
+))
+
+const preview = computed(() => previewSql(changes.value))
+
+async function applyChanges() {
+  applying.value = true
+  try {
+    const result = unwrap(await commands.applyTableChanges(props.connectionId, changes.value))
+    toast.success(`applied: ${result.updated} updated, ${result.inserted} inserted, ${result.deleted} deleted`)
+    previewOpen.value = false
+    discardAll()
+    selectedCell.value = null
+    await fetchRows()
+  }
+  catch (error) {
+    // Staging is kept: the transaction rolled back server-side.
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
+  finally {
+    applying.value = false
+  }
+}
+
+function enableCtidEditing() {
+  ctidMode.value = true
+  staged.value = emptyStaged()
+  fetchRows()
+}
+
+useEventListener('keydown', (event) => {
+  if (event.ctrlKey && event.key === 's') {
+    event.preventDefault()
+    if (pending.value > 0)
+      previewOpen.value = true
+  }
+})
 </script>
 
 <template>
@@ -237,12 +421,23 @@ function previousPage() {
         </button>
       </div>
 
+      <div
+        v-if="canEverEdit && !editable"
+        class="flex items-center gap-3 border-b px-3 py-1.5 font-mono text-[11px] text-muted-foreground"
+        data-testid="no-pk-banner"
+      >
+        no primary key - editing disabled
+        <Button size="sm" variant="secondary" class="h-6 text-[11px]" data-testid="enable-ctid" @click="enableCtidEditing">
+          edit via ctid
+        </Button>
+      </div>
+
       <div class="min-h-0 flex-1 overflow-auto">
         <table class="w-max min-w-full border-separate border-spacing-0 font-mono text-xs">
           <thead class="sticky top-0 z-10">
             <tr>
               <th
-                v-for="(column, columnIndex) in statement?.columns ?? []"
+                v-for="{ column, index: columnIndex } in displayColumns"
                 :key="column.name"
                 class="border-b bg-background px-3 py-1.5 font-medium text-muted-foreground select-none"
                 :class="numericColumns[columnIndex] ? 'text-right' : 'text-left'"
@@ -329,24 +524,58 @@ function previousPage() {
               v-for="(row, rowIndex) in statement?.rows ?? []"
               :key="offset + rowIndex"
               class="group hover:bg-muted/40"
+              :class="staged.deletes.includes(rowIndex) && 'bg-destructive/10 text-destructive/80 line-through'"
             >
               <td
-                v-for="(value, columnIndex) in row"
+                v-for="{ index: columnIndex } in displayColumns"
                 :key="columnIndex"
-                class="max-w-xs cursor-default truncate border-b border-border/50 px-3 py-1"
+                class="max-w-xs cursor-default border-b border-border/50 px-3 py-1"
                 :class="[
                   numericColumns[columnIndex] && 'text-right',
                   selectedCell?.rowIndex === rowIndex && selectedCell?.columnIndex === columnIndex
                     && 'bg-accent text-accent-foreground',
+                  isEdited(rowIndex, columnIndex) && 'text-amber-500',
+                  // The editor and its NULL button must not be clipped.
+                  (editingCell?.rowIndex !== rowIndex || editingCell?.columnIndex !== columnIndex) && 'truncate',
                 ]"
-                :title="value ?? undefined"
+                :title="isEdited(rowIndex, columnIndex)
+                  ? `was: ${row[columnIndex] ?? 'NULL'}`
+                  : row[columnIndex] ?? undefined"
                 @click="selectedCell = { rowIndex, columnIndex }"
+                @dblclick="beginEdit(rowIndex, columnIndex)"
               >
-                <span class="inline-flex max-w-full items-center gap-1">
-                  <span v-if="value === null" class="text-muted-foreground/60 italic">NULL</span>
-                  <span v-else class="truncate">{{ value }}</span>
+                <span
+                  v-if="editingCell?.rowIndex === rowIndex && editingCell?.columnIndex === columnIndex"
+                  class="flex items-center gap-1"
+                >
+                  <!-- eslint-disable-next-line vuejs-accessibility/no-autofocus -->
+                  <input
+                    v-model="editingValue"
+                    autofocus
+                    class="w-full min-w-24 border-b border-ring bg-transparent font-mono text-xs outline-none"
+                    data-testid="cell-editor"
+                    @keydown.enter="stageEdit(editingValue)"
+                    @keydown.escape="editingCell = null"
+                    @blur="stageEdit(editingValue)"
+                    @click.stop
+                  >
                   <button
-                    v-if="value !== null && fkByColumn.has(statement!.columns[columnIndex].name)"
+                    v-if="nullableColumns.get(statement!.columns[columnIndex].name)"
+                    type="button"
+                    class="shrink-0 text-muted-foreground hover:text-foreground"
+                    aria-label="Set NULL"
+                    data-testid="cell-set-null"
+                    title="Set NULL"
+                    @mousedown.prevent.stop="stageEdit(null)"
+                  >
+                    <Ban class="size-3" />
+                  </button>
+                </span>
+                <span v-else class="inline-flex max-w-full items-center gap-1">
+                  <span v-if="displayedValue(rowIndex, columnIndex) === null" class="text-muted-foreground/60 italic">NULL</span>
+                  <span v-else class="truncate">{{ displayedValue(rowIndex, columnIndex) }}</span>
+                  <button
+                    v-if="row[columnIndex] !== null && fkByColumn.has(statement!.columns[columnIndex].name)"
                     type="button"
                     class="invisible shrink-0 text-muted-foreground hover:text-foreground group-hover:visible"
                     aria-label="Open referenced row"
@@ -354,6 +583,39 @@ function previousPage() {
                     @click.stop="hopFrom(rowIndex, statement!.columns[columnIndex].name)"
                   >
                     <ArrowUpRight class="size-3" />
+                  </button>
+                </span>
+              </td>
+            </tr>
+            <tr
+              v-for="(insert, insertIndex) in staged.inserts"
+              :key="`insert-${insertIndex}`"
+              class="bg-emerald-500/5"
+              data-testid="insert-row"
+            >
+              <td
+                v-for="({ column }, position) in displayColumns"
+                :key="column.name"
+                class="max-w-xs border-b border-border/50 px-3 py-1"
+              >
+                <span class="flex items-center gap-1">
+                  <input
+                    :value="insert[column.name] ?? ''"
+                    class="w-full min-w-24 border-b border-border/60 bg-transparent font-mono text-xs outline-none placeholder:text-muted-foreground/40"
+                    :class="insert[column.name] === null && 'italic'"
+                    :placeholder="insert[column.name] === null ? 'NULL' : 'default'"
+                    :data-testid="`insert-${column.name}`"
+                    @input="stageInsertCell(insertIndex, column.name, ($event.target as HTMLInputElement).value)"
+                  >
+                  <button
+                    v-if="position === displayColumns.length - 1"
+                    type="button"
+                    class="shrink-0 text-muted-foreground hover:text-destructive"
+                    aria-label="Remove new row"
+                    data-testid="remove-insert"
+                    @click="removeInsert(insertIndex)"
+                  >
+                    <X class="size-3" />
                   </button>
                 </span>
               </td>
@@ -380,37 +642,133 @@ function previousPage() {
         </span>
         <span>{{ durationMs.toFixed(0) }}ms</span>
         <span class="flex-1" />
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Refresh rows"
-          data-testid="grid-refresh"
-          :disabled="loading"
-          @click="fetchRows"
-        >
-          <RefreshCw :class="loading ? 'animate-spin' : ''" />
-        </Button>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Previous page"
-          data-testid="grid-prev"
-          :disabled="loading || offset === 0"
-          @click="previousPage"
-        >
-          <ChevronLeft />
-        </Button>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Next page"
-          data-testid="grid-next"
-          :disabled="loading || (statement?.rows.length ?? 0) < PAGE_SIZE"
-          @click="nextPage"
-        >
-          <ChevronRight />
-        </Button>
+        <template v-if="editable">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Add row"
+                data-testid="add-row"
+                @click="addRow()"
+              >
+                <Plus />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Add row</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Duplicate selected row"
+                data-testid="duplicate-row"
+                :disabled="!selectedCell"
+                @click="addRow(selectedCell!.rowIndex)"
+              >
+                <CopyPlus />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Duplicate selected row</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Delete selected row"
+                data-testid="delete-row"
+                :disabled="!selectedCell"
+                @click="toggleDeleteSelected"
+              >
+                <Trash2 />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Delete selected row</TooltipContent>
+          </Tooltip>
+          <template v-if="pending > 0">
+            <button
+              type="button"
+              class="text-muted-foreground hover:text-foreground"
+              data-testid="discard-changes"
+              @click="discardAll"
+            >
+              discard
+            </button>
+            <Button size="sm" class="h-6" data-testid="apply-changes" @click="previewOpen = true">
+              Apply ({{ pending }})
+            </Button>
+          </template>
+        </template>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Refresh rows"
+              data-testid="grid-refresh"
+              :disabled="loading || pending > 0"
+              @click="fetchRows"
+            >
+              <RefreshCw :class="loading ? 'animate-spin' : ''" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Refresh rows</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Previous page"
+              data-testid="grid-prev"
+              :disabled="loading || offset === 0 || pending > 0"
+              @click="previousPage"
+            >
+              <ChevronLeft />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Previous page</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Next page"
+              data-testid="grid-next"
+              :disabled="loading || (statement?.rows.length ?? 0) < PAGE_SIZE || pending > 0"
+              @click="nextPage"
+            >
+              <ChevronRight />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Next page</TooltipContent>
+        </Tooltip>
       </footer>
+
+      <Dialog v-model:open="previewOpen">
+        <DialogContent class="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle class="font-mono font-medium">
+              Apply {{ pending }} change{{ pending === 1 ? '' : 's' }}
+            </DialogTitle>
+            <DialogDescription>
+              Runs in a single transaction; each update and delete must match exactly one row.
+            </DialogDescription>
+          </DialogHeader>
+          <pre class="max-h-72 overflow-auto rounded bg-muted px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap" data-testid="sql-preview">{{ preview.join('\n') }}</pre>
+          <DialogFooter class="gap-2">
+            <Button variant="outline" @click="previewOpen = false">
+              Cancel
+            </Button>
+            <Button data-testid="confirm-apply" :disabled="applying" @click="applyChanges">
+              {{ applying ? 'Applying…' : 'Apply' }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </ResizablePanel>
 
     <template v-if="inspected">

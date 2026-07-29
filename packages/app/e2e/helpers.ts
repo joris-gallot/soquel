@@ -51,15 +51,25 @@ export async function typeSql(sql: string) {
     else
       await $('[data-testid="new-sql-tab"]').click()
   }
-  await (await visible('[data-testid="sql-input"] .cm-content')).click()
-  // Ctrl+A through CodeMirror's own keymap: execCommand('selectAll') can land
-  // outside the editor and leave the previous statement in place.
-  await browser.keys([CTRL, 'a'])
-  await browser.execute(text => document.execCommand('insertText', false, text), sql)
-  await browser.waitUntil(
-    async () => (await visibleText('[data-testid="sql-input"] .cm-content')).trim() === sql,
-    { timeout: 10_000, timeoutMsg: `the editor never held exactly "${sql}"` },
-  )
+  // The whole select-all + insert can race the editor grabbing focus: retry.
+  for (let attempt = 0; ; attempt++) {
+    await (await visible('[data-testid="sql-input"] .cm-content')).click()
+    // Ctrl+A through CodeMirror's own keymap: execCommand('selectAll') can land
+    // outside the editor and leave the previous statement in place.
+    await browser.keys([CTRL, 'a'])
+    await browser.execute(text => document.execCommand('insertText', false, text), sql)
+    try {
+      await browser.waitUntil(
+        async () => (await visibleText('[data-testid="sql-input"] .cm-content')).trim() === sql,
+        { timeout: 3_000 },
+      )
+      return
+    }
+    catch (error) {
+      if (attempt >= 2)
+        throw new Error(`the editor never held exactly "${sql}"`, { cause: error })
+    }
+  }
 }
 
 // textContent via execute: WebKitWebDriver's getText returns '' on truncated
@@ -73,6 +83,29 @@ async function visibleText(selector: string): Promise<string> {
     }
     return ''
   }, selector)
+}
+
+/// Single-click first: selecting the cell opens the inspector and shifts the
+/// layout, which would swallow the second click of a direct double-click.
+export async function beginCellEdit(selector: string) {
+  await clickVisible(selector)
+  await (await visible(selector)).doubleClick()
+  await visible('[data-testid="cell-editor"]')
+}
+
+/// Focus a visible input and replace its content in one insertText event.
+export async function setEditorValue(selector: string, value: string) {
+  await (await visible(selector)).click()
+  await browser.keys([CTRL, 'a'])
+  await browser.execute(text => document.execCommand('insertText', false, text), value)
+}
+
+/// Toasts overlay the grid footer and intercept clicks: wait them out.
+export async function waitForToastsGone(timeout = 8_000) {
+  await browser.waitUntil(
+    async () => browser.execute(() => document.querySelector('[data-sonner-toast]') === null),
+    { timeout, timeoutMsg: 'a toast never went away' },
+  )
 }
 
 /// Rows of the visible grid only: hidden tabs keep their grids mounted.

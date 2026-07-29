@@ -78,6 +78,30 @@ pub struct SortSpec {
   pub direction: SortDirection,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum FilterOp {
+  Eq,
+  Neq,
+  Lt,
+  Lte,
+  Gt,
+  Gte,
+  Contains,
+  StartsWith,
+  IsNull,
+  IsNotNull,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnFilter {
+  pub column: String,
+  pub op: FilterOp,
+  /// Absent for the null operators.
+  pub value: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TableRowsRequest {
@@ -86,6 +110,8 @@ pub struct TableRowsRequest {
   pub limit: u32,
   pub offset: u32,
   pub sort: Option<SortSpec>,
+  #[serde(default)]
+  pub filters: Vec<ColumnFilter>,
 }
 
 /// SQL capability surface; only connections whose connector declares

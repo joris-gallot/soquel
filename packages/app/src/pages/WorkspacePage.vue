@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { TableInfo } from '@/lib/bindings'
+import type { ColumnFilter, TableInfo } from '@/lib/bindings'
 import { ArrowLeft, RefreshCw, Unplug } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -27,7 +27,7 @@ const id = computed(() => String(route.params.id))
 const profile = computed(() => connections.value.find(p => p.id === id.value))
 const snapshot = computed(() => snapshots.value[id.value])
 const filter = ref('')
-const selectedTable = ref<{ schema: string, table: TableInfo } | null>(null)
+const selectedTable = ref<{ schema: string, table: TableInfo, filters?: ColumnFilter[] } | null>(null)
 const centerView = ref<'table' | 'sql'>('table')
 // Mounted lazily on first use, then kept alive via v-show.
 const editorOpened = ref(false)
@@ -70,9 +70,21 @@ async function leave() {
   router.push({ name: 'connections' })
 }
 
-function selectTable(schema: string, table: TableInfo) {
-  selectedTable.value = { schema, table }
+function selectTable(schema: string, table: TableInfo, filters?: ColumnFilter[]) {
+  selectedTable.value = { schema, table, filters }
   centerView.value = 'table'
+}
+
+function hop(schema: string, table: string, filters: ColumnFilter[]) {
+  const target = snapshot.value?.schemas
+    .find(s => s.name === schema)
+    ?.tables
+    .find(t => t.name === table)
+  if (!target) {
+    toast.error(`table ${schema}.${table} is not in the schema snapshot`)
+    return
+  }
+  selectTable(schema, target, filters)
 }
 
 function openSqlView() {
@@ -173,6 +185,8 @@ function openSqlView() {
         :connection-id="id"
         :schema="selectedTable.schema"
         :table="selectedTable.table"
+        :initial-filters="selectedTable.filters"
+        @hop="hop"
       />
       <SqlEditorPanel
         v-if="editorOpened"

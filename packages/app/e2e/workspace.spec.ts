@@ -26,12 +26,64 @@ describe('workspace', () => {
   })
 
   it('sorts by column from the header', async () => {
-    await $('[data-testid="grid-header-name"]').click()
+    await $('[data-testid="sort-name"]').click()
     await waitForText('[data-testid="grid-body"] tr:first-child', 'Ada Lovelace')
 
-    await $('[data-testid="grid-header-name"]').click()
+    await $('[data-testid="sort-name"]').click()
     await waitForText('[data-testid="grid-body"] tr:first-child', 'Grace Hopper')
     await browser.saveScreenshot('./e2e/screenshots/workspace-grid-sorted.png')
+  })
+
+  it('filters rows from the header', async () => {
+    await $('[data-testid="filter-name"]').click()
+    await $('[data-testid="filter-op"]').click()
+    await $('[role="option"]*=contains').click()
+    await $('[data-testid="filter-value"]').setValue('ada')
+    await $('[data-testid="filter-apply"]').click()
+
+    await waitForText('[data-testid="filter-chips"]', 'name contains ada')
+    await browser.waitUntil(
+      async () => await $$('[data-testid="grid-body"] tr').length === 1,
+      { timeoutMsg: 'the filter never narrowed to one row' },
+    )
+    await waitForText('[data-testid="grid-range"]', 'filtered')
+    await browser.saveScreenshot('./e2e/screenshots/workspace-grid-filtered.png')
+
+    await $('[data-testid="clear-filters"]').click()
+    await browser.waitUntil(
+      async () => await $$('[data-testid="grid-body"] tr').length === 3,
+      { timeoutMsg: 'clearing filters never restored the rows' },
+    )
+  })
+
+  it('inspects a cell', async () => {
+    await $('td*=plan').click()
+    await $('[data-testid="cell-inspector"]').waitForExist()
+    await waitForText('[data-testid="cell-inspector"]', 'jsonb')
+    // Pretty-printed json: the key sits alone on an indented line.
+    await waitForText('[data-testid="inspector-value"]', '  "plan"')
+    await browser.saveScreenshot('./e2e/screenshots/workspace-inspector.png')
+    await $('[data-testid="inspector-close"]').click()
+    await $('[data-testid="cell-inspector"]').waitForExist({ reverse: true })
+  })
+
+  it('hops along a foreign key', async () => {
+    await $('[data-testid="tree-filter"]').setValue('orders')
+    await $('[data-testid="table-app.orders"]').click()
+    await waitForText('[data-testid="table-title"]', 'app.orders')
+
+    // The hover-only cell button is not clickable headlessly: hop from the inspector.
+    await $('[data-testid="grid-body"] tr:first-child td:nth-child(2)').click()
+    await $('[data-testid="inspector-hop"]').click()
+
+    await waitForText('[data-testid="table-title"]', 'app.customers')
+    await waitForText('[data-testid="filter-chips"]', 'id = 1')
+    await browser.waitUntil(
+      async () => await $$('[data-testid="grid-body"] tr').length === 1,
+      { timeoutMsg: 'the hop never narrowed to the referenced row' },
+    )
+    await waitForText('[data-testid="grid-body"]', 'Ada Lovelace')
+    await $('[data-testid="clear-filters"]').click()
   })
 
   it('runs sql in the editor', async () => {

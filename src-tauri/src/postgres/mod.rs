@@ -8,8 +8,9 @@ use tokio_postgres::types::{Kind as PgKind, Type as PgType};
 use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, SimpleQueryMessage};
 
 use crate::connectors::{
-  Capability, ColumnKind, Connection, Connector, Introspect, QueryColumn, QueryResult,
-  ServerNotice, SortDirection, SqlQuery, SqlSession, StatementResult, TableRowsRequest,
+  Capability, ColumnFilter, ColumnKind, Connection, Connector, FilterOp, Introspect, QueryColumn,
+  QueryResult, ServerNotice, SortDirection, SqlQuery, SqlSession, StatementResult,
+  TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SslMode};
@@ -249,18 +250,58 @@ impl SqlQuery for PostgresConnection {
   }
 
   async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error> {
-    let mut sql = format!(
+    let pg = self.checkout().await?;
+    let _guard = self.register_cancel(pg.client.cancel_token());
+    pg.notices.lock().unwrap().clear();
+    let start = Instant::now();
+
+    // The prepared column list is the only source of column identity: filters
+    // and sort must name one of these, so no frontend string reaches SQL unquoted.
+    let base = format!(
       "SELECT * FROM {}.{}",
       quote_ident(&request.schema),
       quote_ident(&request.table)
     );
+    let prepared = pg.client.prepare(&base).await?;
+    let columns: Vec<(String, PgType)> = prepared
+      .columns()
+      .iter()
+      .map(|c| (c.name().to_string(), c.type_().clone()))
+      .collect();
+
+    let (where_clause, params) = build_where(&columns, &request.filters)?;
+
+    // ::text keeps the server's canonical formatting (arrays, timestamps, bytea)
+    // while the extended protocol carries the filter parameters.
+    let projection = columns
+      .iter()
+      .map(|(name, _)| {
+        let ident = quote_ident(name);
+        format!("{ident}::text AS {ident}")
+      })
+      .collect::<Vec<_>>()
+      .join(", ");
+    let mut sql = format!(
+      "SELECT {projection} FROM {}.{}{where_clause}",
+      quote_ident(&request.schema),
+      quote_ident(&request.table)
+    );
     if let Some(sort) = &request.sort {
+      if !columns.iter().any(|(name, _)| name == &sort.column) {
+        return Err(Error::Unsupported {
+          message: format!("unknown column {}", sort.column),
+        });
+      }
       let direction = match sort.direction {
         SortDirection::Asc => "ASC",
         SortDirection::Desc => "DESC",
       };
+      // Qualified: a bare name would resolve to the ::text output alias and sort
+      // lexicographically.
       sql.push_str(&format!(
-        " ORDER BY {} {direction}",
+        " ORDER BY {}.{}.{} {direction}",
+        quote_ident(&request.schema),
+        quote_ident(&request.table),
         quote_ident(&sort.column)
       ));
     }
@@ -269,7 +310,35 @@ impl SqlQuery for PostgresConnection {
       request.limit.min(1000),
       request.offset
     ));
-    self.run_query(&sql).await
+
+    // Every parameter travels as text; build_where casts it to the column's type.
+    let bind: Vec<(&(dyn tokio_postgres::types::ToSql + Sync), PgType)> = params
+      .iter()
+      .map(|value| (value as &(dyn tokio_postgres::types::ToSql + Sync), PgType::TEXT))
+      .collect();
+    let rows = pg.client.query_typed(&sql, &bind).await?;
+
+    let statement = StatementResult {
+      columns: columns
+        .iter()
+        .map(|(name, ty)| QueryColumn {
+          name: name.clone(),
+          data_type: Some(type_name(ty)),
+          kind: column_kind(ty),
+        })
+        .collect(),
+      rows_affected: rows.len() as f64,
+      rows: rows
+        .iter()
+        .map(|row| (0..row.len()).map(|i| row.get(i)).collect())
+        .collect(),
+    };
+    let notices = std::mem::take(&mut *pg.notices.lock().unwrap());
+    Ok(QueryResult {
+      statements: vec![statement],
+      notices,
+      duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+    })
   }
 
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error> {
@@ -286,6 +355,83 @@ impl SqlQuery for PostgresConnection {
 // Identifiers come from the UI: quoting is the injection boundary.
 fn quote_ident(ident: &str) -> String {
   format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+/// AND-ed WHERE clause + bound parameter values, `$1`-numbered in order.
+fn build_where(
+  columns: &[(String, PgType)],
+  filters: &[ColumnFilter],
+) -> Result<(String, Vec<String>), Error> {
+  let mut clauses = Vec::new();
+  let mut params: Vec<String> = Vec::new();
+  for filter in filters {
+    if !columns.iter().any(|(name, _)| name == &filter.column) {
+      return Err(Error::Unsupported {
+        message: format!("unknown column {}", filter.column),
+      });
+    }
+    let ident = quote_ident(&filter.column);
+    // Parameters are declared text on the wire: comparisons cast them to the
+    // column's type so postgres compares values, not strings.
+    let cast = columns
+      .iter()
+      .find(|(name, _)| name == &filter.column)
+      .map(|(_, ty)| type_name(ty))
+      .unwrap_or_default();
+    let clause = match filter.op {
+      FilterOp::IsNull => format!("{ident} IS NULL"),
+      FilterOp::IsNotNull => format!("{ident} IS NOT NULL"),
+      op => {
+        let value = filter.value.clone().ok_or_else(|| Error::Unsupported {
+          message: format!("filter on {} requires a value", filter.column),
+        })?;
+        let n = params.len() + 1;
+        match op {
+          FilterOp::Contains => {
+            params.push(format!("%{}%", escape_like(&value)));
+            format!("{ident}::text ILIKE ${n}")
+          }
+          FilterOp::StartsWith => {
+            params.push(format!("{}%", escape_like(&value)));
+            format!("{ident}::text ILIKE ${n}")
+          }
+          _ => {
+            params.push(value);
+            format!("{ident} {} ${n}::{cast}", comparison_operator(op))
+          }
+        }
+      }
+    };
+    clauses.push(clause);
+  }
+  let clause = if clauses.is_empty() {
+    String::new()
+  } else {
+    format!(" WHERE {}", clauses.join(" AND "))
+  };
+  Ok((clause, params))
+}
+
+fn comparison_operator(op: FilterOp) -> &'static str {
+  match op {
+    FilterOp::Eq => "=",
+    FilterOp::Neq => "<>",
+    FilterOp::Lt => "<",
+    FilterOp::Lte => "<=",
+    FilterOp::Gt => ">",
+    FilterOp::Gte => ">=",
+    FilterOp::Contains | FilterOp::StartsWith | FilterOp::IsNull | FilterOp::IsNotNull => {
+      unreachable!("handled before reaching the comparison branch")
+    }
+  }
+}
+
+// User values are literals: LIKE metacharacters must not act as wildcards.
+fn escape_like(value: &str) -> String {
+  value
+    .replace('\\', "\\\\")
+    .replace('%', "\\%")
+    .replace('_', "\\_")
 }
 
 fn collect_statements(messages: Vec<SimpleQueryMessage>) -> Vec<StatementResult> {
@@ -398,6 +544,102 @@ pub mod tests {
     assert_eq!(quote_ident("customers"), "\"customers\"");
     assert_eq!(quote_ident("MiXeD"), "\"MiXeD\"");
     assert_eq!(quote_ident("evil\"; DROP--"), "\"evil\"\"; DROP--\"");
+  }
+
+  fn text_columns(names: &[&str]) -> Vec<(String, PgType)> {
+    names
+      .iter()
+      .map(|name| (name.to_string(), PgType::TEXT))
+      .collect()
+  }
+
+  fn filter(column: &str, op: FilterOp, value: Option<&str>) -> ColumnFilter {
+    ColumnFilter {
+      column: column.to_string(),
+      op,
+      value: value.map(str::to_string),
+    }
+  }
+
+  #[test]
+  fn build_where_covers_every_operator() {
+    let columns = text_columns(&["name", "amount"]);
+    let cases: [(FilterOp, Option<&str>, &str, Option<&str>); 10] = [
+      (FilterOp::Eq, Some("x"), r#" WHERE "name" = $1::text"#, Some("x")),
+      (FilterOp::Neq, Some("x"), r#" WHERE "name" <> $1::text"#, Some("x")),
+      (FilterOp::Lt, Some("5"), r#" WHERE "name" < $1::text"#, Some("5")),
+      (FilterOp::Lte, Some("5"), r#" WHERE "name" <= $1::text"#, Some("5")),
+      (FilterOp::Gt, Some("5"), r#" WHERE "name" > $1::text"#, Some("5")),
+      (FilterOp::Gte, Some("5"), r#" WHERE "name" >= $1::text"#, Some("5")),
+      (
+        FilterOp::Contains,
+        Some("ada"),
+        r#" WHERE "name"::text ILIKE $1"#,
+        Some("%ada%"),
+      ),
+      (
+        FilterOp::StartsWith,
+        Some("ada"),
+        r#" WHERE "name"::text ILIKE $1"#,
+        Some("ada%"),
+      ),
+      (FilterOp::IsNull, None, r#" WHERE "name" IS NULL"#, None),
+      (
+        FilterOp::IsNotNull,
+        None,
+        r#" WHERE "name" IS NOT NULL"#,
+        None,
+      ),
+    ];
+    for (op, value, clause, param) in cases {
+      let (built, params) = build_where(&columns, &[filter("name", op, value)]).unwrap();
+      assert_eq!(built, clause, "{op:?}");
+      assert_eq!(params, param.map(str::to_string).into_iter().collect::<Vec<_>>());
+    }
+  }
+
+  #[test]
+  fn build_where_numbers_params_and_ands_clauses() {
+    let columns = text_columns(&["name", "email", "amount"]);
+    let (clause, params) = build_where(
+      &columns,
+      &[
+        filter("name", FilterOp::Contains, Some("a")),
+        filter("email", FilterOp::IsNotNull, None),
+        filter("amount", FilterOp::Gt, Some("10")),
+      ],
+    )
+    .unwrap();
+    assert_eq!(
+      clause,
+      r#" WHERE "name"::text ILIKE $1 AND "email" IS NOT NULL AND "amount" > $2::text"#
+    );
+    assert_eq!(params, vec!["%a%".to_string(), "10".to_string()]);
+  }
+
+  #[test]
+  fn build_where_rejects_unknown_columns_and_missing_values() {
+    let columns = text_columns(&["name"]);
+    assert!(matches!(
+      build_where(&columns, &[filter("nope", FilterOp::Eq, Some("x"))]),
+      Err(Error::Unsupported { .. })
+    ));
+    assert!(matches!(
+      build_where(&columns, &[filter("name", FilterOp::Eq, None)]),
+      Err(Error::Unsupported { .. })
+    ));
+  }
+
+  #[test]
+  fn build_where_quotes_hostile_idents_and_escapes_like() {
+    let columns = vec![("evil\"; DROP--".to_string(), PgType::TEXT)];
+    let (clause, params) = build_where(
+      &columns,
+      &[filter("evil\"; DROP--", FilterOp::Contains, Some("50%_\\"))],
+    )
+    .unwrap();
+    assert_eq!(clause, r#" WHERE "evil""; DROP--"::text ILIKE $1"#);
+    assert_eq!(params, vec!["%50\\%\\_\\\\%".to_string()]);
   }
 
   #[test]
@@ -598,6 +840,7 @@ pub mod tests {
           column: "name".to_string(),
           direction: SortDirection::Desc,
         }),
+        filters: vec![],
       })
       .await
       .unwrap();
@@ -618,11 +861,172 @@ pub mod tests {
           column: "name".to_string(),
           direction: SortDirection::Desc,
         }),
+        filters: vec![],
       })
       .await
       .unwrap();
     assert_eq!(next.statements[0].rows.len(), 1);
     assert_eq!(next.statements[0].rows[0][1], Some("Ada Lovelace".to_string()));
+  }
+
+  async fn filtered_rows(
+    pg: &PostgresConnection,
+    table: &str,
+    filters: Vec<ColumnFilter>,
+  ) -> StatementResult {
+    pg.table_rows(&TableRowsRequest {
+      schema: "app".to_string(),
+      table: table.to_string(),
+      limit: 100,
+      offset: 0,
+      sort: None,
+      filters,
+    })
+    .await
+    .unwrap()
+    .statements
+    .remove(0)
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_filters_compare_typed_columns() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+
+    // contains on text.
+    let by_name = filtered_rows(
+      &pg,
+      "customers",
+      vec![filter("name", FilterOp::Contains, Some("ada"))],
+    )
+    .await;
+    assert_eq!(by_name.rows.len(), 1);
+    assert_eq!(by_name.rows[0][1].as_deref(), Some("Ada Lovelace"));
+
+    // gt on numeric and on timestamptz: UNKNOWN params coerce to the column type.
+    let expensive = filtered_rows(
+      &pg,
+      "orders",
+      vec![filter("amount", FilterOp::Gt, Some("100"))],
+    )
+    .await;
+    assert_eq!(expensive.rows.len(), 2);
+    let recent = filtered_rows(
+      &pg,
+      "orders",
+      vec![filter("placed_at", FilterOp::Gt, Some("2000-01-01"))],
+    )
+    .await;
+    assert_eq!(recent.rows.len(), 3);
+
+    // is-null, and two filters AND-ed.
+    let no_email = filtered_rows(
+      &pg,
+      "customers",
+      vec![filter("email", FilterOp::IsNull, None)],
+    )
+    .await;
+    assert_eq!(no_email.rows.len(), 1);
+    assert_eq!(no_email.rows[0][1].as_deref(), Some("Grace Hopper"));
+    let both = filtered_rows(
+      &pg,
+      "orders",
+      vec![
+        filter("amount", FilterOp::Gt, Some("100")),
+        filter("note", FilterOp::IsNotNull, None),
+      ],
+    )
+    .await;
+    assert_eq!(both.rows.len(), 2);
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_filters_keep_server_text_values() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let rows = filtered_rows(
+      &pg,
+      "customers",
+      vec![filter("name", FilterOp::Eq, Some("Ada Lovelace"))],
+    )
+    .await;
+    let tags = rows.columns.iter().position(|c| c.name == "tags").unwrap();
+    let meta = rows.columns.iter().position(|c| c.name == "meta").unwrap();
+    assert_eq!(rows.rows[0][tags].as_deref(), Some("{vip,eu}"));
+    assert_eq!(
+      rows.rows[0][meta].as_deref(),
+      Some(r#"{"plan": "pro", "seats": 3}"#)
+    );
+    assert_eq!(rows.columns[tags].kind, ColumnKind::Array);
+
+    let receipts = filtered_rows(
+      &pg,
+      "orders",
+      vec![filter("receipt", FilterOp::IsNotNull, None)],
+    )
+    .await;
+    let receipt = receipts
+      .columns
+      .iter()
+      .position(|c| c.name == "receipt")
+      .unwrap();
+    assert_eq!(receipts.rows[0][receipt].as_deref(), Some("\\xdeadbeef"));
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_filter_values_cannot_inject_sql() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    // Values are bound parameters: hostile input is compared, never executed.
+    for hostile in [
+      "'; DROP TABLE app.customers; --",
+      "1 OR 1=1",
+      "Ada' OR name <> '",
+    ] {
+      let rows = filtered_rows(
+        &pg,
+        "customers",
+        vec![filter("name", FilterOp::Eq, Some(hostile))],
+      )
+      .await;
+      assert!(rows.rows.is_empty(), "{hostile:?} must match nothing");
+      let contains = filtered_rows(
+        &pg,
+        "customers",
+        vec![filter("name", FilterOp::Contains, Some(hostile))],
+      )
+      .await;
+      assert!(contains.rows.is_empty(), "{hostile:?} must match nothing");
+    }
+    // The table survived every attempt.
+    let intact = filtered_rows(&pg, "customers", vec![]).await;
+    assert_eq!(intact.rows.len(), 3);
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_filters_combine_with_sort_and_offset() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let result = pg
+      .table_rows(&TableRowsRequest {
+        schema: "app".to_string(),
+        table: "orders".to_string(),
+        limit: 1,
+        offset: 1,
+        sort: Some(crate::connectors::SortSpec {
+          column: "amount".to_string(),
+          direction: SortDirection::Desc,
+        }),
+        filters: vec![filter("amount", FilterOp::Gt, Some("40"))],
+      })
+      .await
+      .unwrap();
+    // amounts > 40 sorted desc: 999.99, 129.90, 49.00 -> offset 1 = 129.90.
+    assert_eq!(result.statements[0].rows[0][2].as_deref(), Some("129.90"));
   }
 
   fn profile_from_env_url(url: &str) -> ConnectionProfile {

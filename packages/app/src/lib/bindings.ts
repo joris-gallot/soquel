@@ -41,6 +41,13 @@ export const commands = {
 /* Types */
 export type Capability = "sql-query" | "introspection" | "kv-browse";
 
+export type ColumnFilter = {
+	column: string,
+	op: FilterOp,
+	/**  Absent for the null operators. */
+	value: string | null,
+};
+
 export type ColumnInfo = {
 	name: string,
 	dataType: string,
@@ -87,6 +94,8 @@ export type Env = "dev" | "staging" | "prod";
 
 /**  Normalized error shape crossing the IPC boundary. */
 export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean };
+
+export type FilterOp = "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "contains" | "starts-with" | "is-null" | "is-not-null";
 
 export type ForeignKeyInfo = {
 	name: string,
@@ -171,6 +180,7 @@ export type TableRowsRequest = {
 	limit: number,
 	offset: number,
 	sort: SortSpec | null,
+	filters?: ColumnFilter[],
 };
 
 /**

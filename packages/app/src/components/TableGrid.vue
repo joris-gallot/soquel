@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { SortSpec, StatementResult, TableInfo } from '@/lib/bindings'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, RefreshCw } from '@lucide/vue'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { commands } from '@/lib/bindings'
@@ -17,6 +17,10 @@ const durationMs = ref(0)
 const offset = ref(0)
 const sort = ref<SortSpec | null>(null)
 const loading = ref(false)
+
+const numericColumns = computed(() =>
+  (statement.value?.columns ?? []).map(column => column.kind === 'number'),
+)
 
 async function fetchRows() {
   loading.value = true
@@ -75,17 +79,19 @@ function previousPage() {
         <thead class="sticky top-0 z-10">
           <tr>
             <th
-              v-for="column in statement?.columns ?? []"
-              :key="column"
-              class="cursor-pointer border-b bg-background px-3 py-1.5 text-left font-medium text-muted-foreground select-none hover:text-foreground"
-              :data-testid="`grid-header-${column}`"
-              @click="toggleSort(column)"
+              v-for="(column, columnIndex) in statement?.columns ?? []"
+              :key="column.name"
+              class="cursor-pointer border-b bg-background px-3 py-1.5 font-medium text-muted-foreground select-none hover:text-foreground"
+              :class="numericColumns[columnIndex] ? 'text-right' : 'text-left'"
+              :data-testid="`grid-header-${column.name}`"
+              :title="column.dataType ?? undefined"
+              @click="toggleSort(column.name)"
             >
               <span class="inline-flex items-center gap-1">
-                {{ column }}
+                {{ column.name }}
                 <component
                   :is="sort.direction === 'asc' ? ArrowUp : ArrowDown"
-                  v-if="sort?.column === column"
+                  v-if="sort?.column === column.name"
                   class="size-3"
                 />
               </span>
@@ -102,6 +108,7 @@ function previousPage() {
               v-for="(value, columnIndex) in row"
               :key="columnIndex"
               class="max-w-xs truncate border-b border-border/50 px-3 py-1"
+              :class="numericColumns[columnIndex] && 'text-right'"
               :title="value ?? undefined"
             >
               <span v-if="value === null" class="text-muted-foreground/60 italic">NULL</span>

@@ -1,15 +1,23 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio_postgres::{CancelToken, Client, Config, NoTls, SimpleQueryMessage};
+use deadpool::managed::{self, Metrics, Object, Pool, RecycleError, RecycleResult};
+use tokio_postgres::types::{Kind as PgKind, Type as PgType};
+use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, SimpleQueryMessage};
 
 use crate::connectors::{
-  Capability, Connection, Connector, Introspect, QueryResult, SortDirection, SqlQuery,
-  StatementResult, TableRowsRequest,
+  Capability, ColumnKind, Connection, Connector, Introspect, QueryColumn, QueryResult,
+  ServerNotice, SortDirection, SqlQuery, StatementResult, TableRowsRequest,
 };
 use crate::error::Error;
-use crate::profiles::ConnectionProfile;
+use crate::profiles::{ConnectionProfile, SslMode};
 
 mod introspect;
+mod tls;
+
+const POOL_MAX_SIZE: usize = 4;
 
 pub struct PostgresConnector;
 
@@ -31,37 +39,153 @@ impl Connector for PostgresConnector {
       .dbname(&profile.database)
       .user(&profile.user)
       .application_name("soquel")
+      .ssl_mode(tls::config_ssl_mode(profile.ssl_mode))
       .connect_timeout(Duration::from_secs(10));
     if let Some(secret) = secret {
       config.password(secret);
     }
-    let (client, connection) = config.connect(NoTls).await?;
+    let connection = PostgresConnection::new(config, profile.ssl_mode)?;
+    // Surface auth/reachability/TLS errors now, not on the first query.
+    drop(connection.checkout().await?);
+    Ok(Box::new(connection))
+  }
+}
+
+pub(super) struct PooledPg {
+  pub(super) client: Client,
+  notices: Arc<Mutex<Vec<ServerNotice>>>,
+}
+
+pub(super) struct PgManager {
+  config: Config,
+  ssl_mode: SslMode,
+}
+
+impl managed::Manager for PgManager {
+  type Type = PooledPg;
+  type Error = Error;
+
+  async fn create(&self) -> Result<PooledPg, Error> {
+    let tls = tls::connector(self.ssl_mode)?;
+    let (client, mut connection) = self.config.connect(tls).await?;
+    let notices: Arc<Mutex<Vec<ServerNotice>>> = Arc::default();
+    let sink = notices.clone();
     tauri::async_runtime::spawn(async move {
-      if let Err(err) = connection.await {
-        log::warn!("postgres connection closed: {err}");
+      while let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
+        match message {
+          Ok(AsyncMessage::Notice(notice)) => sink.lock().unwrap().push(ServerNotice {
+            severity: notice.severity().to_string(),
+            message: notice.message().to_string(),
+          }),
+          Ok(_) => {}
+          Err(err) => {
+            log::warn!("postgres connection closed: {err}");
+            break;
+          }
+        }
       }
     });
-    Ok(Box::new(PostgresConnection {
-      cancel: client.cancel_token(),
-      client,
-    }))
+    Ok(PooledPg { client, notices })
+  }
+
+  async fn recycle(&self, pg: &mut PooledPg, _: &Metrics) -> RecycleResult<Error> {
+    if pg.client.is_closed() {
+      return Err(RecycleError::message("connection closed"));
+    }
+    Ok(())
   }
 }
 
 pub struct PostgresConnection {
-  pub(super) client: Client,
-  cancel: CancelToken,
+  pool: Pool<PgManager>,
+  ssl_mode: SslMode,
+  cancels: Mutex<HashMap<u64, CancelToken>>,
+  next_cancel_id: AtomicU64,
+}
+
+impl PostgresConnection {
+  fn new(config: Config, ssl_mode: SslMode) -> Result<Self, Error> {
+    let pool = Pool::builder(PgManager { config, ssl_mode })
+      .max_size(POOL_MAX_SIZE)
+      .build()
+      .map_err(|err| Error::Database {
+        message: format!("connection pool: {err}"),
+      })?;
+    Ok(Self {
+      pool,
+      ssl_mode,
+      cancels: Mutex::new(HashMap::new()),
+      next_cancel_id: AtomicU64::new(0),
+    })
+  }
+
+  pub(super) async fn checkout(&self) -> Result<Object<PgManager>, Error> {
+    self.pool.get().await.map_err(|err| match err {
+      managed::PoolError::Backend(err) => err,
+      other => Error::Database {
+        message: format!("connection pool: {other}"),
+      },
+    })
+  }
+
+  fn register_cancel(&self, token: CancelToken) -> CancelGuard<'_> {
+    let id = self.next_cancel_id.fetch_add(1, Ordering::Relaxed);
+    self.cancels.lock().unwrap().insert(id, token);
+    CancelGuard {
+      connection: self,
+      id,
+    }
+  }
+
+  async fn execute_script(&self, sql: &str) -> Result<QueryResult, Error> {
+    let pg = self.checkout().await?;
+    pg.notices.lock().unwrap().clear();
+    let _guard = self.register_cancel(pg.client.cancel_token());
+    let start = Instant::now();
+    // Single statements get type metadata from a prepare; multi-statement
+    // scripts fail to prepare and degrade to names only.
+    let types = pg.client.prepare(sql).await.ok().map(|statement| {
+      statement
+        .columns()
+        .iter()
+        .map(|c| c.type_().clone())
+        .collect::<Vec<_>>()
+    });
+    let messages = pg.client.simple_query(sql).await?;
+    let mut statements = collect_statements(messages);
+    if let (Some(types), [statement]) = (&types, &mut statements[..]) {
+      apply_types(statement, types);
+    }
+    let notices = std::mem::take(&mut *pg.notices.lock().unwrap());
+    Ok(QueryResult {
+      statements,
+      notices,
+      duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+    })
+  }
+}
+
+struct CancelGuard<'a> {
+  connection: &'a PostgresConnection,
+  id: u64,
+}
+
+impl Drop for CancelGuard<'_> {
+  fn drop(&mut self) {
+    self.connection.cancels.lock().unwrap().remove(&self.id);
+  }
 }
 
 #[async_trait::async_trait]
 impl Connection for PostgresConnection {
   async fn health(&self) -> Result<(), Error> {
-    self.client.simple_query("SELECT 1").await?;
+    let pg = self.checkout().await?;
+    pg.client.simple_query("SELECT 1").await?;
     Ok(())
   }
 
-  // Dropping the client terminates the connection task.
   async fn close(&self) -> Result<(), Error> {
+    self.pool.close();
     Ok(())
   }
 
@@ -77,16 +201,14 @@ impl Connection for PostgresConnection {
 #[async_trait::async_trait]
 impl SqlQuery for PostgresConnection {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error> {
-    let start = Instant::now();
-    let messages = self.client.simple_query(sql).await?;
-    Ok(QueryResult {
-      statements: collect_statements(messages),
-      duration_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    self.execute_script(sql).await
   }
 
   async fn cancel(&self) -> Result<(), Error> {
-    self.cancel.cancel_query(NoTls).await?;
+    let tokens: Vec<CancelToken> = self.cancels.lock().unwrap().values().cloned().collect();
+    for token in tokens {
+      token.cancel_query(tls::connector(self.ssl_mode)?).await?;
+    }
     Ok(())
   }
 
@@ -126,7 +248,14 @@ fn collect_statements(messages: Vec<SimpleQueryMessage>) -> Vec<StatementResult>
   for message in messages {
     match message {
       SimpleQueryMessage::RowDescription(columns) => {
-        current.columns = columns.iter().map(|c| c.name().to_string()).collect();
+        current.columns = columns
+          .iter()
+          .map(|c| QueryColumn {
+            name: c.name().to_string(),
+            data_type: None,
+            kind: ColumnKind::Other,
+          })
+          .collect();
       }
       SimpleQueryMessage::Row(row) => {
         current.rows.push(
@@ -145,6 +274,72 @@ fn collect_statements(messages: Vec<SimpleQueryMessage>) -> Vec<StatementResult>
   statements
 }
 
+fn apply_types(statement: &mut StatementResult, types: &[PgType]) {
+  if statement.columns.len() != types.len() {
+    return;
+  }
+  for (column, ty) in statement.columns.iter_mut().zip(types) {
+    column.data_type = Some(type_name(ty));
+    column.kind = column_kind(ty);
+  }
+}
+
+fn type_name(ty: &PgType) -> String {
+  match ty.kind() {
+    PgKind::Array(inner) => format!("{}[]", inner.name()),
+    _ => ty.name().to_string(),
+  }
+}
+
+fn column_kind(ty: &PgType) -> ColumnKind {
+  if matches!(ty.kind(), PgKind::Array(_)) {
+    ColumnKind::Array
+  } else if *ty == PgType::BOOL {
+    ColumnKind::Bool
+  } else if [
+    PgType::INT2,
+    PgType::INT4,
+    PgType::INT8,
+    PgType::FLOAT4,
+    PgType::FLOAT8,
+    PgType::NUMERIC,
+    PgType::OID,
+  ]
+  .contains(ty)
+  {
+    ColumnKind::Number
+  } else if [PgType::JSON, PgType::JSONB].contains(ty) {
+    ColumnKind::Json
+  } else if *ty == PgType::BYTEA {
+    ColumnKind::Bytes
+  } else if [
+    PgType::TIMESTAMP,
+    PgType::TIMESTAMPTZ,
+    PgType::DATE,
+    PgType::TIME,
+    PgType::TIMETZ,
+    PgType::INTERVAL,
+  ]
+  .contains(ty)
+  {
+    ColumnKind::DateTime
+  } else if *ty == PgType::UUID {
+    ColumnKind::Uuid
+  } else if [
+    PgType::TEXT,
+    PgType::VARCHAR,
+    PgType::BPCHAR,
+    PgType::NAME,
+    PgType::CHAR,
+  ]
+  .contains(ty)
+  {
+    ColumnKind::Text
+  } else {
+    ColumnKind::Other
+  }
+}
+
 #[cfg(test)]
 pub mod tests {
   use super::*;
@@ -159,14 +354,26 @@ pub mod tests {
     assert_eq!(quote_ident("evil\"; DROP--"), "\"evil\"\"; DROP--\"");
   }
 
+  #[test]
+  fn column_kind_maps_common_types() {
+    assert_eq!(column_kind(&PgType::INT8), ColumnKind::Number);
+    assert_eq!(column_kind(&PgType::NUMERIC), ColumnKind::Number);
+    assert_eq!(column_kind(&PgType::JSONB), ColumnKind::Json);
+    assert_eq!(column_kind(&PgType::TIMESTAMPTZ), ColumnKind::DateTime);
+    assert_eq!(column_kind(&PgType::TEXT_ARRAY), ColumnKind::Array);
+    assert_eq!(column_kind(&PgType::POINT), ColumnKind::Other);
+    assert_eq!(type_name(&PgType::TEXT_ARRAY), "text[]");
+  }
+
+  fn connection_from_url(url: &str, ssl_mode: SslMode) -> PostgresConnection {
+    let mut config: Config = url.parse().unwrap();
+    config.ssl_mode(tls::config_ssl_mode(ssl_mode));
+    PostgresConnection::new(config, ssl_mode).unwrap()
+  }
+
   pub async fn test_connection_from_env() -> Option<PostgresConnection> {
     let url = std::env::var("SOQUEL_TEST_PG").ok()?;
-    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.unwrap();
-    tokio::spawn(connection);
-    Some(PostgresConnection {
-      cancel: client.cancel_token(),
-      client,
-    })
+    Some(connection_from_url(&url, SslMode::Prefer))
   }
 
   #[tokio::test]
@@ -182,12 +389,106 @@ pub mod tests {
       .await
       .unwrap();
     assert_eq!(result.statements.len(), 2);
-    assert_eq!(result.statements[0].columns, vec!["one"]);
+    assert_eq!(result.statements[0].columns[0].name, "one");
     assert_eq!(result.statements[0].rows_affected, 1.0);
     assert_eq!(
       result.statements[1].rows[0],
       vec![Some("a".to_string()), None]
     );
+    // Multi-statement scripts cannot be prepared: no type metadata.
+    assert_eq!(result.statements[0].columns[0].data_type, None);
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_single_statement_carries_types() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let result = pg
+      .run_query("SELECT 1 AS one, 'a'::text AS a, now() AS ts")
+      .await
+      .unwrap();
+    let columns = &result.statements[0].columns;
+    assert_eq!(columns[0].data_type.as_deref(), Some("int4"));
+    assert_eq!(columns[0].kind, ColumnKind::Number);
+    assert_eq!(columns[1].kind, ColumnKind::Text);
+    assert_eq!(columns[2].data_type.as_deref(), Some("timestamptz"));
+    assert_eq!(columns[2].kind, ColumnKind::DateTime);
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_notices_surface_in_results() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let result = pg
+      .run_query("DO $$ BEGIN RAISE NOTICE 'soquel test notice'; END $$")
+      .await
+      .unwrap();
+    assert!(result
+      .notices
+      .iter()
+      .any(|n| n.message == "soquel test notice" && n.severity == "NOTICE"));
+
+    // The buffer is per query: a follow-up query starts clean.
+    let clean = pg.run_query("SELECT 1").await.unwrap();
+    assert!(clean.notices.is_empty());
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_postgres_pool_unblocks_concurrent_queries() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let pg = Arc::new(pg);
+    let slow = tokio::spawn({
+      let pg = pg.clone();
+      async move { pg.run_query("SELECT pg_sleep(2)").await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let start = Instant::now();
+    pg.run_query("SELECT 1").await.unwrap();
+    assert!(
+      start.elapsed() < Duration::from_secs(1),
+      "quick query waited on the slow one"
+    );
+    slow.await.unwrap().unwrap();
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_postgres_cancel_kills_running_query() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let pg = Arc::new(pg);
+    let slow = tokio::spawn({
+      let pg = pg.clone();
+      async move { pg.run_query("SELECT pg_sleep(30)").await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    pg.cancel().await.unwrap();
+    let Err(Error::Database { message }) = slow.await.unwrap() else {
+      panic!("expected the canceled query to fail");
+    };
+    assert!(
+      message.contains("canceling statement due to user request"),
+      "unexpected message: {message}"
+    );
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_require_tls_fails_on_plaintext_server() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
+      return;
+    };
+    // The compose postgres has no TLS: require must fail, prefer falls back.
+    let pg = connection_from_url(&url, SslMode::Require);
+    let Err(Error::Database { message }) = pg.health().await else {
+      panic!("expected require to fail against a plaintext server");
+    };
+    assert!(!message.is_empty());
   }
 
   #[tokio::test]
@@ -211,6 +512,9 @@ pub mod tests {
     let statement = &result.statements[0];
     assert_eq!(statement.rows.len(), 2);
     assert_eq!(statement.rows[0][1], Some("Grace Hopper".to_string()));
+    let tags = statement.columns.iter().find(|c| c.name == "tags").unwrap();
+    assert_eq!(tags.data_type.as_deref(), Some("text[]"));
+    assert_eq!(tags.kind, ColumnKind::Array);
 
     let next = pg
       .table_rows(&TableRowsRequest {
@@ -243,6 +547,7 @@ pub mod tests {
       port: config.get_ports()[0],
       database: config.get_dbname().unwrap().to_string(),
       user: config.get_user().unwrap().to_string(),
+      ssl_mode: SslMode::Prefer,
     }
   }
 

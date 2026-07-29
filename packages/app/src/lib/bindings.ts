@@ -32,6 +32,12 @@ export type ColumnInfo = {
 	default: string | null,
 };
 
+/**
+ *  Coarse type family for UI decisions (alignment, editors, viewers);
+ *  `data_type` keeps the exact postgres name.
+ */
+export type ColumnKind = "bool" | "number" | "text" | "json" | "bytes" | "date-time" | "uuid" | "array" | "other";
+
 /**  Secrets ride in on the input but are stored in the OS keychain, never in the profile. */
 export type ConnectionInput = {
 	name: string,
@@ -41,6 +47,7 @@ export type ConnectionInput = {
 	port: number,
 	database: string,
 	user: string,
+	sslMode?: SslMode,
 	password: string | null,
 };
 
@@ -53,6 +60,7 @@ export type ConnectionProfile = {
 	port: number,
 	database: string,
 	user: string,
+	sslMode?: SslMode,
 };
 
 export type ConnectorKind = "postgres";
@@ -76,8 +84,16 @@ export type IndexInfo = {
 	unique: boolean,
 };
 
+export type QueryColumn = {
+	name: string,
+	/**  None when type metadata is unavailable (multi-statement scripts). */
+	dataType: string | null,
+	kind: ColumnKind,
+};
+
 export type QueryResult = {
 	statements: StatementResult[],
+	notices: ServerNotice[],
 	durationMs: number | null,
 };
 
@@ -90,6 +106,11 @@ export type SchemaSnapshot = {
 	schemas: SchemaInfo[],
 };
 
+export type ServerNotice = {
+	severity: string,
+	message: string,
+};
+
 export type SortDirection = "asc" | "desc";
 
 export type SortSpec = {
@@ -97,8 +118,14 @@ export type SortSpec = {
 	direction: SortDirection,
 };
 
+/**
+ *  libpq semantics: `require` encrypts without verifying the certificate,
+ *  only `verify-full` checks the chain and hostname.
+ */
+export type SslMode = "disable" | "prefer" | "require" | "verify-full";
+
 export type StatementResult = {
-	columns: string[],
+	columns: QueryColumn[],
 	rows: ((string | null)[])[],
 	rowsAffected: number | null,
 };

@@ -71,11 +71,13 @@ impl Introspect for PostgresConnection {
        ORDER BY n.nspname, c.relname, con.conname"
     );
 
+    let pg = self.checkout().await?;
+
     // (schema, table) -> TableInfo, insertion-ordered by the tables query.
     let mut order: Vec<(String, String)> = Vec::new();
     let mut map: HashMap<(String, String), TableInfo> = HashMap::new();
 
-    for row in self.client.query(&tables, &[]).await? {
+    for row in pg.client.query(&tables, &[]).await? {
       let key = (row.get::<_, String>(0), row.get::<_, String>(1));
       let kind = match row.get::<_, String>(2).as_str() {
         "v" => TableKind::View,
@@ -97,7 +99,7 @@ impl Introspect for PostgresConnection {
       );
     }
 
-    for row in self.client.query(&columns, &[]).await? {
+    for row in pg.client.query(&columns, &[]).await? {
       if let Some(table) = map.get_mut(&(row.get(0), row.get(1))) {
         table.columns.push(ColumnInfo {
           name: row.get(2),
@@ -108,13 +110,13 @@ impl Introspect for PostgresConnection {
       }
     }
 
-    for row in self.client.query(&primary_keys, &[]).await? {
+    for row in pg.client.query(&primary_keys, &[]).await? {
       if let Some(table) = map.get_mut(&(row.get(0), row.get(1))) {
         table.primary_key.push(row.get(2));
       }
     }
 
-    for row in self.client.query(&indexes, &[]).await? {
+    for row in pg.client.query(&indexes, &[]).await? {
       if let Some(table) = map.get_mut(&(row.get(0), row.get(1))) {
         table.indexes.push(IndexInfo {
           name: row.get(2),
@@ -124,7 +126,7 @@ impl Introspect for PostgresConnection {
       }
     }
 
-    for row in self.client.query(&foreign_keys, &[]).await? {
+    for row in pg.client.query(&foreign_keys, &[]).await? {
       if let Some(table) = map.get_mut(&(row.get(0), row.get(1))) {
         table.foreign_keys.push(ForeignKeyInfo {
           name: row.get(2),

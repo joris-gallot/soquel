@@ -45,6 +45,7 @@ pub async fn test_connection(
     port: input.port,
     database: input.database.clone(),
     user: input.user.clone(),
+    ssl_mode: input.ssl_mode,
   };
   let connection = connector_for(input.kind)
     .connect(&profile, secret.as_deref())

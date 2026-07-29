@@ -15,10 +15,43 @@ pub enum Capability {
   KvBrowse,
 }
 
+/// Coarse type family for UI decisions (alignment, editors, viewers);
+/// `data_type` keeps the exact postgres name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColumnKind {
+  Bool,
+  Number,
+  Text,
+  Json,
+  Bytes,
+  DateTime,
+  Uuid,
+  Array,
+  #[default]
+  Other,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryColumn {
+  pub name: String,
+  /// None when type metadata is unavailable (multi-statement scripts).
+  pub data_type: Option<String>,
+  pub kind: ColumnKind,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerNotice {
+  pub severity: String,
+  pub message: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StatementResult {
-  pub columns: Vec<String>,
+  pub columns: Vec<QueryColumn>,
   pub rows: Vec<Vec<Option<String>>>,
   pub rows_affected: f64,
 }
@@ -27,6 +60,7 @@ pub struct StatementResult {
 #[serde(rename_all = "camelCase")]
 pub struct QueryResult {
   pub statements: Vec<StatementResult>,
+  pub notices: Vec<ServerNotice>,
   pub duration_ms: f64,
 }
 

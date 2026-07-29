@@ -20,6 +20,18 @@ pub enum ConnectorKind {
   Postgres,
 }
 
+/// libpq semantics: `require` encrypts without verifying the certificate,
+/// only `verify-full` checks the chain and hostname.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SslMode {
+  Disable,
+  #[default]
+  Prefer,
+  Require,
+  VerifyFull,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
@@ -31,6 +43,8 @@ pub struct ConnectionProfile {
   pub port: u16,
   pub database: String,
   pub user: String,
+  #[serde(default)]
+  pub ssl_mode: SslMode,
 }
 
 /// Secrets ride in on the input but are stored in the OS keychain, never in the profile.
@@ -44,6 +58,8 @@ pub struct ConnectionInput {
   pub port: u16,
   pub database: String,
   pub user: String,
+  #[serde(default)]
+  pub ssl_mode: SslMode,
   pub password: Option<String>,
 }
 
@@ -95,6 +111,7 @@ impl ProfileStore {
       port: input.port,
       database: input.database.clone(),
       user: input.user.clone(),
+      ssl_mode: input.ssl_mode,
     };
     self.profiles.push(profile.clone());
     self.save()?;
@@ -116,6 +133,7 @@ impl ProfileStore {
     profile.port = input.port;
     profile.database = input.database.clone();
     profile.user = input.user.clone();
+    profile.ssl_mode = input.ssl_mode;
     let updated = profile.clone();
     self.save()?;
     Ok(updated)
@@ -146,6 +164,7 @@ mod tests {
       port: 5432,
       database: "app".to_string(),
       user: "postgres".to_string(),
+      ssl_mode: SslMode::Prefer,
       password: None,
     }
   }
@@ -174,6 +193,14 @@ mod tests {
 
     store.delete(&created.id).unwrap();
     assert!(store.list().is_empty());
+  }
+
+  #[test]
+  fn profiles_without_ssl_mode_default_to_prefer() {
+    let raw = r#"{"id":"1","name":"old","env":"dev","kind":"postgres",
+      "host":"localhost","port":5432,"database":"app","user":"postgres"}"#;
+    let profile: ConnectionProfile = serde_json::from_str(raw).unwrap();
+    assert_eq!(profile.ssl_mode, SslMode::Prefer);
   }
 
   #[test]

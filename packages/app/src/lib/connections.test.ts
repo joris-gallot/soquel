@@ -36,6 +36,17 @@ describe('parsePostgresUrl', () => {
   it('rejects garbage', () => {
     expect(parsePostgresUrl('not a url')).toBeNull()
   })
+
+  it('maps the sslmode query param onto the app modes', () => {
+    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=require')).toMatchObject({ sslMode: 'require' })
+    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=verify-ca')).toMatchObject({ sslMode: 'verify-full' })
+    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=allow')).toMatchObject({ sslMode: 'prefer' })
+  })
+
+  it('leaves sslMode untouched when absent or unknown', () => {
+    expect(parsePostgresUrl('postgres://u:p@h/db')).not.toHaveProperty('sslMode')
+    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=nonsense')).not.toHaveProperty('sslMode')
+  })
 })
 
 describe('connectionSchema', () => {
@@ -47,6 +58,7 @@ describe('connectionSchema', () => {
     port: '5432',
     database: 'app',
     user: 'postgres',
+    sslMode: 'prefer',
     password: '',
   }
 

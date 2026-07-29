@@ -35,10 +35,21 @@ keyring = "4.1"
 async-trait = "0.1"
 tokio-postgres = "0.7"
 tokio = { version = "1", features = [ "sync" ] }
+deadpool = "0.13"
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "logging",
+  "std",
+  "tls12"
+] }
+tokio-postgres-rustls = "0.14"
+rustls-platform-verifier = "0.7"
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = [
   "rt",
-  "macros"
+  "rt-multi-thread",
+  "macros",
+  "time"
 ] }

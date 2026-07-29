@@ -1,7 +1,9 @@
-import type { ConnectionInput, Env } from '@/lib/bindings'
+import type { ConnectionInput, Env, SslMode } from '@/lib/bindings'
 import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
+
+export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-full'] as const satisfies readonly SslMode[]
 
 export const ENV_BADGE_CLASSES: Record<Env, string> = {
   dev: 'border-transparent bg-muted text-muted-foreground',
@@ -17,6 +19,7 @@ export const connectionSchema = z.object({
   port: z.coerce.number().int('Port must be a whole number').min(1, 'Port is required').max(65535, 'Port must be below 65536'),
   database: z.string().min(1, 'Database is required'),
   user: z.string().min(1, 'User is required'),
+  sslMode: z.enum(SSL_MODES),
   password: z.string(),
 })
 
@@ -29,11 +32,24 @@ export interface ConnectionFormValues {
   port: number | string
   database: string
   user: string
+  sslMode: SslMode
   password: string
 }
 
 export function toConnectionInput(values: z.output<typeof connectionSchema>): ConnectionInput {
   return { ...values, password: values.password === '' ? null : values.password }
+}
+
+// libpq's sslmode values mapped onto the app's coarser set.
+type LibpqSslMode = 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full'
+
+const URL_SSL_MODES: Record<LibpqSslMode, SslMode> = {
+  'disable': 'disable',
+  'allow': 'prefer',
+  'prefer': 'prefer',
+  'require': 'require',
+  'verify-ca': 'verify-full',
+  'verify-full': 'verify-full',
 }
 
 /// Prefill form values from a postgres:// or postgresql:// URL.
@@ -47,11 +63,15 @@ export function parsePostgresUrl(raw: string): Partial<ConnectionFormValues> | n
   }
   if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:')
     return null
-  return {
+  const parsed: Partial<ConnectionFormValues> = {
     host: url.hostname || 'localhost',
     port: url.port === '' ? 5432 : Number(url.port),
     database: decodeURIComponent(url.pathname.replace(/^\//, '')),
     user: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
   }
+  const sslmode = url.searchParams.get('sslmode')
+  if (sslmode && sslmode in URL_SSL_MODES)
+    parsed.sslMode = URL_SSL_MODES[sslmode as LibpqSslMode]
+  return parsed
 }

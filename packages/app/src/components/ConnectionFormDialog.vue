@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useConnections } from '@/composables/useConnections'
-import { connectionSchema, ENVS, parsePostgresUrl, toConnectionInput } from '@/lib/connections'
+import { connectionSchema, ENVS, parsePostgresUrl, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { zodFieldErrors } from '@/lib/validation'
 
 const props = defineProps<{ profile?: ConnectionProfile | null }>()
@@ -32,7 +32,7 @@ const open = defineModel<boolean>('open', { required: true })
 const { create, update, test } = useConnections()
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', password: '' }
+  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', password: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -57,6 +57,7 @@ watch(open, (isOpen) => {
         port: props.profile.port,
         database: props.profile.database,
         user: props.profile.user,
+        sslMode: props.profile.sslMode ?? 'prefer',
         password: '',
       }
     : emptyValues()
@@ -187,12 +188,27 @@ async function save() {
           </div>
         </div>
 
-        <div class="space-y-1.5">
-          <Label for="conn-database">Database</Label>
-          <Input id="conn-database" v-model="values.database" data-testid="field-database" class="font-mono" />
-          <p v-if="errors.database" class="text-xs text-destructive">
-            {{ errors.database }}
-          </p>
+        <div class="grid grid-cols-[1fr_8rem] gap-3">
+          <div class="space-y-1.5">
+            <Label for="conn-database">Database</Label>
+            <Input id="conn-database" v-model="values.database" data-testid="field-database" class="font-mono" />
+            <p v-if="errors.database" class="text-xs text-destructive">
+              {{ errors.database }}
+            </p>
+          </div>
+          <div class="space-y-1.5">
+            <Label>SSL mode</Label>
+            <Select v-model="values.sslMode">
+              <SelectTrigger data-testid="field-ssl-mode" class="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="mode in SSL_MODES" :key="mode" :value="mode">
+                  {{ mode }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">

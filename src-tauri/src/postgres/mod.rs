@@ -9,8 +9,8 @@ use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, SimpleQueryMessa
 
 use crate::connectors::{
   ApplyResult, Capability, CellValue, ColumnFilter, ColumnKind, Connection, Connector, FilterOp,
-  Introspect, QueryColumn, QueryResult, ServerNotice, SortDirection, SqlQuery, SqlSession,
-  StatementResult, TableChanges, TableRowsRequest,
+  Introspect, QueryColumn, QueryResult, RowsChunk, ServerNotice, SortDirection, SqlQuery,
+  SqlSession, StatementResult, StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SslMode};
@@ -255,89 +255,12 @@ impl SqlQuery for PostgresConnection {
     pg.notices.lock().unwrap().clear();
     let start = Instant::now();
 
-    // The prepared column list is the only source of column identity: filters
-    // and sort must name one of these, so no frontend string reaches SQL unquoted.
-    let base = format!(
-      "SELECT * FROM {}.{}",
-      quote_ident(&request.schema),
-      quote_ident(&request.table)
-    );
-    let prepared = pg.client.prepare(&base).await?;
-    let columns: Vec<(String, PgType)> = prepared
-      .columns()
-      .iter()
-      .map(|c| (c.name().to_string(), c.type_().clone()))
-      .collect();
+    let plan = plan_select(&pg, request).await?;
+    let bind = bind_text(&plan.params);
+    let rows = pg.client.query_typed(&plan.sql, &bind).await?;
 
-    let (where_clause, params) = build_where(&columns, &request.filters)?;
-
-    // ::text keeps the server's canonical formatting (arrays, timestamps, bytea)
-    // while the extended protocol carries the filter parameters.
-    let mut projection = columns
-      .iter()
-      .map(|(name, _)| {
-        let ident = quote_ident(name);
-        format!("{ident}::text AS {ident}")
-      })
-      .collect::<Vec<_>>()
-      .join(", ");
-    if request.include_ctid {
-      projection = format!("\"ctid\"::text AS \"ctid\", {projection}");
-    }
-    let mut sql = format!(
-      "SELECT {projection} FROM {}.{}{where_clause}",
-      quote_ident(&request.schema),
-      quote_ident(&request.table)
-    );
-    if let Some(sort) = &request.sort {
-      if !columns.iter().any(|(name, _)| name == &sort.column) {
-        return Err(Error::Unsupported {
-          message: format!("unknown column {}", sort.column),
-        });
-      }
-      let direction = match sort.direction {
-        SortDirection::Asc => "ASC",
-        SortDirection::Desc => "DESC",
-      };
-      // Qualified: a bare name would resolve to the ::text output alias and sort
-      // lexicographically.
-      sql.push_str(&format!(
-        " ORDER BY {}.{}.{} {direction}",
-        quote_ident(&request.schema),
-        quote_ident(&request.table),
-        quote_ident(&sort.column)
-      ));
-    }
-    sql.push_str(&format!(
-      " LIMIT {} OFFSET {}",
-      request.limit.min(1000),
-      request.offset
-    ));
-
-    // Every parameter travels as text; build_where casts it to the column's type.
-    let bind: Vec<(&(dyn tokio_postgres::types::ToSql + Sync), PgType)> = params
-      .iter()
-      .map(|value| (value as &(dyn tokio_postgres::types::ToSql + Sync), PgType::TEXT))
-      .collect();
-    let rows = pg.client.query_typed(&sql, &bind).await?;
-
-    let mut result_columns: Vec<QueryColumn> = columns
-      .iter()
-      .map(|(name, ty)| QueryColumn {
-        name: name.clone(),
-        data_type: Some(type_name(ty)),
-        kind: column_kind(ty),
-      })
-      .collect();
-    if request.include_ctid {
-      result_columns.insert(0, QueryColumn {
-        name: "ctid".to_string(),
-        data_type: Some("tid".to_string()),
-        kind: ColumnKind::Other,
-      });
-    }
     let statement = StatementResult {
-      columns: result_columns,
+      columns: plan.columns,
       rows_affected: rows.len() as f64,
       rows: rows
         .iter()
@@ -349,6 +272,54 @@ impl SqlQuery for PostgresConnection {
       statements: vec![statement],
       notices,
       duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+    })
+  }
+
+  async fn stream_rows(
+    &self,
+    request: &TableRowsRequest,
+    on_chunk: Box<dyn Fn(RowsChunk) -> bool + Send>,
+  ) -> Result<StreamSummary, Error> {
+    use futures_util::TryStreamExt;
+
+    let pg = self.checkout().await?;
+    let _guard = self.register_cancel(pg.client.cancel_token());
+    pg.notices.lock().unwrap().clear();
+    let start = Instant::now();
+
+    let plan = plan_select(&pg, request).await?;
+    let params = plan.params.iter().map(|value| (value, PgType::TEXT));
+    let stream = pg.client.query_typed_raw(&plan.sql, params).await?;
+    futures_util::pin_mut!(stream);
+
+    let mut columns = Some(plan.columns);
+    let mut total = 0u64;
+    let mut chunk: Vec<Vec<Option<String>>> = Vec::with_capacity(CHUNK_ROWS);
+    while let Some(row) = stream.try_next().await? {
+      chunk.push((0..row.len()).map(|i| row.get(i)).collect());
+      total += 1;
+      if chunk.len() == CHUNK_ROWS
+        && !on_chunk(RowsChunk {
+          columns: columns.take(),
+          rows: std::mem::take(&mut chunk),
+        })
+      {
+        // Receiver gone: stop reading; dropping the stream discards the rest.
+        break;
+      }
+    }
+    if columns.is_some() || !chunk.is_empty() {
+      on_chunk(RowsChunk {
+        columns: columns.take(),
+        rows: std::mem::take(&mut chunk),
+      });
+    }
+
+    let notices = std::mem::take(&mut *pg.notices.lock().unwrap());
+    Ok(StreamSummary {
+      rows: total as f64,
+      duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+      notices,
     })
   }
 
@@ -406,6 +377,106 @@ impl SqlQuery for PostgresConnection {
 // Identifiers come from the UI: quoting is the injection boundary.
 fn quote_ident(ident: &str) -> String {
   format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+const CHUNK_ROWS: usize = 200;
+const MAX_FETCH_ROWS: u32 = 5000;
+
+struct SelectPlan {
+  sql: String,
+  params: Vec<String>,
+  columns: Vec<QueryColumn>,
+}
+
+/// Shared by the collected and streamed paths. The prepared column list is the
+/// only source of column identity: filters and sort must name one of these, so
+/// no frontend string reaches SQL unquoted.
+async fn plan_select(pg: &PooledPg, request: &TableRowsRequest) -> Result<SelectPlan, Error> {
+  let base = format!(
+    "SELECT * FROM {}.{}",
+    quote_ident(&request.schema),
+    quote_ident(&request.table)
+  );
+  let prepared = pg.client.prepare(&base).await?;
+  let columns: Vec<(String, PgType)> = prepared
+    .columns()
+    .iter()
+    .map(|c| (c.name().to_string(), c.type_().clone()))
+    .collect();
+
+  let (where_clause, params) = build_where(&columns, &request.filters)?;
+
+  // ::text keeps the server's canonical formatting (arrays, timestamps, bytea)
+  // while the extended protocol carries the filter parameters.
+  let mut projection = columns
+    .iter()
+    .map(|(name, _)| {
+      let ident = quote_ident(name);
+      format!("{ident}::text AS {ident}")
+    })
+    .collect::<Vec<_>>()
+    .join(", ");
+  if request.include_ctid {
+    projection = format!("\"ctid\"::text AS \"ctid\", {projection}");
+  }
+  let mut sql = format!(
+    "SELECT {projection} FROM {}.{}{where_clause}",
+    quote_ident(&request.schema),
+    quote_ident(&request.table)
+  );
+  if let Some(sort) = &request.sort {
+    if !columns.iter().any(|(name, _)| name == &sort.column) {
+      return Err(Error::Unsupported {
+        message: format!("unknown column {}", sort.column),
+      });
+    }
+    let direction = match sort.direction {
+      SortDirection::Asc => "ASC",
+      SortDirection::Desc => "DESC",
+    };
+    // Qualified: a bare name would resolve to the ::text output alias and sort
+    // lexicographically.
+    sql.push_str(&format!(
+      " ORDER BY {}.{}.{} {direction}",
+      quote_ident(&request.schema),
+      quote_ident(&request.table),
+      quote_ident(&sort.column)
+    ));
+  }
+  sql.push_str(&format!(
+    " LIMIT {} OFFSET {}",
+    request.limit.min(MAX_FETCH_ROWS),
+    request.offset
+  ));
+
+  let mut result_columns: Vec<QueryColumn> = columns
+    .iter()
+    .map(|(name, ty)| QueryColumn {
+      name: name.clone(),
+      data_type: Some(type_name(ty)),
+      kind: column_kind(ty),
+    })
+    .collect();
+  if request.include_ctid {
+    result_columns.insert(0, QueryColumn {
+      name: "ctid".to_string(),
+      data_type: Some("tid".to_string()),
+      kind: ColumnKind::Other,
+    });
+  }
+  Ok(SelectPlan {
+    sql,
+    params,
+    columns: result_columns,
+  })
+}
+
+// Every parameter travels as text; build_where casts it to the column's type.
+fn bind_text(params: &[String]) -> Vec<(&(dyn tokio_postgres::types::ToSql + Sync), PgType)> {
+  params
+    .iter()
+    .map(|value| (value as &(dyn tokio_postgres::types::ToSql + Sync), PgType::TEXT))
+    .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1305,6 +1376,116 @@ pub mod tests {
       .position(|c| c.name == "receipt")
       .unwrap();
     assert_eq!(receipts.rows[0][receipt].as_deref(), Some("\\xdeadbeef"));
+  }
+
+  fn collecting_chunks() -> (
+    Arc<Mutex<Vec<RowsChunk>>>,
+    Box<dyn Fn(RowsChunk) -> bool + Send>,
+  ) {
+    let chunks: Arc<Mutex<Vec<RowsChunk>>> = Arc::default();
+    let sink = chunks.clone();
+    (
+      chunks,
+      Box::new(move |chunk| {
+        sink.lock().unwrap().push(chunk);
+        true
+      }),
+    )
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_stream_rows_chunks_in_order() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let (chunks, on_chunk) = collecting_chunks();
+    let summary = pg
+      .stream_rows(
+        &TableRowsRequest {
+          schema: "app".to_string(),
+          table: "events".to_string(),
+          limit: 1000,
+          offset: 0,
+          sort: Some(crate::connectors::SortSpec {
+            column: "id".to_string(),
+            direction: SortDirection::Asc,
+          }),
+          filters: vec![],
+          include_ctid: false,
+        },
+        on_chunk,
+      )
+      .await
+      .unwrap();
+    assert_eq!(summary.rows, 1000.0);
+
+    let chunks = chunks.lock().unwrap();
+    assert_eq!(chunks.len(), 5, "1000 rows in 200-row chunks");
+    assert!(chunks[0].columns.is_some(), "first chunk carries columns");
+    assert!(chunks[1..].iter().all(|c| c.columns.is_none()));
+    assert_eq!(chunks[0].rows[0][0].as_deref(), Some("1"));
+    let last = chunks.last().unwrap();
+    assert_eq!(last.rows.last().unwrap()[0].as_deref(), Some("1000"));
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_stream_rows_applies_filters() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let (chunks, on_chunk) = collecting_chunks();
+    let summary = pg
+      .stream_rows(
+        &TableRowsRequest {
+          schema: "app".to_string(),
+          table: "events".to_string(),
+          limit: 5000,
+          offset: 0,
+          sort: None,
+          filters: vec![filter("kind", FilterOp::Eq, Some("purchase"))],
+          include_ctid: false,
+        },
+        on_chunk,
+      )
+      .await
+      .unwrap();
+    // n % 3 == 2 over 1..=10000.
+    assert_eq!(summary.rows, 3333.0);
+    let total: usize = chunks.lock().unwrap().iter().map(|c| c.rows.len()).sum();
+    assert_eq!(total, 3333);
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_stream_abort_leaves_connection_usable() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let delivered: Arc<Mutex<usize>> = Arc::default();
+    let sink = delivered.clone();
+    let summary = pg
+      .stream_rows(
+        &TableRowsRequest {
+          schema: "app".to_string(),
+          table: "events".to_string(),
+          limit: 5000,
+          offset: 0,
+          sort: None,
+          filters: vec![],
+          include_ctid: false,
+        },
+        Box::new(move |_chunk| {
+          let mut count = sink.lock().unwrap();
+          *count += 1;
+          // Pretend the receiver disappeared after the first chunk.
+          *count < 1
+        }),
+      )
+      .await
+      .unwrap();
+    assert!(summary.rows < 5000.0, "the stream must stop early");
+    assert_eq!(*delivered.lock().unwrap(), 1);
+    // The pooled client survives an aborted stream.
+    pg.run_query("SELECT 1").await.unwrap();
   }
 
   #[tokio::test]

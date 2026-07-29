@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import type { ColumnFilter, FilterOp, SortSpec, StatementResult, TableInfo } from '@/lib/bindings'
+import type { ColumnFilter, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
 import type { StagedChanges } from '@/lib/staged'
-import { ArrowDown, ArrowUp, ArrowUpRight, Ban, ChevronLeft, ChevronRight, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
-import { useClipboard, useEventListener } from '@vueuse/core'
-import { computed, ref, watch } from 'vue'
+import { ArrowDown, ArrowUp, ArrowUpRight, Ban, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
+import { Channel } from '@tauri-apps/api/core'
+import { useClipboard, useEventListener, useScroll } from '@vueuse/core'
+import { computed, nextTick, ref, shallowRef, triggerRef, useTemplateRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useVirtualRows } from '@/composables/useVirtualRows'
 import { commands } from '@/lib/bindings'
 import { FILTER_OP_LABELS, FILTER_OPS_BY_KIND, filterLabel, OP_NEEDS_VALUE } from '@/lib/filters'
 import { formatEstimatedRows } from '@/lib/format'
@@ -42,14 +44,22 @@ const props = defineProps<{
 
 const emit = defineEmits<{ hop: [schema: string, table: string, filters: ColumnFilter[]] }>()
 
-const PAGE_SIZE = 100
+const FETCH_SIZE = 2000
 
-const statement = ref<StatementResult | null>(null)
+const columns = ref<QueryColumn[]>([])
+// shallowRef + explicit triggers: rows can reach 6 digits, deep proxying costs.
+const rows = shallowRef<(string | null)[][]>([])
 const durationMs = ref(0)
-const offset = ref(0)
 const sort = ref<SortSpec | null>(null)
 const loading = ref(false)
+const fetchedAll = ref(false)
 const filters = ref<ColumnFilter[]>([])
+let generation = 0
+
+const scroller = useTemplateRef('scroller')
+const rowCount = computed(() => rows.value.length)
+const { window: virtualWindow } = useVirtualRows(scroller, rowCount)
+const { y: scrollY } = useScroll(scroller)
 
 const openFilterColumn = ref<string | null>(null)
 const draftOp = ref<FilterOp>('eq')
@@ -75,7 +85,7 @@ const pending = computed(() => stagedCount(staged.value))
 
 // ctid is fetched for keying but never displayed.
 const displayColumns = computed(() =>
-  (statement.value?.columns ?? [])
+  columns.value
     .map((column, index) => ({ column, index }))
     .filter(({ column }) => column.name !== 'ctid'),
 )
@@ -85,7 +95,7 @@ const nullableColumns = computed(() =>
 )
 
 const numericColumns = computed(() =>
-  (statement.value?.columns ?? []).map(column => column.kind === 'number'),
+  columns.value.map(column => column.kind === 'number'),
 )
 
 // Single-column FKs by column name; composite FKs hop from any of their columns.
@@ -98,12 +108,18 @@ const fkByColumn = computed(() => {
   return map
 })
 
+const visibleRows = computed(() =>
+  rows.value
+    .slice(virtualWindow.value.start, virtualWindow.value.end)
+    .map((row, i) => ({ row, rowIndex: virtualWindow.value.start + i })),
+)
+
 const inspected = computed(() => {
-  if (!selectedCell.value || !statement.value)
+  if (!selectedCell.value)
     return null
   const { rowIndex, columnIndex } = selectedCell.value
-  const column = statement.value.columns[columnIndex]
-  const row = statement.value.rows[rowIndex]
+  const column = columns.value[columnIndex]
+  const row = rows.value[rowIndex]
   if (!column || !row)
     return null
   return { column, value: row[columnIndex], rowIndex, columnIndex }
@@ -129,33 +145,55 @@ const inspectedHtml = computed(() =>
     : null,
 )
 
-async function fetchRows() {
+/// Streams one FETCH_SIZE window; `reset` restarts from the top, otherwise the
+/// next offset appends (infinite scroll). Stale generations are ignored.
+async function fetchRows(reset = true) {
+  const mine = ++generation
   loading.value = true
+  if (reset) {
+    rows.value = []
+    triggerRef(rows)
+  }
+  const offset = reset ? 0 : rows.value.length
+  const channel = new Channel<RowsChunk>()
+  channel.onmessage = (chunk) => {
+    if (mine !== generation)
+      return
+    if (chunk.columns)
+      columns.value = chunk.columns
+    rows.value.push(...chunk.rows)
+    triggerRef(rows)
+  }
   try {
-    const result = unwrap(await commands.tableRows(props.connectionId, {
+    const summary = unwrap(await commands.streamTableRows(props.connectionId, {
       schema: props.schema,
       table: props.table.name,
-      limit: PAGE_SIZE,
-      offset: offset.value,
+      limit: FETCH_SIZE,
+      offset,
       sort: sort.value,
       filters: filters.value,
       includeCtid: ctidMode.value,
-    }))
-    statement.value = result.statements[0] ?? null
-    durationMs.value = result.durationMs ?? 0
+    }, channel))
+    if (mine === generation) {
+      durationMs.value = summary.durationMs ?? 0
+      fetchedAll.value = (summary.rows ?? 0) < FETCH_SIZE
+    }
   }
   catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+    if (mine === generation)
+      toast.error(error instanceof Error ? error.message : String(error))
   }
   finally {
-    loading.value = false
+    if (mine === generation) {
+      loading.value = false
+      nextTick(maybeAppend)
+    }
   }
 }
 
 watch(
   () => [props.connectionId, props.schema, props.table.name],
   () => {
-    offset.value = 0
     sort.value = null
     filters.value = props.initialFilters ?? []
     selectedCell.value = null
@@ -170,10 +208,23 @@ watch(
 watch(() => props.initialFilters, (initial) => {
   if (initial && initial.length > 0) {
     filters.value = initial
-    offset.value = 0
     fetchRows()
   }
 })
+
+// Live measurement (no arrived-state: it goes stale between scroll events).
+// Checked on every scroll and again after a fetch lands at the bottom.
+function nearBottom(): boolean {
+  const el = scroller.value
+  return el !== null && el.scrollTop + el.clientHeight >= el.scrollHeight - 600
+}
+
+function maybeAppend() {
+  if (nearBottom() && !loading.value && !fetchedAll.value && pending.value === 0 && rows.value.length > 0)
+    fetchRows(false)
+}
+
+watch(scrollY, maybeAppend)
 
 // Staged edits are keyed by row index: any reordering/refetch would corrupt them.
 function guardPending(): boolean {
@@ -189,7 +240,6 @@ function toggleSort(column: string) {
   sort.value = sort.value?.column === column && sort.value.direction === 'asc'
     ? { column, direction: 'desc' }
     : { column, direction: 'asc' }
-  offset.value = 0
   fetchRows()
 }
 
@@ -210,7 +260,6 @@ function applyFilter(column: string) {
   }
   filters.value = [...filters.value.filter(f => f.column !== column), filter]
   openFilterColumn.value = null
-  offset.value = 0
   fetchRows()
 }
 
@@ -219,7 +268,6 @@ function removeFilter(column: string) {
     return
   filters.value = filters.value.filter(f => f.column !== column)
   openFilterColumn.value = null
-  offset.value = 0
   fetchRows()
 }
 
@@ -227,18 +275,16 @@ function clearFilters() {
   if (guardPending())
     return
   filters.value = []
-  offset.value = 0
   fetchRows()
 }
 
 function hopFrom(rowIndex: number, columnName: string) {
   const fk = fkByColumn.value.get(columnName)
-  const row = statement.value?.rows[rowIndex]
-  const columns = statement.value?.columns
-  if (!fk || !row || !columns)
+  const row = rows.value[rowIndex]
+  if (!fk || !row)
     return
   const hopFilters: ColumnFilter[] = fk.columns.map((column, position) => {
-    const columnIndex = columns.findIndex(c => c.name === column)
+    const columnIndex = columns.value.findIndex(c => c.name === column)
     const value = columnIndex === -1 ? null : row[columnIndex]
     return value === null
       ? { column: fk.referencedColumns[position], op: 'is-null', value: null }
@@ -247,28 +293,14 @@ function hopFrom(rowIndex: number, columnName: string) {
   emit('hop', fk.referencedSchema, fk.referencedTable, hopFilters)
 }
 
-function nextPage() {
-  if (guardPending())
-    return
-  offset.value += PAGE_SIZE
-  fetchRows()
-}
-
-function previousPage() {
-  if (guardPending())
-    return
-  offset.value = Math.max(0, offset.value - PAGE_SIZE)
-  fetchRows()
-}
-
 function displayedValue(rowIndex: number, columnIndex: number): string | null {
-  const name = statement.value?.columns[columnIndex]?.name
+  const name = columns.value[columnIndex]?.name
   const edited = name !== undefined ? staged.value.edits[rowIndex]?.[name] : undefined
-  return edited !== undefined ? edited : statement.value?.rows[rowIndex]?.[columnIndex] ?? null
+  return edited !== undefined ? edited : rows.value[rowIndex]?.[columnIndex] ?? null
 }
 
 function isEdited(rowIndex: number, columnIndex: number): boolean {
-  const name = statement.value?.columns[columnIndex]?.name
+  const name = columns.value[columnIndex]?.name
   return name !== undefined && staged.value.edits[rowIndex]?.[name] !== undefined
 }
 
@@ -281,11 +313,10 @@ function beginEdit(rowIndex: number, columnIndex: number) {
 
 function stageEdit(value: string | null) {
   const cell = editingCell.value
-  const columns = statement.value?.columns
-  if (!cell || !columns)
+  if (!cell || columns.value.length === 0)
     return
-  const name = columns[cell.columnIndex].name
-  const original = statement.value?.rows[cell.rowIndex]?.[cell.columnIndex] ?? null
+  const name = columns.value[cell.columnIndex].name
+  const original = rows.value[cell.rowIndex]?.[cell.columnIndex] ?? null
   const edits = { ...(staged.value.edits[cell.rowIndex] ?? {}) }
   if (value === original)
     delete edits[name]
@@ -302,14 +333,16 @@ function stageEdit(value: string | null) {
 
 function addRow(fromRow?: number) {
   const values: Record<string, string | null> = {}
-  if (fromRow !== undefined && statement.value) {
+  if (fromRow !== undefined) {
     for (const { column, index } of displayColumns.value) {
       // PK values stay behind: serials/defaults must produce fresh ones.
       if (!props.table.primaryKey.includes(column.name))
-        values[column.name] = statement.value.rows[fromRow]?.[index] ?? null
+        values[column.name] = rows.value[fromRow]?.[index] ?? null
     }
   }
   staged.value = { ...staged.value, inserts: [...staged.value.inserts, values] }
+  // The insert row lives at the bottom: bring it into view.
+  nextTick(() => scroller.value?.scrollTo({ top: scroller.value.scrollHeight }))
 }
 
 function removeInsert(insertIndex: number) {
@@ -343,8 +376,8 @@ function discardAll() {
 
 const changes = computed(() => buildTableChanges(
   staged.value,
-  statement.value?.rows ?? [],
-  statement.value?.columns ?? [],
+  rows.value,
+  columns.value,
   keyColumns.value,
   props.schema,
   props.table.name,
@@ -432,7 +465,7 @@ useEventListener('keydown', (event) => {
         </Button>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-auto">
+      <div ref="scroller" data-testid="grid-scroller" class="min-h-0 flex-1 overflow-auto">
         <table class="w-max min-w-full border-separate border-spacing-0 font-mono text-xs">
           <thead class="sticky top-0 z-10">
             <tr>
@@ -520,9 +553,11 @@ useEventListener('keydown', (event) => {
             </tr>
           </thead>
           <tbody data-testid="grid-body">
+            <tr v-if="virtualWindow.padTop > 0" aria-hidden="true" :style="{ height: `${virtualWindow.padTop}px` }" />
             <tr
-              v-for="(row, rowIndex) in statement?.rows ?? []"
-              :key="offset + rowIndex"
+              v-for="{ row, rowIndex } in visibleRows"
+              :key="rowIndex"
+              data-row
               class="group hover:bg-muted/40"
               :class="staged.deletes.includes(rowIndex) && 'bg-destructive/10 text-destructive/80 line-through'"
             >
@@ -560,7 +595,7 @@ useEventListener('keydown', (event) => {
                     @click.stop
                   >
                   <button
-                    v-if="nullableColumns.get(statement!.columns[columnIndex].name)"
+                    v-if="nullableColumns.get(columns[columnIndex].name)"
                     type="button"
                     class="shrink-0 text-muted-foreground hover:text-foreground"
                     aria-label="Set NULL"
@@ -575,18 +610,19 @@ useEventListener('keydown', (event) => {
                   <span v-if="displayedValue(rowIndex, columnIndex) === null" class="text-muted-foreground/60 italic">NULL</span>
                   <span v-else class="truncate">{{ displayedValue(rowIndex, columnIndex) }}</span>
                   <button
-                    v-if="row[columnIndex] !== null && fkByColumn.has(statement!.columns[columnIndex].name)"
+                    v-if="row[columnIndex] !== null && fkByColumn.has(columns[columnIndex].name)"
                     type="button"
                     class="invisible shrink-0 text-muted-foreground hover:text-foreground group-hover:visible"
                     aria-label="Open referenced row"
-                    :data-testid="`fk-hop-${statement!.columns[columnIndex].name}`"
-                    @click.stop="hopFrom(rowIndex, statement!.columns[columnIndex].name)"
+                    :data-testid="`fk-hop-${columns[columnIndex].name}`"
+                    @click.stop="hopFrom(rowIndex, columns[columnIndex].name)"
                   >
                     <ArrowUpRight class="size-3" />
                   </button>
                 </span>
               </td>
             </tr>
+            <tr v-if="virtualWindow.padBottom > 0" aria-hidden="true" :style="{ height: `${virtualWindow.padBottom}px` }" />
             <tr
               v-for="(insert, insertIndex) in staged.inserts"
               :key="`insert-${insertIndex}`"
@@ -623,7 +659,7 @@ useEventListener('keydown', (event) => {
           </tbody>
         </table>
         <p
-          v-if="statement && statement.rows.length === 0"
+          v-if="!loading && rows.length === 0"
           class="px-4 py-8 text-center font-mono text-xs text-muted-foreground"
         >
           no rows{{ filters.length > 0 ? ' match the filters' : '' }}
@@ -632,7 +668,7 @@ useEventListener('keydown', (event) => {
 
       <footer class="flex items-center gap-3 border-t px-3 py-1 font-mono text-[11px] text-muted-foreground">
         <span data-testid="grid-range">
-          {{ statement && statement.rows.length > 0 ? `${offset + 1}–${offset + statement.rows.length}` : '0' }}
+          {{ rows.length }}{{ fetchedAll ? '' : '+' }} rows
           <template v-if="filters.length > 0">
             filtered
           </template>
@@ -709,42 +745,12 @@ useEventListener('keydown', (event) => {
               aria-label="Refresh rows"
               data-testid="grid-refresh"
               :disabled="loading || pending > 0"
-              @click="fetchRows"
+              @click="fetchRows()"
             >
               <RefreshCw :class="loading ? 'animate-spin' : ''" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Refresh rows</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger as-child>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Previous page"
-              data-testid="grid-prev"
-              :disabled="loading || offset === 0 || pending > 0"
-              @click="previousPage"
-            >
-              <ChevronLeft />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Previous page</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger as-child>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Next page"
-              data-testid="grid-next"
-              :disabled="loading || (statement?.rows.length ?? 0) < PAGE_SIZE || pending > 0"
-              @click="nextPage"
-            >
-              <ChevronRight />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Next page</TooltipContent>
         </Tooltip>
       </footer>
 

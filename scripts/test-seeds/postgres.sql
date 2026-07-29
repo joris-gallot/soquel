@@ -57,3 +57,17 @@ INSERT INTO public.settings (key, value) VALUES
 INSERT INTO public.audit_log (message) VALUES
   ('first entry'),
   ('second entry');
+
+-- Bulk table for streaming / virtual scrolling tests.
+CREATE TABLE app.events (
+  id serial PRIMARY KEY,
+  kind text NOT NULL,
+  payload jsonb,
+  at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO app.events (kind, payload)
+SELECT
+  CASE WHEN n % 3 = 0 THEN 'click' WHEN n % 3 = 1 THEN 'view' ELSE 'purchase' END,
+  jsonb_build_object('n', n)
+FROM generate_series(1, 10000) AS n;

@@ -49,6 +49,10 @@ cargo test --manifest-path src-tauri/Cargo.toml
 pnpm db:test           # start the test databases (docker-compose.test.yml), seeded + throwaway
 pnpm test:integration  # cargo integration_* tests against them
 pnpm db:test:down
+
+pnpm db:dev            # dev postgres on 5454 (docker-compose.dev.yml), persistent volume
+pnpm db:dev:seed       # (re)seed it with volume: ~1.5M rows across a SaaS-shaped app schema
+pnpm db:dev:down
 ```
 
 ## Testing

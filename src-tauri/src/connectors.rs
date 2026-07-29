@@ -157,6 +157,22 @@ pub struct TableChanges {
 
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
+pub struct RowsChunk {
+  /// Present on the first chunk only.
+  pub columns: Option<Vec<QueryColumn>>,
+  pub rows: Vec<Vec<Option<String>>>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamSummary {
+  pub rows: f64,
+  pub duration_ms: f64,
+  pub notices: Vec<ServerNotice>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplyResult {
   pub updated: u32,
   pub inserted: u32,
@@ -171,6 +187,12 @@ pub trait SqlQuery: Send + Sync {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
   async fn cancel(&self) -> Result<(), Error>;
   async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error>;
+  /// Chunked delivery; `on_chunk` returning false aborts (receiver gone).
+  async fn stream_rows(
+    &self,
+    request: &TableRowsRequest,
+    on_chunk: Box<dyn Fn(RowsChunk) -> bool + Send>,
+  ) -> Result<StreamSummary, Error>;
   async fn apply_changes(&self, changes: &TableChanges) -> Result<ApplyResult, Error>;
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error>;
 }

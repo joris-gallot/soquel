@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::connectors::{
-  connector_for, ApplyResult, Capability, Connection, QueryResult, SchemaSnapshot, SqlQuery,
-  SqlSession, TableChanges, TableRowsRequest,
+  connector_for, ApplyResult, Capability, Connection, QueryResult, RowsChunk, SchemaSnapshot,
+  SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind};
@@ -233,6 +233,20 @@ pub async fn table_rows(
 ) -> Result<QueryResult, Error> {
   let connection = active(&state, &id).await?;
   sql_surface(&connection)?.table_rows(&request).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn stream_table_rows(
+  state: State<'_, AppState>,
+  id: String,
+  request: TableRowsRequest,
+  channel: tauri::ipc::Channel<RowsChunk>,
+) -> Result<StreamSummary, Error> {
+  let connection = active(&state, &id).await?;
+  sql_surface(&connection)?
+    .stream_rows(&request, Box::new(move |chunk| channel.send(chunk).is_ok()))
+    .await
 }
 
 #[tauri::command]

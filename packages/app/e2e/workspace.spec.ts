@@ -79,6 +79,30 @@ describe('workspace', () => {
     await clickVisible('[data-testid="clear-filters"]')
   })
 
+  it('streams a big table and appends on infinite scroll', async () => {
+    await $('[data-testid="tree-filter"]').setValue('events')
+    await $('[data-testid="table-app.events"]').click()
+    await waitForText('[data-testid="table-title"]', 'app.events')
+    await waitForText('[data-testid="grid-range"]', '2000+ rows')
+
+    // Virtualization: the DOM holds a window, not the 2000 loaded rows.
+    const domRows = await $$('[data-testid="grid-body"] tr[data-row]').length
+    expect(domRows).toBeLessThan(200)
+
+    // Reaching the bottom appends the next 2000.
+    await browser.execute(() => {
+      for (const scroller of document.querySelectorAll('[data-testid="grid-scroller"]')) {
+        if (scroller instanceof HTMLElement && scroller.offsetParent !== null)
+          scroller.scrollTop = scroller.scrollHeight
+      }
+    })
+    await waitForText('[data-testid="grid-range"]', '4000+ rows')
+    await browser.saveScreenshot('./e2e/screenshots/workspace-stream.png')
+
+    await (await visible('[data-testid="close-tab-app.events"]')).click()
+    await $('[data-testid="tab-app.events"]').waitForExist({ reverse: true })
+  })
+
   it('dedupes table tabs and keeps state per tab', async () => {
     // Both tables are open from the previous tests: re-clicking activates, no duplicate.
     await $('[data-testid="tree-filter"]').setValue('cust')

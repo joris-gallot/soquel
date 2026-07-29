@@ -1,18 +1,25 @@
 <script setup lang="ts">
 import type { StatementResult } from '@/lib/bindings'
-import { computed } from 'vue'
+import { computed, useTemplateRef } from 'vue'
+import { useVirtualRows } from '@/composables/useVirtualRows'
 
 const props = defineProps<{ statement: StatementResult }>()
 
-const ROW_CAP = 1000
+const scroller = useTemplateRef('scroller')
+const rowCount = computed(() => props.statement.rows.length)
+const { window: virtualWindow } = useVirtualRows(scroller, rowCount)
 
-const rows = computed(() => props.statement.rows.slice(0, ROW_CAP))
-const truncated = computed(() => props.statement.rows.length > ROW_CAP)
+const visibleRows = computed(() =>
+  props.statement.rows
+    .slice(virtualWindow.value.start, virtualWindow.value.end)
+    .map((row, i) => ({ row, rowIndex: virtualWindow.value.start + i })),
+)
+
 const numericColumns = computed(() => props.statement.columns.map(column => column.kind === 'number'))
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-auto">
+  <div ref="scroller" class="min-h-0 flex-1 overflow-auto">
     <table v-if="statement.columns.length > 0" class="w-max min-w-full border-separate border-spacing-0 font-mono text-xs">
       <thead class="sticky top-0 z-10">
         <tr>
@@ -28,7 +35,8 @@ const numericColumns = computed(() => props.statement.columns.map(column => colu
         </tr>
       </thead>
       <tbody>
-        <tr v-for="(row, rowIndex) in rows" :key="rowIndex" class="hover:bg-muted/40">
+        <tr v-if="virtualWindow.padTop > 0" aria-hidden="true" :style="{ height: `${virtualWindow.padTop}px` }" />
+        <tr v-for="{ row, rowIndex } in visibleRows" :key="rowIndex" data-row class="hover:bg-muted/40">
           <td
             v-for="(value, columnIndex) in row"
             :key="columnIndex"
@@ -42,13 +50,11 @@ const numericColumns = computed(() => props.statement.columns.map(column => colu
             </template>
           </td>
         </tr>
+        <tr v-if="virtualWindow.padBottom > 0" aria-hidden="true" :style="{ height: `${virtualWindow.padBottom}px` }" />
       </tbody>
     </table>
     <p v-else class="px-4 py-6 font-mono text-xs text-muted-foreground">
       {{ statement.rowsAffected ?? 0 }} row{{ statement.rowsAffected === 1 ? '' : 's' }} affected
-    </p>
-    <p v-if="truncated" class="px-3 py-2 font-mono text-[11px] text-muted-foreground">
-      showing first {{ ROW_CAP }} of {{ statement.rows.length }} rows
     </p>
   </div>
 </template>

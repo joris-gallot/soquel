@@ -210,6 +210,32 @@ mod tests {
   }
 
   #[test]
+  fn group_survives_a_reload_and_can_be_cleared() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("connections.json");
+    let mut store = ProfileStore::load(path.clone()).unwrap();
+
+    let mut grouped = input("local");
+    grouped.group = Some("clients".to_string());
+    let created = store.create(&grouped).unwrap();
+    assert_eq!(
+      ProfileStore::load(path.clone())
+        .unwrap()
+        .get(&created.id)
+        .unwrap()
+        .group
+        .as_deref(),
+      Some("clients")
+    );
+
+    // Clearing must write null, not keep the old value.
+    let updated = store.update(&created.id, &input("local")).unwrap();
+    assert_eq!(updated.group, None);
+    let reloaded = ProfileStore::load(path).unwrap();
+    assert_eq!(reloaded.get(&created.id).unwrap().group, None);
+  }
+
+  #[test]
   fn profiles_without_ssl_mode_default_to_prefer() {
     let raw = r#"{"id":"1","name":"old","env":"dev","kind":"postgres",
       "host":"localhost","port":5432,"database":"app","user":"postgres"}"#;

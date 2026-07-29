@@ -59,6 +59,13 @@ describe('connection manager', () => {
     await $('[data-testid="connection-row"]').waitForExist({ reverse: true })
     await $('[data-testid="group-clients"]').click()
     await $('[data-testid="connection-row"]').waitForExist()
+
+    // The palette is the second consumer of the grouping.
+    await $('[data-testid="open-palette"]').click()
+    await $('[data-testid="palette-input"]').waitForExist()
+    await waitForText('[role="listbox"]', 'clients')
+    await browser.keys(['Escape'])
+    await $('[data-testid="palette-input"]').waitForExist({ reverse: true })
   })
 
   it('deletes the connection', async () => {

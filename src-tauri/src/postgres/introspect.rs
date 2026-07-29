@@ -218,9 +218,11 @@ impl Introspect for PostgresConnection {
     let constraints = pg
       .client
       .query(
+        // contype 'n': postgres 18 catalogs NOT NULL as constraints; the column
+        // lines already carry them.
         "SELECT conname, pg_get_constraintdef(oid, true)
          FROM pg_constraint
-         WHERE conrelid = $1
+         WHERE conrelid = $1 AND contype <> 'n'
          ORDER BY CASE contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'f' THEN 2 ELSE 3 END, conname",
         &[&oid],
       )
@@ -330,6 +332,9 @@ mod tests {
       .unwrap();
     assert_eq!(view.kind, TableKind::View);
     assert!(!view.columns.is_empty());
+
+    let matview = app.tables.iter().find(|t| t.name == "order_totals").unwrap();
+    assert_eq!(matview.kind, TableKind::MaterializedView);
   }
 
   #[tokio::test]
@@ -349,9 +354,33 @@ mod tests {
     );
     assert!(ddl.contains("CREATE INDEX orders_customer_idx"), "{ddl}");
 
+    // CHECK constraints and comments come from the catalog too.
+    assert!(
+      ddl.contains(r#"ADD CONSTRAINT "orders_amount_positive" CHECK (amount > 0::numeric)"#),
+      "{ddl}"
+    );
+    // NOT NULL lives on the column line, never as a duplicate constraint.
+    assert!(!ddl.contains("NOT NULL amount"), "{ddl}");
+    assert!(
+      ddl.contains(
+        r#"COMMENT ON TABLE "app"."orders" IS 'Customer orders; amounts in the customer''s currency.';"#
+      ),
+      "{ddl}"
+    );
+    assert!(
+      ddl.contains(r#"COMMENT ON COLUMN "app"."orders"."receipt" IS 'Raw PDF bytes, NULL until issued.';"#),
+      "{ddl}"
+    );
+
     let view = pg.table_ddl("app", "recent_orders").await.unwrap();
     assert!(view.starts_with(r#"CREATE VIEW "app"."recent_orders" AS"#), "{view}");
     assert!(view.contains("JOIN app.customers c"), "{view}");
+
+    let matview = pg.table_ddl("app", "order_totals").await.unwrap();
+    assert!(
+      matview.starts_with(r#"CREATE MATERIALIZED VIEW "app"."order_totals" AS"#),
+      "{matview}"
+    );
 
     assert!(matches!(
       pg.table_ddl("app", "nope").await,

@@ -15,11 +15,14 @@ CREATE TABLE app.customers (
 CREATE TABLE app.orders (
   id serial PRIMARY KEY,
   customer_id integer NOT NULL REFERENCES app.customers (id),
-  amount numeric(10, 2) NOT NULL,
+  amount numeric(10, 2) NOT NULL CONSTRAINT orders_amount_positive CHECK (amount > 0),
   placed_at timestamptz NOT NULL DEFAULT now(),
   note text,
   receipt bytea
 );
+
+COMMENT ON TABLE app.orders IS 'Customer orders; amounts in the customer''s currency.';
+COMMENT ON COLUMN app.orders.receipt IS 'Raw PDF bytes, NULL until issued.';
 
 CREATE INDEX orders_customer_idx ON app.orders (customer_id);
 
@@ -28,6 +31,11 @@ SELECT o.id, c.name AS customer, o.amount, o.placed_at
 FROM app.orders o
 JOIN app.customers c ON c.id = o.customer_id
 ORDER BY o.placed_at DESC;
+
+CREATE MATERIALIZED VIEW app.order_totals AS
+SELECT customer_id, sum(amount) AS total
+FROM app.orders
+GROUP BY customer_id;
 
 CREATE TABLE public.settings (
   key text PRIMARY KEY,

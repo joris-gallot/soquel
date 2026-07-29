@@ -271,6 +271,7 @@ pub struct SchemaSnapshot {
 #[async_trait::async_trait]
 pub trait Introspect: Send + Sync {
   async fn schema_snapshot(&self) -> Result<SchemaSnapshot, Error>;
+  async fn table_ddl(&self, schema: &str, table: &str) -> Result<String, Error>;
 }
 
 /// A live connection to a database, produced by a `Connector`.

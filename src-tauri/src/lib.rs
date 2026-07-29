@@ -60,6 +60,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::stream_table_rows,
       commands::apply_table_changes,
       commands::schema_snapshot,
+      commands::table_ddl,
       commands::open_sql_session,
       commands::run_session_query,
       commands::cancel_session_query,

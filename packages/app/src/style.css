@@ -128,9 +128,20 @@
     --sql-comment: oklch(0.55 0 0);
 }
 
-/* Highlighted values (inspector): @lezer classHighlighter token classes. */
+/* Highlighted code (inspector json, ddl): @lezer classHighlighter token classes. */
+.tok-keyword {
+    color: var(--sql-keyword);
+}
+
+.tok-typeName,
+.tok-className,
 .tok-propertyName {
     color: var(--sql-keyword);
+}
+
+.tok-comment {
+    color: var(--sql-comment);
+    font-style: italic;
 }
 
 .tok-string {

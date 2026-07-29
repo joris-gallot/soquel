@@ -267,10 +267,29 @@ pub async fn schema_snapshot(
   id: String,
 ) -> Result<SchemaSnapshot, Error> {
   let connection = active(&state, &id).await?;
-  let introspect = connection.introspect().ok_or_else(|| Error::Unsupported {
+  introspect_surface(&connection)?.schema_snapshot().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn table_ddl(
+  state: State<'_, AppState>,
+  id: String,
+  schema: String,
+  table: String,
+) -> Result<String, Error> {
+  let connection = active(&state, &id).await?;
+  introspect_surface(&connection)?
+    .table_ddl(&schema, &table)
+    .await
+}
+
+fn introspect_surface(
+  connection: &Arc<dyn Connection>,
+) -> Result<&dyn crate::connectors::Introspect, Error> {
+  connection.introspect().ok_or_else(|| Error::Unsupported {
     message: "this connection does not support schema introspection".to_string(),
-  })?;
-  introspect.schema_snapshot().await
+  })
 }
 
 // Clone the Arc out so queries never hold the map lock.

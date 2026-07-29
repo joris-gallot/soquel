@@ -31,7 +31,7 @@ import { useVirtualRows } from '@/composables/useVirtualRows'
 import { commands } from '@/lib/bindings'
 import { FILTER_OP_LABELS, FILTER_OPS_BY_KIND, filterLabel, OP_NEEDS_VALUE } from '@/lib/filters'
 import { formatEstimatedRows } from '@/lib/format'
-import { highlightJson } from '@/lib/highlight-json'
+import { highlightJson, highlightSql } from '@/lib/highlight'
 import { unwrap } from '@/lib/result'
 import { buildTableChanges, emptyStaged, previewSql, stagedCount } from '@/lib/staged'
 
@@ -67,6 +67,12 @@ const draftValue = ref('')
 
 const selectedCell = ref<{ rowIndex: number, columnIndex: number } | null>(null)
 const { copy, copied } = useClipboard()
+
+const gridView = ref<'data' | 'ddl'>('data')
+const ddl = ref<string | null>(null)
+const ddlLoading = ref(false)
+const ddlHtml = computed(() => (ddl.value === null ? null : highlightSql(ddl.value)))
+const { copy: copyDdl, copied: ddlCopied } = useClipboard()
 
 const staged = ref<StagedChanges>(emptyStaged())
 const ctidMode = ref(false)
@@ -200,10 +206,29 @@ watch(
     staged.value = emptyStaged()
     editingCell.value = null
     ctidMode.value = false
+    gridView.value = 'data'
+    ddl.value = null
     fetchRows()
   },
   { immediate: true },
 )
+
+async function openDdlView() {
+  gridView.value = 'ddl'
+  if (ddl.value !== null || ddlLoading.value)
+    return
+  ddlLoading.value = true
+  try {
+    ddl.value = unwrap(await commands.tableDdl(props.connectionId, props.schema, props.table.name))
+  }
+  catch (error) {
+    gridView.value = 'data'
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
+  finally {
+    ddlLoading.value = false
+  }
+}
 
 watch(() => props.initialFilters, (initial) => {
   if (initial && initial.length > 0) {
@@ -465,7 +490,19 @@ useEventListener('keydown', (event) => {
         </Button>
       </div>
 
-      <div ref="scroller" data-testid="grid-scroller" class="min-h-0 flex-1 overflow-auto">
+      <div
+        v-if="gridView === 'ddl'"
+        class="min-h-0 flex-1 overflow-auto p-3"
+        data-testid="ddl-view"
+      >
+        <p v-if="ddlLoading" class="font-mono text-xs text-muted-foreground">
+          loading definition…
+        </p>
+        <!-- eslint-disable-next-line vue/no-v-html -- highlightSql escapes every text node -->
+        <pre v-else-if="ddlHtml" class="font-mono text-xs leading-5 whitespace-pre" v-html="ddlHtml" />
+      </div>
+
+      <div v-show="gridView === 'data'" ref="scroller" data-testid="grid-scroller" class="min-h-0 flex-1 overflow-auto">
         <table class="w-max min-w-full border-separate border-spacing-0 font-mono text-xs">
           <thead class="sticky top-0 z-10">
             <tr>
@@ -666,19 +703,53 @@ useEventListener('keydown', (event) => {
         </p>
       </div>
 
-      <footer class="flex items-center gap-3 border-t px-3 py-1 font-mono text-[11px] text-muted-foreground">
-        <span data-testid="grid-range">
-          {{ rows.length }}{{ fetchedAll ? '' : '+' }} rows
-          <template v-if="filters.length > 0">
-            filtered
-          </template>
-          <template v-else-if="formatEstimatedRows(table.estimatedRows)">
-            of ~{{ formatEstimatedRows(table.estimatedRows) }}
-          </template>
-        </span>
-        <span>{{ durationMs.toFixed(0) }}ms</span>
+      <footer class="flex h-9 items-center gap-3 border-t px-3 font-mono text-[11px] text-muted-foreground">
+        <button
+          type="button"
+          class="rounded px-1.5 py-0.5"
+          :class="gridView === 'data' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground'"
+          data-testid="grid-view-data"
+          @click="gridView = 'data'"
+        >
+          data
+        </button>
+        <button
+          type="button"
+          class="rounded px-1.5 py-0.5"
+          :class="gridView === 'ddl' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground'"
+          data-testid="grid-view-ddl"
+          @click="openDdlView"
+        >
+          ddl
+        </button>
+        <Tooltip v-if="gridView === 'ddl' && ddl !== null" :open="ddlCopied">
+          <TooltipTrigger as-child>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Copy definition"
+              data-testid="copy-ddl"
+              @click="copyDdl(ddl)"
+            >
+              <Copy />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Copied</TooltipContent>
+        </Tooltip>
+        <template v-if="gridView === 'data'">
+          <span data-testid="grid-range">
+            {{ rows.length }}{{ fetchedAll ? '' : '+' }} rows
+            <template v-if="filters.length > 0">
+              filtered
+            </template>
+            <template v-else-if="formatEstimatedRows(table.estimatedRows)">
+              of ~{{ formatEstimatedRows(table.estimatedRows) }}
+            </template>
+          </span>
+          <span>{{ durationMs.toFixed(0) }}ms</span>
+        </template>
         <span class="flex-1" />
-        <template v-if="editable">
+        <template v-if="editable && gridView === 'data'">
           <Tooltip>
             <TooltipTrigger as-child>
               <Button
@@ -737,7 +808,7 @@ useEventListener('keydown', (event) => {
             </Button>
           </template>
         </template>
-        <Tooltip>
+        <Tooltip v-if="gridView === 'data'">
           <TooltipTrigger as-child>
             <Button
               size="icon-sm"

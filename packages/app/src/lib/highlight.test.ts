@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { highlightJson } from './highlight-json'
+import { highlightJson, highlightSql } from './highlight'
 
 describe('highlightJson', () => {
   it('tags keys, strings and numbers with token classes', () => {
@@ -19,5 +19,18 @@ describe('highlightJson', () => {
   it('keeps line breaks from pretty-printed input', () => {
     const html = highlightJson('{\n  "a": 1\n}')
     expect(html.split('\n')).toHaveLength(3)
+  })
+})
+
+describe('highlightSql', () => {
+  it('tags keywords and strings', () => {
+    const html = highlightSql(`CREATE TABLE "app"."t" (id integer DEFAULT 'x')`)
+    expect(html).toContain('>CREATE</span>')
+    expect(html).toContain('tok-keyword')
+    expect(html).toContain(`<span class="tok-string">'x'</span>`)
+  })
+
+  it('escapes html in identifiers', () => {
+    expect(highlightSql('SELECT "<img>" FROM t')).not.toContain('<img>')
   })
 })

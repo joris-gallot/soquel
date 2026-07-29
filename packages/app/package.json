@@ -21,6 +21,7 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.7",
     "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@lezer/common": "^1.5.2",
     "@lezer/highlight": "^1.2.3",
     "@lucide/vue": "^1.27.0",
     "@tauri-apps/api": "^2.11.1",

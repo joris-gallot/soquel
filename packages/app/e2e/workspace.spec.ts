@@ -62,6 +62,18 @@ describe('workspace', () => {
     await $('[data-testid="cell-inspector"]').waitForExist({ reverse: true })
   })
 
+  it('shows the table ddl', async () => {
+    await clickVisible('[data-testid="grid-view-ddl"]')
+    await waitForText('[data-testid="ddl-view"]', 'CREATE TABLE "app"."customers"')
+    await waitForText('[data-testid="ddl-view"]', 'PRIMARY KEY (id)')
+    await waitForText('[data-testid="ddl-view"]', 'UNIQUE (email)')
+    await (await visible('[data-testid="copy-ddl"]')).waitForExist()
+    await browser.saveScreenshot('./e2e/screenshots/workspace-ddl.png')
+
+    await clickVisible('[data-testid="grid-view-data"]')
+    await waitForText('[data-testid="grid-body"]', 'ada@example.com')
+  })
+
   it('hops along a foreign key into the referenced tab', async () => {
     await $('[data-testid="tree-filter"]').setValue('orders')
     await $('[data-testid="table-app.orders"]').click()

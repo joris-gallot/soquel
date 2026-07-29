@@ -22,6 +22,7 @@ export const commands = {
 	streamTableRows: (id: string, request: TableRowsRequest, channel: Channel<RowsChunk>) => typedError<StreamSummary, Error>(__TAURI_INVOKE("stream_table_rows", { id, request, channel })),
 	applyTableChanges: (id: string, changes: TableChanges) => typedError<ApplyResult, Error>(__TAURI_INVOKE("apply_table_changes", { id, changes })),
 	schemaSnapshot: (id: string) => typedError<SchemaSnapshot, Error>(__TAURI_INVOKE("schema_snapshot", { id })),
+	tableDdl: (id: string, schema: string, table: string) => typedError<string, Error>(__TAURI_INVOKE("table_ddl", { id, schema, table })),
 	openSqlSession: (connectionId: string) => typedError<string, Error>(__TAURI_INVOKE("open_sql_session", { connectionId })),
 	runSessionQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_session_query", { id, sql })),
 	cancelSessionQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_session_query", { id })),

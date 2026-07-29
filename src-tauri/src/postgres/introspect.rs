@@ -6,7 +6,7 @@ use crate::connectors::{
 };
 use crate::error::Error;
 
-use super::PostgresConnection;
+use super::{quote_ident, PostgresConnection};
 
 // User schemas only: everything except pg_* and information_schema.
 const USER_SCHEMAS: &str = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
@@ -151,12 +151,140 @@ impl Introspect for PostgresConnection {
     }
     Ok(SchemaSnapshot { schemas })
   }
+
+  /// pg_dump-style definition assembled from the catalog: `pg_get_*def` give
+  /// exact clauses (FK actions, CHECKs, view bodies) the snapshot doesn't carry.
+  async fn table_ddl(&self, schema: &str, table: &str) -> Result<String, Error> {
+    let pg = self.checkout().await?;
+
+    let rel = pg
+      .client
+      .query_opt(
+        "SELECT c.oid, c.relkind::text
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'v', 'm')",
+        &[&schema, &table],
+      )
+      .await?;
+    let Some(rel) = rel else {
+      return Err(Error::NotFound {
+        message: format!("table {schema}.{table} not found"),
+      });
+    };
+    let oid: u32 = rel.get(0);
+    let relkind: String = rel.get(1);
+    let target = format!("{}.{}", quote_ident(schema), quote_ident(table));
+
+    if relkind == "v" || relkind == "m" {
+      let definition: String = pg
+        .client
+        .query_one("SELECT pg_get_viewdef($1::oid, true)", &[&oid])
+        .await?
+        .get(0);
+      let keyword = if relkind == "m" { "MATERIALIZED VIEW" } else { "VIEW" };
+      return Ok(format!("CREATE {keyword} {target} AS\n{definition}"));
+    }
+
+    let columns = pg
+      .client
+      .query(
+        "SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+                pg_get_expr(d.adbin, d.adrelid)
+         FROM pg_attribute a
+         LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+         WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
+         ORDER BY a.attnum",
+        &[&oid],
+      )
+      .await?;
+    let mut lines = Vec::new();
+    for row in &columns {
+      let name: String = row.get(0);
+      let data_type: String = row.get(1);
+      let not_null: bool = row.get(2);
+      let default: Option<String> = row.get(3);
+      let mut line = format!("  {} {data_type}", quote_ident(&name));
+      if let Some(default) = default {
+        line.push_str(&format!(" DEFAULT {default}"));
+      }
+      if not_null {
+        line.push_str(" NOT NULL");
+      }
+      lines.push(line);
+    }
+    let mut ddl = format!("CREATE TABLE {target} (\n{}\n);", lines.join(",\n"));
+
+    let constraints = pg
+      .client
+      .query(
+        "SELECT conname, pg_get_constraintdef(oid, true)
+         FROM pg_constraint
+         WHERE conrelid = $1
+         ORDER BY CASE contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'f' THEN 2 ELSE 3 END, conname",
+        &[&oid],
+      )
+      .await?;
+    for row in &constraints {
+      let name: String = row.get(0);
+      let definition: String = row.get(1);
+      ddl.push_str(&format!(
+        "\n\nALTER TABLE {target}\n  ADD CONSTRAINT {} {definition};",
+        quote_ident(&name)
+      ));
+    }
+
+    // Constraint-backed indexes already appear as constraints above.
+    let indexes = pg
+      .client
+      .query(
+        "SELECT pg_get_indexdef(i.indexrelid, 0, true)
+         FROM pg_index i
+         WHERE i.indrelid = $1
+           AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
+         ORDER BY 1",
+        &[&oid],
+      )
+      .await?;
+    for row in &indexes {
+      let definition: String = row.get(0);
+      ddl.push_str(&format!("\n\n{definition};"));
+    }
+
+    let comments = pg
+      .client
+      .query(
+        "SELECT NULL::text, obj_description($1::oid, 'pg_class') WHERE obj_description($1::oid, 'pg_class') IS NOT NULL
+         UNION ALL
+         SELECT a.attname, col_description($1::oid, a.attnum)
+         FROM pg_attribute a
+         WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
+           AND col_description($1::oid, a.attnum) IS NOT NULL",
+        &[&oid],
+      )
+      .await?;
+    for row in &comments {
+      let column: Option<String> = row.get(0);
+      let comment: String = row.get(1);
+      let literal = format!("'{}'", comment.replace('\'', "''"));
+      match column {
+        Some(column) => ddl.push_str(&format!(
+          "\n\nCOMMENT ON COLUMN {target}.{} IS {literal};",
+          quote_ident(&column)
+        )),
+        None => ddl.push_str(&format!("\n\nCOMMENT ON TABLE {target} IS {literal};")),
+      }
+    }
+
+    Ok(ddl)
+  }
 }
 
 #[cfg(test)]
 mod tests {
   use super::super::tests::test_connection_from_env;
   use crate::connectors::{Introspect, TableKind};
+  use crate::error::Error;
 
   #[tokio::test]
   async fn integration_postgres_schema_snapshot() {
@@ -202,5 +330,32 @@ mod tests {
       .unwrap();
     assert_eq!(view.kind, TableKind::View);
     assert!(!view.columns.is_empty());
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_table_ddl_assembles_full_definition() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let ddl = pg.table_ddl("app", "orders").await.unwrap();
+    assert!(ddl.contains(r#"CREATE TABLE "app"."orders" ("#), "{ddl}");
+    assert!(ddl.contains(r#""id" integer DEFAULT nextval("#), "{ddl}");
+    assert!(ddl.contains(r#""amount" numeric(10,2) NOT NULL"#), "{ddl}");
+    assert!(ddl.contains("PRIMARY KEY (id)"), "{ddl}");
+    // pg_get_constraintdef carries what the snapshot doesn't: the full FK clause.
+    assert!(
+      ddl.contains("FOREIGN KEY (customer_id) REFERENCES app.customers(id)"),
+      "{ddl}"
+    );
+    assert!(ddl.contains("CREATE INDEX orders_customer_idx"), "{ddl}");
+
+    let view = pg.table_ddl("app", "recent_orders").await.unwrap();
+    assert!(view.starts_with(r#"CREATE VIEW "app"."recent_orders" AS"#), "{view}");
+    assert!(view.contains("JOIN app.customers c"), "{view}");
+
+    assert!(matches!(
+      pg.table_ddl("app", "nope").await,
+      Err(Error::NotFound { .. })
+    ));
   }
 }

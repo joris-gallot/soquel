@@ -1,4 +1,6 @@
+import type { Parser } from '@lezer/common'
 import { jsonLanguage } from '@codemirror/lang-json'
+import { PostgreSQL, sql } from '@codemirror/lang-sql'
 import { classHighlighter, highlightCode } from '@lezer/highlight'
 
 function escapeHtml(text: string): string {
@@ -8,12 +10,12 @@ function escapeHtml(text: string): string {
     .replaceAll('>', '&gt;')
 }
 
-/// Pretty-printed json as HTML with `tok-*` classes (styled in style.css).
-export function highlightJson(code: string): string {
+/// Code as HTML with `tok-*` classes (styled in style.css), no editor instance.
+function highlightWith(parser: Parser, code: string): string {
   let html = ''
   highlightCode(
     code,
-    jsonLanguage.parser.parse(code),
+    parser.parse(code),
     classHighlighter,
     (text, classes) => {
       html += classes === ''
@@ -25,4 +27,14 @@ export function highlightJson(code: string): string {
     },
   )
   return html
+}
+
+export function highlightJson(code: string): string {
+  return highlightWith(jsonLanguage.parser, code)
+}
+
+const sqlParser = sql({ dialect: PostgreSQL }).language.parser
+
+export function highlightSql(code: string): string {
+  return highlightWith(sqlParser, code)
 }

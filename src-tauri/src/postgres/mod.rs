@@ -1392,6 +1392,104 @@ pub mod tests {
   }
 
   #[tokio::test]
+  async fn integration_postgres_update_matching_several_rows_rolls_back() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    // Both audit_log seed rows share the same `at` (inserted in one statement):
+    // keying on it matches 2 rows and must trip the exactly-one guard.
+    let shared_at = pg
+      .run_query("SELECT at::text FROM public.audit_log GROUP BY at HAVING count(*) > 1 LIMIT 1")
+      .await
+      .unwrap()
+      .statements[0]
+      .rows[0][0]
+      .clone()
+      .unwrap();
+    let result = pg
+      .apply_changes(&TableChanges {
+        schema: "public".to_string(),
+        table: "audit_log".to_string(),
+        updates: vec![crate::connectors::RowUpdate {
+          key: vec![cell("at", Some(&shared_at))],
+          set: vec![cell("message", Some("clobbered"))],
+        }],
+        ..no_changes()
+      })
+      .await;
+    let Err(Error::Database { message }) = result else {
+      panic!("expected the multi-match update to fail");
+    };
+    assert!(message.contains("matched 2 rows"), "{message}");
+
+    let clobbered = pg
+      .run_query("SELECT count(*) FROM public.audit_log WHERE message = 'clobbered'")
+      .await
+      .unwrap();
+    assert_eq!(clobbered.statements[0].rows[0][0].as_deref(), Some("0"));
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_write_values_cannot_inject_sql() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let hostile = "'; DROP TABLE app.customers; --";
+    let email = "hostile@example.com";
+    pg.apply_changes(&TableChanges {
+      inserts: vec![crate::connectors::RowInsert {
+        values: vec![cell("name", Some(hostile)), cell("email", Some(email))],
+      }],
+      ..no_changes()
+    })
+    .await
+    .unwrap();
+
+    // Stored literally, executed never.
+    let stored = filtered_rows(
+      &pg,
+      "customers",
+      vec![filter("email", FilterOp::Eq, Some(email))],
+    )
+    .await;
+    assert_eq!(stored.rows[0][1].as_deref(), Some(hostile));
+
+    pg.apply_changes(&TableChanges {
+      deletes: vec![crate::connectors::RowDelete {
+        key: vec![cell("email", Some(email))],
+      }],
+      ..no_changes()
+    })
+    .await
+    .unwrap();
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_invalid_cast_applies_nothing() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let result = pg
+      .apply_changes(&TableChanges {
+        schema: "app".to_string(),
+        table: "orders".to_string(),
+        updates: vec![crate::connectors::RowUpdate {
+          key: vec![cell("id", Some("1"))],
+          set: vec![cell("amount", Some("not-a-number"))],
+        }],
+        ..no_changes()
+      })
+      .await;
+    let Err(Error::Database { message }) = result else {
+      panic!("expected the cast to fail");
+    };
+    assert!(message.contains("invalid input syntax"), "{message}");
+
+    let intact = filtered_rows(&pg, "orders", vec![filter("id", FilterOp::Eq, Some("1"))]).await;
+    assert_eq!(intact.rows[0][2].as_deref(), Some("129.90"));
+  }
+
+  #[tokio::test]
   async fn integration_postgres_ctid_editing_on_pkless_table() {
     let Some(pg) = test_connection_from_env().await else {
       return;

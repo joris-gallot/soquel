@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ColumnFilter, ExportFormat, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
+import type { ColumnFilter, ConnectorKind, ExportFormat, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
 import type { StagedChanges } from '@/lib/staged'
 import { ArrowDown, ArrowUp, ArrowUpRight, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { Channel } from '@tauri-apps/api/core'
@@ -41,12 +41,16 @@ import { buildTableChanges, emptyStaged, previewSql, stagedCount } from '@/lib/s
 
 const props = defineProps<{
   connectionId: string
+  kind: ConnectorKind
   schema: string
   table: TableInfo
   initialFilters?: ColumnFilter[]
 }>()
 
 const emit = defineEmits<{ hop: [schema: string, table: string, filters: ColumnFilter[]] }>()
+
+// ctid rescue and the xmin guard are postgres system columns.
+const isPostgres = computed(() => props.kind === 'postgres')
 
 const FETCH_SIZE = 2000
 
@@ -184,7 +188,7 @@ async function fetchRows(reset = true) {
       sort: sort.value,
       filters: filters.value,
       includeCtid: ctidMode.value,
-      includeXmin: canEverEdit.value,
+      includeXmin: canEverEdit.value && isPostgres.value,
     }, channel))
     if (mine === generation) {
       durationMs.value = summary.durationMs ?? 0
@@ -548,7 +552,14 @@ useEventListener('keydown', (event) => {
         data-testid="no-pk-banner"
       >
         no primary key - editing disabled
-        <Button size="sm" variant="secondary" class="h-6 text-[11px]" data-testid="enable-ctid" @click="enableCtidEditing">
+        <Button
+          v-if="isPostgres"
+          size="sm"
+          variant="secondary"
+          class="h-6 text-[11px]"
+          data-testid="enable-ctid"
+          @click="enableCtidEditing"
+        >
           edit via ctid
         </Button>
       </div>

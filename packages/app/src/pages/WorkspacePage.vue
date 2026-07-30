@@ -265,6 +265,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           v-show="tab.id === tabs.state.value.activeId"
           class="min-h-0 flex-1"
           :connection-id="id"
+          :kind="profile?.kind ?? 'postgres'"
           :schema="tab.schema"
           :table="tableInfo(tab)!"
           :initial-filters="tab.initialFilters"

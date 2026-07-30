@@ -1,5 +1,4 @@
 //! MySQL connector: mysql_async pool, text values rendered to strings.
-//! Browse/edit surfaces land in a later round.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,9 +19,13 @@ use crate::connectors::{
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SslMode};
 
+mod browse;
 mod introspect;
 
+use browse::{build_change_statements, build_select, ChangeKind, ChangeStatement};
+
 const POOL_MAX_SIZE: usize = 4;
+const CHUNK_ROWS: usize = 200;
 
 // Identifiers come from the UI: backtick quoting is the injection boundary.
 pub(super) fn quote_ident(ident: &str) -> String {
@@ -210,20 +213,113 @@ impl SqlQuery for MysqlConnection {
     Ok(())
   }
 
-  async fn table_rows(&self, _request: &TableRowsRequest) -> Result<QueryResult, Error> {
-    Err(browse_unsupported())
+  async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error> {
+    let mut conn = self.pool.get_conn().await?;
+    let _guard = self.register(conn.id());
+    let start = Instant::now();
+    let names = base_columns(&mut conn, &request.schema, &request.table).await?;
+    let plan = build_select(&names, request)?;
+    let mut result = conn.exec_iter(plan.sql, text_params(&plan.params)).await?;
+
+    let columns: Vec<QueryColumn> = result
+      .columns()
+      .map(|meta| meta.iter().map(query_column).collect())
+      .unwrap_or_default();
+    let rows: Vec<Row> = result.collect().await?;
+    drop(result);
+    let statement = StatementResult {
+      columns,
+      rows_affected: rows.len() as f64,
+      rows: rows.into_iter().map(row_text).collect(),
+    };
+    Ok(QueryResult {
+      statements: vec![statement],
+      notices: Vec::new(),
+      duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+    })
   }
 
   async fn stream_rows(
     &self,
-    _request: &TableRowsRequest,
-    _on_chunk: Box<dyn Fn(RowsChunk) -> bool + Send>,
+    request: &TableRowsRequest,
+    on_chunk: Box<dyn Fn(RowsChunk) -> bool + Send>,
   ) -> Result<StreamSummary, Error> {
-    Err(browse_unsupported())
+    use futures_util::TryStreamExt;
+
+    let mut conn = self.pool.get_conn().await?;
+    let _guard = self.register(conn.id());
+    let start = Instant::now();
+    let names = base_columns(&mut conn, &request.schema, &request.table).await?;
+    let plan = build_select(&names, request)?;
+    let mut result = conn.exec_iter(plan.sql, text_params(&plan.params)).await?;
+
+    let mut columns: Option<Vec<QueryColumn>> = Some(
+      result
+        .columns()
+        .map(|meta| meta.iter().map(query_column).collect())
+        .unwrap_or_default(),
+    );
+    let mut total = 0u64;
+    let mut chunk: Vec<Vec<Option<String>>> = Vec::with_capacity(CHUNK_ROWS);
+    if let Some(mut stream) = result.stream::<Row>().await? {
+      while let Some(row) = stream.try_next().await? {
+        chunk.push(row_text(row));
+        total += 1;
+        if chunk.len() == CHUNK_ROWS
+          && !on_chunk(RowsChunk {
+            columns: columns.take(),
+            rows: std::mem::take(&mut chunk),
+          })
+        {
+          // Receiver gone: stop reading; the driver drains the rest on reuse.
+          break;
+        }
+      }
+    }
+    if columns.is_some() || !chunk.is_empty() {
+      on_chunk(RowsChunk {
+        columns: columns.take(),
+        rows: std::mem::take(&mut chunk),
+      });
+    }
+
+    Ok(StreamSummary {
+      rows: total as f64,
+      duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+      notices: Vec::new(),
+    })
   }
 
-  async fn apply_changes(&self, _changes: &TableChanges) -> Result<ApplyResult, Error> {
-    Err(browse_unsupported())
+  async fn apply_changes(&self, changes: &TableChanges) -> Result<ApplyResult, Error> {
+    let mut conn = self.pool.get_conn().await?;
+    let names = base_columns(&mut conn, &changes.schema, &changes.table).await?;
+    let statements = build_change_statements(&names, changes)?;
+    if statements.is_empty() {
+      return Err(Error::Unsupported {
+        message: "no changes to apply".to_string(),
+      });
+    }
+
+    let start = Instant::now();
+    let mut tx = conn
+      .start_transaction(mysql_async::TxOpts::default())
+      .await?;
+    match run_change_statements(&mut tx, &statements).await {
+      Ok((updated, inserted, deleted)) => {
+        tx.commit().await?;
+        Ok(ApplyResult {
+          updated,
+          inserted,
+          deleted,
+          duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+        })
+      }
+      Err(err) => {
+        // The pooled client must go back clean.
+        let _ = tx.rollback().await;
+        Err(err)
+      }
+    }
   }
 
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error> {
@@ -237,10 +333,94 @@ impl SqlQuery for MysqlConnection {
   }
 }
 
-fn browse_unsupported() -> Error {
-  Error::Unsupported {
-    message: "table browsing for mysql lands in a later round".to_string(),
+/// Column identity for filter/sort/change validation, without executing.
+async fn base_columns(
+  conn: &mut mysql_async::Conn,
+  schema: &str,
+  table: &str,
+) -> Result<Vec<String>, Error> {
+  let stmt = conn
+    .prep(format!(
+      "SELECT * FROM {}.{}",
+      quote_ident(schema),
+      quote_ident(table)
+    ))
+    .await?;
+  let names = stmt
+    .columns()
+    .iter()
+    .map(|column| column.name_str().to_string())
+    .collect();
+  conn.close(stmt).await?;
+  Ok(names)
+}
+
+fn text_params(params: &[String]) -> mysql_async::Params {
+  if params.is_empty() {
+    mysql_async::Params::Empty
+  } else {
+    mysql_async::Params::Positional(
+      params
+        .iter()
+        .map(|value| Value::from(value.clone()))
+        .collect(),
+    )
   }
+}
+
+fn change_params(params: &[Option<String>]) -> mysql_async::Params {
+  if params.is_empty() {
+    mysql_async::Params::Empty
+  } else {
+    mysql_async::Params::Positional(
+      params
+        .iter()
+        .map(|value| Value::from(value.clone()))
+        .collect(),
+    )
+  }
+}
+
+async fn run_change_statements(
+  tx: &mut mysql_async::Transaction<'_>,
+  statements: &[ChangeStatement],
+) -> Result<(u32, u32, u32), Error> {
+  let (mut updated, mut inserted, mut deleted) = (0u32, 0u32, 0u32);
+  for statement in statements {
+    let result = tx
+      .exec_iter(statement.sql.as_str(), change_params(&statement.params))
+      .await?;
+    let affected = result.affected_rows();
+    drop(result);
+    match statement.kind {
+      ChangeKind::Update | ChangeKind::Delete => {
+        if affected != 1 {
+          let kind = if statement.kind == ChangeKind::Update {
+            "row update"
+          } else {
+            "row delete"
+          };
+          let hint = if affected == 0 {
+            "; the row may have been changed or deleted since it was loaded - refresh and retry"
+          } else {
+            ""
+          };
+          return Err(Error::Database {
+            message: format!(
+              "a {kind} matched {affected} rows instead of exactly 1; nothing was applied{hint}"
+            ),
+          });
+        }
+        if statement.kind == ChangeKind::Update {
+          updated += 1;
+        } else {
+          deleted += 1;
+        }
+      }
+      ChangeKind::Insert => inserted += u32::try_from(affected).unwrap_or(0),
+    }
+  }
+  Ok((updated, inserted, deleted))
 }
 
 /// A dedicated client outside the pool: session state (SET, transactions)
@@ -670,25 +850,235 @@ mod tests {
     session.close().await.unwrap();
   }
 
+  fn rows_request(
+    table: &str,
+    limit: Option<u32>,
+    filters: Vec<crate::connectors::ColumnFilter>,
+    sort: Option<crate::connectors::SortSpec>,
+  ) -> TableRowsRequest {
+    TableRowsRequest {
+      schema: "soquel_test".to_string(),
+      table: table.to_string(),
+      limit,
+      offset: 0,
+      sort,
+      filters,
+      // pg-only hints, ignored by this connector.
+      include_ctid: true,
+      include_xmin: true,
+    }
+  }
+
+  fn text_filter(
+    column: &str,
+    op: crate::connectors::FilterOp,
+    value: &str,
+  ) -> crate::connectors::ColumnFilter {
+    crate::connectors::ColumnFilter {
+      column: column.to_string(),
+      op,
+      value: Some(value.to_string()),
+    }
+  }
+
   #[tokio::test]
-  async fn integration_mysql_browse_surfaces_are_gated() {
+  async fn integration_mysql_table_rows_sorts_filters_paginates() {
+    use crate::connectors::{FilterOp, SortDirection, SortSpec};
+
     let Some(connection) = test_connection_from_env().await else {
       return;
     };
-    let request = TableRowsRequest {
+    let sql = connection.sql().unwrap();
+    // events: immutable across the suite, unlike customers (the apply test
+    // inserts rows there concurrently).
+    let result = sql
+      .table_rows(&rows_request(
+        "events",
+        Some(2),
+        vec![text_filter("kind", FilterOp::Eq, "view")],
+        Some(SortSpec {
+          column: "n".to_string(),
+          direction: SortDirection::Desc,
+        }),
+      ))
+      .await
+      .unwrap();
+    let statement = &result.statements[0];
+    // Odd n seeds as 'view': 999 then 997 in desc order.
+    assert_eq!(statement.rows.len(), 2);
+    assert_eq!(statement.rows[0][2].as_deref(), Some("999"));
+    assert_eq!(statement.rows[1][2].as_deref(), Some("997"));
+    let kind = statement.columns.iter().find(|c| c.name == "kind").unwrap();
+    assert_eq!(kind.kind, ColumnKind::Text);
+
+    let unknown = sql
+      .table_rows(&rows_request(
+        "customers",
+        Some(2),
+        vec![text_filter("nope", FilterOp::Eq, "x")],
+        None,
+      ))
+      .await;
+    assert!(matches!(unknown, Err(Error::Unsupported { .. })));
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_stream_rows_chunks_and_streams_unlimited() {
+    use std::sync::{Arc as StdArc, Mutex as StdMutex};
+
+    let Some(connection) = test_connection_from_env().await else {
+      return;
+    };
+    let sql = connection.sql().unwrap();
+
+    let chunks: StdArc<StdMutex<Vec<RowsChunk>>> = StdArc::default();
+    let sink = chunks.clone();
+    let summary = sql
+      .stream_rows(
+        &rows_request("events", Some(500), vec![], None),
+        Box::new(move |chunk| {
+          sink.lock().unwrap().push(chunk);
+          true
+        }),
+      )
+      .await
+      .unwrap();
+    assert_eq!(summary.rows, 500.0);
+    let chunks = chunks.lock().unwrap();
+    assert_eq!(chunks.len(), 3, "500 rows in 200-row chunks");
+    assert!(chunks[0].columns.is_some());
+    assert!(chunks[1..].iter().all(|c| c.columns.is_none()));
+
+    let total: StdArc<StdMutex<usize>> = StdArc::default();
+    let sink = total.clone();
+    let summary = sql
+      .stream_rows(
+        &rows_request("events", None, vec![], None),
+        Box::new(move |chunk| {
+          *sink.lock().unwrap() += chunk.rows.len();
+          true
+        }),
+      )
+      .await
+      .unwrap();
+    assert_eq!(summary.rows, 1000.0, "no limit streams the whole table");
+    assert_eq!(*total.lock().unwrap(), 1000);
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_apply_changes_roundtrip_and_rollback() {
+    let Some(connection) = test_connection_from_env().await else {
+      return;
+    };
+    let sql = connection.sql().unwrap();
+    let changes = |updates, deletes, inserts| TableChanges {
       schema: "soquel_test".to_string(),
       table: "customers".to_string(),
-      limit: Some(10),
-      offset: 0,
-      sort: None,
-      filters: vec![],
-      include_ctid: false,
-      include_xmin: false,
+      updates,
+      deletes,
+      inserts,
     };
-    assert!(matches!(
-      connection.sql().unwrap().table_rows(&request).await,
-      Err(Error::Unsupported { .. })
-    ));
+    let cell = |column: &str, value: Option<&str>| crate::connectors::CellValue {
+      column: column.to_string(),
+      value: value.map(str::to_string),
+    };
+
+    let applied = sql
+      .apply_changes(&changes(
+        vec![],
+        vec![],
+        vec![crate::connectors::RowInsert {
+          values: vec![
+            cell("name", Some("Temp Row")),
+            cell("email", Some("temp@example.com")),
+          ],
+        }],
+      ))
+      .await
+      .unwrap();
+    assert_eq!(applied.inserted, 1);
+
+    let updated = sql
+      .apply_changes(&changes(
+        vec![crate::connectors::RowUpdate {
+          key: vec![cell("email", Some("temp@example.com"))],
+          set: vec![cell("name", Some("Temp Renamed")), cell("meta", None)],
+        }],
+        vec![],
+        vec![],
+      ))
+      .await
+      .unwrap();
+    assert_eq!(updated.updated, 1);
+
+    // Second update matches nothing: the whole batch must roll back.
+    let result = sql
+      .apply_changes(&changes(
+        vec![
+          crate::connectors::RowUpdate {
+            key: vec![cell("email", Some("temp@example.com"))],
+            set: vec![cell("name", Some("Should Not Stick"))],
+          },
+          crate::connectors::RowUpdate {
+            key: vec![cell("email", Some("ghost@example.com"))],
+            set: vec![cell("name", Some("x"))],
+          },
+        ],
+        vec![],
+        vec![],
+      ))
+      .await;
+    let Err(Error::Database { message }) = result else {
+      panic!("expected the batch to fail");
+    };
+    assert!(message.contains("changed or deleted"), "{message}");
+    let check = sql
+      .table_rows(&rows_request(
+        "customers",
+        Some(1),
+        vec![text_filter(
+          "email",
+          crate::connectors::FilterOp::Eq,
+          "temp@example.com",
+        )],
+        None,
+      ))
+      .await
+      .unwrap();
+    assert_eq!(
+      check.statements[0].rows[0][1].as_deref(),
+      Some("Temp Renamed")
+    );
+
+    // A key matching several rows trips the exactly-one guard too.
+    let multi = sql
+      .apply_changes(&TableChanges {
+        schema: "soquel_test".to_string(),
+        table: "events".to_string(),
+        updates: vec![crate::connectors::RowUpdate {
+          key: vec![cell("kind", Some("click"))],
+          set: vec![cell("n", Some("0"))],
+        }],
+        deletes: vec![],
+        inserts: vec![],
+      })
+      .await;
+    let Err(Error::Database { message }) = multi else {
+      panic!("expected the multi-row update to fail");
+    };
+    assert!(message.contains("instead of exactly 1"), "{message}");
+
+    let deleted = sql
+      .apply_changes(&changes(
+        vec![],
+        vec![crate::connectors::RowDelete {
+          key: vec![cell("email", Some("temp@example.com"))],
+        }],
+        vec![],
+      ))
+      .await
+      .unwrap();
+    assert_eq!(deleted.deleted, 1);
   }
 
   #[tokio::test]

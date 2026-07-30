@@ -19,7 +19,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "pnpm -r test",
-    "test:integration": "SOQUEL_TEST_PG=postgres://soquel:soquel@localhost:5455/soquel_test SOQUEL_TEST_PG_TLS=postgres://soquel:soquel@localhost:5459/soquel_test SOQUEL_TEST_SSH=localhost:5458 cargo test --manifest-path src-tauri/Cargo.toml integration_ && SOQUEL_TEST_PG=postgres://soquel:soquel@localhost:5460/soquel_test cargo test --manifest-path src-tauri/Cargo.toml integration_postgres_",
+    "test:integration": "SOQUEL_TEST_PG=postgres://soquel:soquel@localhost:5455/soquel_test SOQUEL_TEST_PG_TLS=postgres://soquel:soquel@localhost:5459/soquel_test SOQUEL_TEST_SSH=localhost:5458 SOQUEL_TEST_SSH_RECONNECT=localhost:5461 cargo test --manifest-path src-tauri/Cargo.toml integration_ && SOQUEL_TEST_PG=postgres://soquel:soquel@localhost:5460/soquel_test cargo test --manifest-path src-tauri/Cargo.toml integration_postgres_",
     "test:e2e": "pnpm -r test:e2e",
     "db:test": "docker compose -f docker-compose.test.yml up -d --wait",
     "db:test:down": "docker compose -f docker-compose.test.yml down",

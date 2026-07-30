@@ -289,6 +289,13 @@ pub trait Connection: Send + Sync {
   }
 }
 
+/// Local TCP endpoint of an SSH forward. TCP dials 127.0.0.1:{port} while the
+/// profile keeps the logical host, so TLS verification still targets it.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalForward {
+  pub port: u16,
+}
+
 /// A database kind the app knows how to talk to. Capabilities drive the UI:
 /// no capability may assume SQL (Redis browses keys, not tables).
 #[async_trait::async_trait]
@@ -298,6 +305,7 @@ pub trait Connector: Send + Sync {
     &self,
     profile: &ConnectionProfile,
     secret: Option<&str>,
+    forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error>;
 }
 

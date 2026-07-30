@@ -9,8 +9,8 @@ use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, SimpleQueryMessa
 
 use crate::connectors::{
   ApplyResult, Capability, CellValue, ColumnFilter, ColumnKind, Connection, Connector, FilterOp,
-  Introspect, QueryColumn, QueryResult, RowsChunk, ServerNotice, SortDirection, SqlQuery,
-  SqlSession, StatementResult, StreamSummary, TableChanges, TableRowsRequest,
+  Introspect, LocalForward, QueryColumn, QueryResult, RowsChunk, ServerNotice, SortDirection,
+  SqlQuery, SqlSession, StatementResult, StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SslMode};
@@ -32,16 +32,9 @@ impl Connector for PostgresConnector {
     &self,
     profile: &ConnectionProfile,
     secret: Option<&str>,
+    forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
-    let mut config = Config::new();
-    config
-      .host(&profile.host)
-      .port(profile.port)
-      .dbname(&profile.database)
-      .user(&profile.user)
-      .application_name("soquel")
-      .ssl_mode(tls::config_ssl_mode(profile.ssl_mode))
-      .connect_timeout(Duration::from_secs(10));
+    let mut config = build_config(profile, forward);
     if let Some(secret) = secret {
       config.password(secret);
     }
@@ -50,6 +43,30 @@ impl Connector for PostgresConnector {
     drop(connection.checkout().await?);
     Ok(Box::new(connection))
   }
+}
+
+/// Through a tunnel, TCP dials the local forward (`hostaddr`) while `host`
+/// stays the logical hostname: TLS SNI and verify-full target the real server,
+/// not 127.0.0.1.
+fn build_config(profile: &ConnectionProfile, forward: Option<LocalForward>) -> Config {
+  let mut config = Config::new();
+  config.host(&profile.host);
+  match forward {
+    Some(forward) => {
+      config.hostaddr(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+      config.port(forward.port);
+    }
+    None => {
+      config.port(profile.port);
+    }
+  }
+  config
+    .dbname(&profile.database)
+    .user(&profile.user)
+    .application_name("soquel")
+    .ssl_mode(tls::config_ssl_mode(profile.ssl_mode))
+    .connect_timeout(Duration::from_secs(10));
+  config
 }
 
 pub(super) struct PooledPg {
@@ -1092,6 +1109,39 @@ pub mod tests {
     assert_eq!(type_name(&PgType::TEXT_ARRAY), "text[]");
   }
 
+  #[test]
+  fn build_config_keeps_logical_host_behind_a_forward() {
+    use crate::profiles::{ConnectorKind, Env};
+    use tokio_postgres::config::Host;
+
+    let profile = ConnectionProfile {
+      id: String::new(),
+      name: String::new(),
+      env: Env::Dev,
+      kind: ConnectorKind::Postgres,
+      host: "db.internal".to_string(),
+      port: 5432,
+      database: "app".to_string(),
+      user: "u".to_string(),
+      ssl_mode: SslMode::VerifyFull,
+      tunnel_id: None,
+      group: None,
+    };
+
+    // Tunneled: TCP goes to the forward, TLS still targets db.internal.
+    let config = build_config(&profile, Some(LocalForward { port: 6000 }));
+    assert_eq!(config.get_hosts(), &[Host::Tcp("db.internal".to_string())]);
+    assert_eq!(
+      config.get_hostaddrs(),
+      &[std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)]
+    );
+    assert_eq!(config.get_ports(), &[6000]);
+
+    let direct = build_config(&profile, None);
+    assert!(direct.get_hostaddrs().is_empty());
+    assert_eq!(direct.get_ports(), &[5432]);
+  }
+
   fn connection_from_url(url: &str, ssl_mode: SslMode) -> PostgresConnection {
     let mut config: Config = url.parse().unwrap();
     config.ssl_mode(tls::config_ssl_mode(ssl_mode));
@@ -1950,7 +2000,7 @@ pub mod tests {
     };
     let profile = profile_from_env_url(&url);
     let result = PostgresConnector
-      .connect(&profile, Some("definitely-wrong"))
+      .connect(&profile, Some("definitely-wrong"), None)
       .await;
     let Err(Error::Database { message }) = result.map(|_| ()) else {
       panic!("expected a database error");
@@ -1968,7 +2018,7 @@ pub mod tests {
     };
     let mut profile = profile_from_env_url(&url);
     profile.port = 59999;
-    let result = PostgresConnector.connect(&profile, None).await;
+    let result = PostgresConnector.connect(&profile, None, None).await;
     let Err(Error::Database { message }) = result.map(|_| ()) else {
       panic!("expected a database error");
     };

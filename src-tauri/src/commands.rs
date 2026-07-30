@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::connectors::{
-  connector_for, ApplyResult, Capability, Connection, QueryColumn, QueryResult, RowsChunk,
-  SchemaSnapshot, SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
+  connector_for, ApplyResult, Capability, Connection, LocalForward, QueryColumn, QueryResult,
+  RowsChunk, SchemaSnapshot, SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::export::{quote_ident, ChunkSink, ExportFormat, ExportWriter};
@@ -17,14 +17,14 @@ fn tunnel_secret_id(tunnel_id: &str) -> String {
   format!("tunnel:{tunnel_id}")
 }
 
-/// Resolve a profile's tunnel (if any) and rewrite host/port to the local
-/// forward so the connector never knows a tunnel exists.
+/// Resolve a profile's tunnel (if any); the returned forward tells the
+/// connector where TCP actually goes while the profile keeps the logical host.
 async fn open_tunnel(
   state: &State<'_, AppState>,
   profile: &ConnectionProfile,
-) -> Result<(Option<SshTunnel>, ConnectionProfile), Error> {
+) -> Result<Option<(SshTunnel, LocalForward)>, Error> {
   let Some(tunnel_id) = &profile.tunnel_id else {
-    return Ok((None, profile.clone()));
+    return Ok(None);
   };
   let tunnel = state.tunnels.lock().unwrap().get(tunnel_id)?;
   let secret = state.secrets.get(&tunnel_secret_id(tunnel_id))?;
@@ -45,10 +45,10 @@ async fn open_tunnel(
     },
   )
   .await?;
-  let mut local = profile.clone();
-  local.host = "127.0.0.1".to_string();
-  local.port = opened.local_port;
-  Ok((Some(opened), local))
+  let forward = LocalForward {
+    port: opened.local_port,
+  };
+  Ok(Some((opened, forward)))
 }
 
 #[tauri::command]
@@ -91,9 +91,13 @@ pub async fn test_connection(
     tunnel_id: input.tunnel_id.clone(),
     group: input.group.clone(),
   };
-  let (_tunnel, local) = open_tunnel(&state, &profile).await?;
+  let opened = open_tunnel(&state, &profile).await?;
   let connection = connector_for(input.kind)
-    .connect(&local, secret.as_deref())
+    .connect(
+      &profile,
+      secret.as_deref(),
+      opened.as_ref().map(|(_, f)| *f),
+    )
     .await?;
   connection.health().await?;
   connection.close().await
@@ -104,15 +108,16 @@ pub async fn test_connection(
 pub async fn connect(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   let profile = state.profiles.lock().unwrap().get(&id)?;
   let secret = state.secrets.get(&id)?;
-  let (tunnel, local) = open_tunnel(&state, &profile).await?;
+  let opened = open_tunnel(&state, &profile).await?;
+  let forward = opened.as_ref().map(|(_, f)| *f);
   let connection = connector_for(profile.kind)
-    .connect(&local, secret.as_deref())
+    .connect(&profile, secret.as_deref(), forward)
     .await?;
   state.connections.lock().await.insert(
     id,
     ActiveConnection {
       connection: connection.into(),
-      _tunnel: tunnel,
+      _tunnel: opened.map(|(tunnel, _)| tunnel),
     },
   );
   Ok(())

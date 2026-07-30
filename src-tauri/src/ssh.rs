@@ -423,15 +423,18 @@ mod tests {
     parse_public_key(&key).unwrap()
   }
 
-  async fn select_one_through(tunnel: &SshTunnel) {
+  async fn try_select_through(tunnel: &SshTunnel) -> Result<(), tokio_postgres::Error> {
     let url = format!(
       "host=127.0.0.1 port={} user=soquel password=soquel dbname=soquel_test",
       tunnel.local_port
     );
-    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.unwrap();
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await?;
     tokio::spawn(connection);
-    let rows = client.simple_query("SELECT 1").await.unwrap();
-    assert!(!rows.is_empty());
+    client.simple_query("SELECT 1").await.map(|_| ())
+  }
+
+  async fn select_one_through(tunnel: &SshTunnel) {
+    try_select_through(tunnel).await.unwrap();
   }
 
   #[tokio::test(flavor = "multi_thread")]
@@ -472,6 +475,129 @@ mod tests {
     .await
     .unwrap();
     select_one_through(&tunnel).await;
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_ssh_password_auth() {
+    let Some(mut profile) = tunnel_from_env(TEST_KEY) else {
+      return;
+    };
+    profile.user = "tunnelpw".to_string();
+    profile.auth = SshAuth::Password;
+    let key = host_key(&profile).await;
+    let tunnel = SshTunnel::open(
+      &profile,
+      Some("soquel-pw"),
+      Some(key),
+      TunnelTarget {
+        host: TEST_TARGET.0.to_string(),
+        port: TEST_TARGET.1,
+      },
+    )
+    .await
+    .unwrap();
+    select_one_through(&tunnel).await;
+  }
+
+  /// TLS through the tunnel: the config keeps the logical host for SNI while
+  /// TCP goes through the local forward.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_ssh_tls_require_through_tunnel() {
+    use crate::connectors::{Connector, LocalForward};
+    use crate::postgres::PostgresConnector;
+    use crate::profiles::{ConnectionProfile, ConnectorKind, Env, SslMode};
+
+    let Some(profile) = tunnel_from_env(TEST_KEY) else {
+      return;
+    };
+    let key = host_key(&profile).await;
+    let tunnel = SshTunnel::open(
+      &profile,
+      None,
+      Some(key),
+      TunnelTarget {
+        host: "postgres-tls".to_string(),
+        port: 5432,
+      },
+    )
+    .await
+    .unwrap();
+
+    let connection = PostgresConnector
+      .connect(
+        &ConnectionProfile {
+          id: String::new(),
+          name: String::new(),
+          env: Env::Dev,
+          kind: ConnectorKind::Postgres,
+          host: "postgres-tls".to_string(),
+          port: 5432,
+          database: "soquel_test".to_string(),
+          user: "soquel".to_string(),
+          ssl_mode: SslMode::Require,
+          tunnel_id: None,
+          group: None,
+        },
+        Some("soquel"),
+        Some(LocalForward {
+          port: tunnel.local_port,
+        }),
+      )
+      .await
+      .unwrap();
+    connection.health().await.unwrap();
+    connection.close().await.unwrap();
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_ssh_reconnects_after_sshd_restart() {
+    let Ok(addr) = std::env::var("SOQUEL_TEST_SSH_RECONNECT") else {
+      return;
+    };
+    let (host, port) = addr.split_once(':').expect("host:port");
+    let profile = TunnelProfile {
+      id: "test".to_string(),
+      name: "test".to_string(),
+      host: host.to_string(),
+      port: port.parse().unwrap(),
+      user: TEST_USER.to_string(),
+      auth: SshAuth::KeyFile {
+        path: TEST_KEY.to_string(),
+      },
+    };
+    let key = host_key(&profile).await;
+    let tunnel = SshTunnel::open(
+      &profile,
+      None,
+      Some(key),
+      TunnelTarget {
+        host: TEST_TARGET.0.to_string(),
+        port: TEST_TARGET.1,
+      },
+    )
+    .await
+    .unwrap();
+    select_one_through(&tunnel).await;
+
+    // Kill the SSH session server-side; the container (and its host key) survives.
+    let compose = concat!(env!("CARGO_MANIFEST_DIR"), "/../docker-compose.test.yml");
+    let status = std::process::Command::new("docker")
+      .args(["compose", "-f", compose, "restart", "sshd-reconnect"])
+      .status()
+      .expect("docker compose restart");
+    assert!(status.success());
+
+    // The dead session is only noticed at the next channel open: retry until
+    // the accept loop's reconnect-once path kicks in.
+    let mut recovered = false;
+    for _ in 0..30 {
+      tokio::time::sleep(Duration::from_millis(500)).await;
+      if try_select_through(&tunnel).await.is_ok() {
+        recovered = true;
+        break;
+      }
+    }
+    assert!(recovered, "tunnel never recovered after sshd restart");
   }
 
   #[tokio::test(flavor = "multi_thread")]

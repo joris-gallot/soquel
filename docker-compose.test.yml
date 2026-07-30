@@ -1,6 +1,7 @@
 # Test databases, one service per connector kind, seeded from scripts/test-seeds/.
 # Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459,
-# postgres-oldest 5460 (minimum supported major = oldest non-EOL; bump on postgres EOL dates).
+# postgres-oldest 5460 (minimum supported major = oldest non-EOL; bump on postgres EOL dates),
+# sshd-reconnect 5461.
 name: soquel-test
 
 services:
@@ -67,10 +68,29 @@ services:
       retries: 15
 
   # Bastion for tunnel tests: forwards to the postgres service over the compose network.
+  # tunnel = key-only; tunnelpw = password auth (set by the entrypoint.d script).
   sshd:
     image: panubo/sshd:1.5.0
     ports:
       - '5458:22'
+    environment:
+      SSH_USERS: tunnel:1000:1000,tunnelpw:1001:1001
+      SSH_ENABLE_PASSWORD_AUTH: 'true'
+      TCP_FORWARDING: 'true'
+    volumes:
+      - ./scripts/test-ssh/authorized_keys:/etc/authorized_keys/tunnel:ro
+      - ./scripts/test-ssh/set-password.sh:/etc/entrypoint.d/set-password.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, nc -z 127.0.0.1 22]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Dedicated to the reconnect test, which restarts it mid-run: nothing else may use it.
+  sshd-reconnect:
+    image: panubo/sshd:1.5.0
+    ports:
+      - '5461:22'
     environment:
       SSH_USERS: tunnel:1000:1000
       TCP_FORWARDING: 'true'

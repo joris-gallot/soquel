@@ -2,7 +2,7 @@
 import type { ExplainPlan, PlanNode } from '@/lib/explain'
 import { ChevronRight } from '@lucide/vue'
 import { computed, ref } from 'vue'
-import { flattenPlan, formatMs, formatRows } from '@/lib/explain'
+import { flattenPlan, formatMs, formatRows, hiddenByCollapse } from '@/lib/explain'
 import { highlightJson } from '@/lib/highlight'
 
 const props = defineProps<{ plans: ExplainPlan[], raw: string }>()
@@ -12,17 +12,9 @@ const collapsed = ref<Set<string>>(new Set())
 
 const rowsByPlan = computed(() =>
   props.plans.map(plan =>
-    flattenPlan(plan.root).filter(node => !hiddenByCollapse(node.id)),
+    flattenPlan(plan.root).filter(node => !hiddenByCollapse(node.id, collapsed.value)),
   ),
 )
-
-function hiddenByCollapse(id: string): boolean {
-  for (const ancestor of collapsed.value) {
-    if (id.startsWith(`${ancestor}.`))
-      return true
-  }
-  return false
-}
 
 function toggle(id: string) {
   const next = new Set(collapsed.value)

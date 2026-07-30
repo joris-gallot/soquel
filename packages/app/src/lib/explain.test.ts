@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { flattenPlan, formatMs, parseExplain } from '@/lib/explain'
+import costOnlyRaw from '@/lib/__fixtures__/explain-cost-only.json?raw'
+import joinSortRaw from '@/lib/__fixtures__/explain-join-sort.json?raw'
+import parallelRaw from '@/lib/__fixtures__/explain-parallel.json?raw'
+import subplanRaw from '@/lib/__fixtures__/explain-subplan.json?raw'
+import { flattenPlan, formatMs, hiddenByCollapse, parseExplain } from '@/lib/explain'
 
 function statementWith(json: unknown) {
   return {
@@ -134,6 +138,81 @@ describe('parseExplain', () => {
     })
     expect(plans).not.toBeNull()
     expect(plans![0].root.nodeType).toBe('Hash Join')
+  })
+})
+
+// Captured from the seeded test postgres (EXPLAIN ... FORMAT JSON via psql):
+// the real field names and shapes, not hand-written approximations.
+describe('parseExplain on real postgres output', () => {
+  // psql delivers the json pretty-printed: feed it line by line like the driver does.
+  function realStatement(raw: string) {
+    return {
+      columns: [{ name: 'QUERY PLAN', dataType: 'jsonb', kind: 'json' as const }],
+      rows: raw.trimEnd().split('\n').map(line => [line]),
+    }
+  }
+
+  function invariants(raw: string) {
+    const plans = parseExplain(realStatement(raw))
+    expect(plans).not.toBeNull()
+    const nodes = plans!.flatMap(plan => flattenPlan(plan.root))
+    const ids = new Set(nodes.map(node => node.id))
+    expect(ids.size).toBe(nodes.length)
+    for (const node of nodes) {
+      expect(node.heat).toBeGreaterThanOrEqual(0)
+      expect(node.heat).toBeLessThanOrEqual(1)
+      expect(node.exclusiveCost).toBeGreaterThanOrEqual(0)
+      if (node.exclusiveMs !== null) {
+        expect(Number.isFinite(node.exclusiveMs)).toBe(true)
+        expect(node.exclusiveMs).toBeGreaterThanOrEqual(0)
+      }
+    }
+    return { plans: plans!, nodes }
+  }
+
+  it('handles a join + aggregate + sort analyze plan', () => {
+    const { plans, nodes } = invariants(joinSortRaw)
+    expect(plans[0].analyzed).toBe(true)
+    expect(plans[0].executionMs).not.toBeNull()
+    expect(nodes.map(node => node.nodeType)).toContain('Hash Join')
+    // No VERBOSE: postgres omits Schema, targets are unqualified.
+    const scan = nodes.find(node => node.target === 'on orders o')
+    expect(scan).toBeDefined()
+  })
+
+  it('handles a parallel Gather plan', () => {
+    const { nodes } = invariants(parallelRaw)
+    const gather = nodes.find(node => node.nodeType === 'Gather')
+    expect(gather).toBeDefined()
+    expect(gather!.children.length).toBeGreaterThan(0)
+  })
+
+  it('handles CTE and InitPlan children', () => {
+    const { nodes } = invariants(subplanRaw)
+    expect(nodes.map(node => node.nodeType)).toContain('CTE Scan')
+    // The InitPlan rides along as a child: more nodes than the outer chain alone.
+    expect(nodes.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('handles a cost-only plan', () => {
+    const { plans, nodes } = invariants(costOnlyRaw)
+    expect(plans[0].analyzed).toBe(false)
+    expect(plans[0].executionMs).toBeNull()
+    expect(nodes.every(node => node.inclusiveMs === null)).toBe(true)
+    expect(plans[0].root.heat).toBeGreaterThan(0)
+  })
+})
+
+describe('hiddenByCollapse', () => {
+  it('hides descendants only, and never trips on sibling prefixes', () => {
+    const collapsed = new Set(['0.1'])
+    expect(hiddenByCollapse('0.1.0', collapsed)).toBe(true)
+    expect(hiddenByCollapse('0.1.0.2', collapsed)).toBe(true)
+    // The collapsed node itself stays visible.
+    expect(hiddenByCollapse('0.1', collapsed)).toBe(false)
+    // "0.10" shares the string prefix but is a sibling, not a child.
+    expect(hiddenByCollapse('0.10', collapsed)).toBe(false)
+    expect(hiddenByCollapse('0.0', new Set())).toBe(false)
   })
 })
 

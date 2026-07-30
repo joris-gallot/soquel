@@ -84,6 +84,16 @@ export function parseExplain(
   return plans.length > 0 ? plans : null
 }
 
+/// Ancestor check is a prefix check on the hierarchical ids; the collapsed
+/// node itself stays visible ("0.1" hides "0.1.0" but not "0.10").
+export function hiddenByCollapse(id: string, collapsed: ReadonlySet<string>): boolean {
+  for (const ancestor of collapsed) {
+    if (id.startsWith(`${ancestor}.`))
+      return true
+  }
+  return false
+}
+
 /// Pre-order flatten for flat rendering with indent guides.
 export function flattenPlan(root: PlanNode): PlanNode[] {
   const rows: PlanNode[] = []

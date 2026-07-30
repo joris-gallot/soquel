@@ -3,7 +3,7 @@ import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
 
-export const KINDS = ['postgres', 'mysql', 'sqlite'] as const satisfies readonly ConnectorKind[]
+export const KINDS = ['postgres', 'mysql', 'sqlite', 'redis'] as const satisfies readonly ConnectorKind[]
 
 export const KIND_META: Record<ConnectorKind, {
   label: string
@@ -14,6 +14,7 @@ export const KIND_META: Record<ConnectorKind, {
   postgres: { label: 'PostgreSQL', short: 'PG', defaultPort: 5432, protocols: ['postgres:', 'postgresql:'] },
   mysql: { label: 'MySQL', short: 'MySQL', defaultPort: 3306, protocols: ['mysql:'] },
   sqlite: { label: 'SQLite', short: 'SQLite', defaultPort: 0, protocols: [] },
+  redis: { label: 'Redis', short: 'Redis', defaultPort: 6379, protocols: ['redis:', 'rediss:'] },
 }
 
 /// What the form's engine select shows: MariaDB is a display entry riding the
@@ -23,6 +24,7 @@ export const ENGINE_CHOICES = [
   { id: 'mysql', label: 'MySQL', kind: 'mysql' },
   { id: 'mariadb', label: 'MariaDB', kind: 'mysql' },
   { id: 'sqlite', label: 'SQLite', kind: 'sqlite' },
+  { id: 'redis', label: 'Redis', kind: 'redis' },
 ] as const satisfies readonly { id: string, label: string, kind: ConnectorKind }[]
 
 export type EngineChoice = (typeof ENGINE_CHOICES)[number]['id']
@@ -42,6 +44,9 @@ export const ENV_BADGE_CLASSES: Record<Env, string> = {
 export function serverBadge(kind: ConnectorKind, version: string): { engine: string, version: string } {
   if (kind === 'mysql' && version.includes('MariaDB'))
     return { engine: 'MariaDB', version: version.split('-')[0] }
+  // Valkey announces itself through the redis kind ("8.0.1-valkey").
+  if (kind === 'redis' && version.includes('valkey'))
+    return { engine: 'Valkey', version: version.split('-')[0] }
   return { engine: KIND_META[kind].short, version: version.split(' ')[0] }
 }
 
@@ -65,12 +70,16 @@ export function portForKindChange(
 export function connectionTarget(params: ConnectorParams): string {
   if (params.kind === 'sqlite')
     return params.path
+  if (params.kind === 'redis')
+    return `${params.host}:${params.port}/${params.db}`
   return `${params.host}:${params.port}/${params.database}`
 }
 
 export function connectionDsn(params: ConnectorParams): string {
   if (params.kind === 'sqlite')
     return `sqlite://${params.path}`
+  if (params.kind === 'redis')
+    return `${params.tls ? 'rediss' : 'redis'}://${params.host}:${params.port}/${params.db}`
   return `${params.kind}://${params.user}@${params.host}:${params.port}/${params.database}`
 }
 
@@ -89,8 +98,10 @@ export const connectionSchema = z.object({
   group: z.string(),
   password: z.string(),
   path: z.string(),
+  dbIndex: z.coerce.number().int('DB index must be a whole number').min(0, 'DB index must be positive').catch(0),
+  tls: z.boolean(),
 }).superRefine((values, ctx) => {
-  // Server fields only apply to TCP kinds; sqlite needs the file path.
+  // Each kind validates its own shape; sqlite is a file, redis has no database/user.
   if (values.kind === 'sqlite') {
     if (values.path.trim() === '')
       ctx.addIssue({ code: 'custom', path: ['path'], message: 'Database file is required' })
@@ -100,6 +111,8 @@ export const connectionSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['host'], message: 'Host is required' })
   if (values.port < 1)
     ctx.addIssue({ code: 'custom', path: ['port'], message: 'Port is required' })
+  if (values.kind === 'redis')
+    return
   if (values.database === '')
     ctx.addIssue({ code: 'custom', path: ['database'], message: 'Database is required' })
   if (values.user === '')
@@ -121,16 +134,32 @@ export interface ConnectionFormValues {
   group: string
   password: string
   path: string
+  // Redis only: numeric database index and plain TLS toggle.
+  dbIndex: number | string
+  tls: boolean
 }
 
 export function toConnectionInput(values: z.output<typeof connectionSchema>): ConnectionInput {
-  if (values.kind === 'sqlite') {
+  const base = {
+    name: values.name,
+    env: values.env,
+    group: values.group.trim() === '' ? null : values.group.trim(),
+    password: values.password === '' ? null : values.password,
+  }
+  if (values.kind === 'sqlite')
+    return { ...base, password: null, params: { kind: 'sqlite', path: values.path.trim() } }
+  if (values.kind === 'redis') {
     return {
-      name: values.name,
-      env: values.env,
-      group: values.group.trim() === '' ? null : values.group.trim(),
-      password: null,
-      params: { kind: 'sqlite', path: values.path.trim() },
+      ...base,
+      params: {
+        kind: 'redis',
+        host: values.host,
+        port: values.port,
+        db: values.dbIndex,
+        username: values.user.trim() === '' ? null : values.user.trim(),
+        tls: values.tls,
+        tunnelId: values.tunnelId === NO_TUNNEL || values.tunnelId === '' ? null : values.tunnelId,
+      },
     }
   }
   const shared = {
@@ -146,10 +175,7 @@ export function toConnectionInput(values: z.output<typeof connectionSchema>): Co
     tunnelId: values.tunnelId === NO_TUNNEL || values.tunnelId === '' ? null : values.tunnelId,
   }
   return {
-    name: values.name,
-    env: values.env,
-    group: values.group.trim() === '' ? null : values.group.trim(),
-    password: values.password === '' ? null : values.password,
+    ...base,
     params: values.kind === 'postgres'
       ? { kind: 'postgres', ...shared }
       : { kind: 'mysql', ...shared },
@@ -166,21 +192,35 @@ export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFor
     group: profile.group ?? '',
     password: '',
   }
-  if (params.kind === 'sqlite') {
+  const defaults = {
+    host: 'localhost',
+    port: 0,
+    database: '',
+    user: '',
+    sslMode: 'prefer' as SslMode,
+    sslRootCert: '',
+    tunnelId: NO_TUNNEL,
+    path: '',
+    dbIndex: 0,
+    tls: false,
+  }
+  if (params.kind === 'sqlite')
+    return { ...base, ...defaults, path: params.path }
+  if (params.kind === 'redis') {
     return {
       ...base,
-      host: 'localhost',
-      port: 0,
-      database: '',
-      user: '',
-      sslMode: 'prefer',
-      sslRootCert: '',
-      tunnelId: NO_TUNNEL,
-      path: params.path,
+      ...defaults,
+      host: params.host,
+      port: params.port,
+      user: params.username ?? '',
+      dbIndex: params.db ?? 0,
+      tls: params.tls ?? false,
+      tunnelId: params.tunnelId ?? NO_TUNNEL,
     }
   }
   return {
     ...base,
+    ...defaults,
     host: params.host,
     port: params.port,
     database: params.database,
@@ -188,7 +228,6 @@ export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFor
     sslMode: params.sslMode ?? 'prefer',
     sslRootCert: params.sslRootCert ?? '',
     tunnelId: params.tunnelId ?? NO_TUNNEL,
-    path: '',
   }
 }
 
@@ -232,6 +271,12 @@ export function parseConnectionUrl(raw: string): Partial<ConnectionFormValues> |
     database: decodeURIComponent(url.pathname.replace(/^\//, '')),
     user: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
+  }
+  if (kind === 'redis') {
+    // The path is a numeric db index, not a database name.
+    parsed.database = ''
+    parsed.dbIndex = Number(url.pathname.replace(/^\//, '')) || 0
+    parsed.tls = url.protocol === 'rediss:'
   }
   const sslmode = url.searchParams.get('sslmode')
   if (sslmode && sslmode in URL_SSL_MODES)

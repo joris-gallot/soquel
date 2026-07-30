@@ -15,3 +15,9 @@ export const TEST_DBS = {
     password: 'soquel',
   },
 } as const
+
+export const TEST_REDIS = {
+  host: 'localhost',
+  port: '5457',
+  password: 'soquel',
+} as const

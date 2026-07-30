@@ -3,8 +3,9 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::connectors::{
-  connector_for, ApplyResult, Capability, Connection, LocalForward, QueryColumn, QueryResult,
-  RowsChunk, SchemaSnapshot, SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
+  connector_for, ApplyResult, Capability, Connection, KeyDetail, KeyScanPage, KvBrowse,
+  LocalForward, QueryColumn, QueryResult, RowsChunk, SchemaSnapshot, SqlQuery, SqlSession,
+  StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::export::{quote_ident, ExportFormat, ExportWriter};
@@ -23,10 +24,10 @@ async fn open_tunnel(
   state: &State<'_, AppState>,
   profile: &ConnectionProfile,
 ) -> Result<Option<(SshTunnel, LocalForward)>, Error> {
-  let Some(sql) = profile.params.sql_server() else {
+  let Some(remote) = profile.params.remote() else {
     return Ok(None);
   };
-  let Some(tunnel_id) = &sql.tunnel_id else {
+  let Some(tunnel_id) = remote.tunnel_id else {
     return Ok(None);
   };
   let tunnel = state.tunnels.lock().unwrap().get(tunnel_id)?;
@@ -43,8 +44,8 @@ async fn open_tunnel(
     secret.as_deref(),
     known_key,
     TunnelTarget {
-      host: sql.host.clone(),
-      port: sql.port,
+      host: remote.host.to_string(),
+      port: remote.port,
     },
   )
   .await?;
@@ -397,6 +398,84 @@ fn sql_surface(connection: &Arc<dyn Connection>) -> Result<&dyn SqlQuery, Error>
   })
 }
 
+fn kv_surface(connection: &Arc<dyn Connection>) -> Result<&dyn KvBrowse, Error> {
+  connection.kv().ok_or_else(|| Error::Unsupported {
+    message: "this connection does not browse keys".to_string(),
+  })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn scan_keys(
+  state: State<'_, AppState>,
+  id: String,
+  pattern: String,
+  cursor: Option<String>,
+  count: u32,
+) -> Result<KeyScanPage, Error> {
+  let connection = active(&state, &id).await?;
+  kv_surface(&connection)?
+    .scan_keys(&pattern, cursor.as_deref(), count)
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn key_detail(
+  state: State<'_, AppState>,
+  id: String,
+  key: String,
+) -> Result<KeyDetail, Error> {
+  let connection = active(&state, &id).await?;
+  kv_surface(&connection)?.key_detail(&key).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn kv_set_string(
+  state: State<'_, AppState>,
+  id: String,
+  key: String,
+  value: String,
+) -> Result<(), Error> {
+  let connection = active(&state, &id).await?;
+  kv_surface(&connection)?.set_string(&key, &value).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn kv_delete_key(
+  state: State<'_, AppState>,
+  id: String,
+  key: String,
+) -> Result<(), Error> {
+  let connection = active(&state, &id).await?;
+  kv_surface(&connection)?.delete_key(&key).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn kv_set_ttl(
+  state: State<'_, AppState>,
+  id: String,
+  key: String,
+  ttl_ms: Option<f64>,
+) -> Result<(), Error> {
+  let connection = active(&state, &id).await?;
+  kv_surface(&connection)?.set_ttl(&key, ttl_ms).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn kv_run_command(
+  state: State<'_, AppState>,
+  id: String,
+  command: String,
+) -> Result<Vec<String>, Error> {
+  let connection = active(&state, &id).await?;
+  kv_surface(&connection)?.run_command(&command).await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionProfile>, Error> {
@@ -499,12 +578,7 @@ pub fn delete_tunnel(state: State<'_, AppState>, id: String) -> Result<(), Error
     .unwrap()
     .list()
     .into_iter()
-    .filter(|p| {
-      p.params
-        .sql_server()
-        .and_then(|sql| sql.tunnel_id.as_deref())
-        == Some(id.as_str())
-    })
+    .filter(|p| p.params.remote().and_then(|remote| remote.tunnel_id) == Some(id.as_str()))
     .map(|p| p.name)
     .collect();
   if !used_by.is_empty() {

@@ -18,6 +18,7 @@ mod known_hosts;
 mod mysql;
 mod postgres;
 mod profiles;
+mod redis;
 mod secrets;
 mod sqlite;
 mod ssh;
@@ -68,6 +69,12 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::apply_table_changes,
       commands::schema_snapshot,
       commands::table_ddl,
+      commands::scan_keys,
+      commands::key_detail,
+      commands::kv_set_string,
+      commands::kv_delete_key,
+      commands::kv_set_ttl,
+      commands::kv_run_command,
       commands::open_sql_session,
       commands::run_session_query,
       commands::cancel_session_query,

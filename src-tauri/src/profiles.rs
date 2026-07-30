@@ -20,6 +20,7 @@ pub enum ConnectorKind {
   Postgres,
   Mysql,
   Sqlite,
+  Redis,
 }
 
 /// libpq semantics: `require` encrypts without verifying the certificate,
@@ -51,8 +52,24 @@ pub struct SqlServerParams {
   pub tunnel_id: Option<String>,
 }
 
-/// Per-kind connection parameters; future kinds bring their own shapes
-/// (sqlite: a file path, redis: host + db index).
+/// Redis speaks AUTH, not SQL: username is optional (ACL), the database is a
+/// numeric index, and TLS is a plain toggle (rediss://).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RedisParams {
+  pub host: String,
+  pub port: u16,
+  #[serde(default)]
+  pub db: u32,
+  #[serde(default)]
+  pub username: Option<String>,
+  #[serde(default)]
+  pub tls: bool,
+  #[serde(default)]
+  pub tunnel_id: Option<String>,
+}
+
+/// Per-kind connection parameters; future kinds bring their own shapes.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ConnectorParams {
@@ -62,6 +79,14 @@ pub enum ConnectorParams {
   Sqlite {
     path: String,
   },
+  Redis(RedisParams),
+}
+
+/// TCP endpoint a tunnel can forward to; kind-agnostic.
+pub struct RemoteEndpoint<'a> {
+  pub host: &'a str,
+  pub port: u16,
+  pub tunnel_id: Option<&'a str>,
 }
 
 impl ConnectorParams {
@@ -70,13 +95,31 @@ impl ConnectorParams {
       Self::Postgres(_) => ConnectorKind::Postgres,
       Self::Mysql(_) => ConnectorKind::Mysql,
       Self::Sqlite { .. } => ConnectorKind::Sqlite,
+      Self::Redis(_) => ConnectorKind::Redis,
     }
   }
 
-  /// TCP SQL server shape; None for file-backed kinds (sqlite).
+  /// TCP SQL server shape; None for other kinds.
   pub fn sql_server(&self) -> Option<&SqlServerParams> {
     match self {
       Self::Postgres(params) | Self::Mysql(params) => Some(params),
+      Self::Sqlite { .. } | Self::Redis(_) => None,
+    }
+  }
+
+  /// Where TCP goes (tunnel included); None for file-backed kinds.
+  pub fn remote(&self) -> Option<RemoteEndpoint<'_>> {
+    match self {
+      Self::Postgres(params) | Self::Mysql(params) => Some(RemoteEndpoint {
+        host: &params.host,
+        port: params.port,
+        tunnel_id: params.tunnel_id.as_deref(),
+      }),
+      Self::Redis(params) => Some(RemoteEndpoint {
+        host: &params.host,
+        port: params.port,
+        tunnel_id: params.tunnel_id.as_deref(),
+      }),
       Self::Sqlite { .. } => None,
     }
   }

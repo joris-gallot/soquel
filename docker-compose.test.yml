@@ -134,6 +134,17 @@ services:
       timeout: 3s
       retries: 15
 
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --requirepass, soquel]
+    ports:
+      - '5457:6379'
+    healthcheck:
+      test: [CMD-SHELL, redis-cli -a soquel ping | grep PONG]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
   # Bastion for tunnel tests: forwards to the postgres service over the compose network.
   # tunnel = key-only; tunnelpw = password auth (set by the entrypoint.d script).
   sshd:

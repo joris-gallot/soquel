@@ -10,6 +10,7 @@ echo "==> full suite (current versions)"
 SOQUEL_TEST_PG=postgres://soquel:soquel@localhost:5455/soquel_test \
 SOQUEL_TEST_PG_TLS=postgres://soquel:soquel@localhost:5459/soquel_test \
 SOQUEL_TEST_MYSQL=localhost:5456 \
+SOQUEL_TEST_REDIS=localhost:5457 \
 SOQUEL_TEST_SSH=localhost:5458 \
 SOQUEL_TEST_SSH_RECONNECT=localhost:5461 \
   cargo test --manifest-path "$manifest" integration_

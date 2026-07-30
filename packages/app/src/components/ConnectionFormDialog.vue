@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
 import { connectionSchema, ENGINE_CHOICES, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
@@ -52,7 +53,7 @@ function groupValue(): string {
 }
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', path: '' }
+  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', path: '', dbIndex: 0, tls: false }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -67,6 +68,9 @@ watch(engineChoice, (id) => {
 })
 
 const isSqlite = computed(() => values.value.kind === 'sqlite')
+const isRedis = computed(() => values.value.kind === 'redis')
+// postgres/mysql: the full server shape (database, user, ssl).
+const isSqlServer = computed(() => !isSqlite.value && !isRedis.value)
 
 async function browsePath() {
   const selected = await openFileDialog({
@@ -184,7 +188,7 @@ async function save() {
           <Input
             v-model="importUrl"
             data-testid="import-url"
-            placeholder="paste a postgres:// or mysql:// url to prefill"
+            placeholder="paste a postgres://, mysql:// or redis:// url to prefill"
             class="font-mono text-xs"
           />
           <Button type="button" variant="secondary" :disabled="!importUrl" @click="applyUrl">
@@ -265,7 +269,7 @@ async function save() {
           </div>
         </div>
 
-        <div v-if="!isSqlite" class="grid grid-cols-[1fr_8rem] gap-3">
+        <div v-if="isSqlServer" class="grid grid-cols-[1fr_8rem] gap-3">
           <div class="space-y-1.5">
             <Label for="conn-database">Database</Label>
             <Input id="conn-database" v-model="values.database" data-testid="field-database" class="font-mono" />
@@ -288,6 +292,20 @@ async function save() {
           </div>
         </div>
 
+        <div v-if="isRedis" class="grid grid-cols-[8rem_1fr] items-end gap-3">
+          <div class="space-y-1.5">
+            <Label for="conn-db-index">DB index</Label>
+            <Input id="conn-db-index" v-model="values.dbIndex" data-testid="field-db-index" type="number" min="0" class="font-mono" />
+            <p v-if="errors.dbIndex" class="text-xs text-destructive">
+              {{ errors.dbIndex }}
+            </p>
+          </div>
+          <div class="flex items-center gap-2 pb-2">
+            <Switch id="conn-tls" v-model="values.tls" data-testid="field-tls" />
+            <Label for="conn-tls" class="cursor-pointer">TLS (rediss)</Label>
+          </div>
+        </div>
+
         <div v-if="values.sslMode === 'verify-full'" class="space-y-1.5">
           <Label for="conn-ssl-root-cert">CA certificate</Label>
           <Input
@@ -302,7 +320,13 @@ async function save() {
         <div v-if="!isSqlite" class="grid grid-cols-2 gap-3">
           <div class="space-y-1.5">
             <Label for="conn-user">User</Label>
-            <Input id="conn-user" v-model="values.user" data-testid="field-user" class="font-mono" />
+            <Input
+              id="conn-user"
+              v-model="values.user"
+              data-testid="field-user"
+              class="font-mono"
+              :placeholder="isRedis ? 'default (ACL user, optional)' : ''"
+            />
             <p v-if="errors.user" class="text-xs text-destructive">
               {{ errors.user }}
             </p>

@@ -79,7 +79,7 @@ describe('parseConnectionUrl', () => {
   })
 
   it('rejects other protocols', () => {
-    expect(parseConnectionUrl('redis://u:p@h:6379/0')).toBeNull()
+    expect(parseConnectionUrl('mongodb://u:p@h:27017/app')).toBeNull()
   })
 
   it('rejects garbage', () => {
@@ -178,6 +178,8 @@ describe('connectionSchema', () => {
     group: '',
     password: '',
     path: '',
+    dbIndex: 0,
+    tls: false,
   }
 
   it('coerces the port from a text input', () => {
@@ -283,5 +285,56 @@ describe('sqlite profiles', () => {
     // Out of sqlite: whatever was left behind never counts as hand-set.
     expect(portForKindChange(0, 'sqlite', 'mysql')).toBe(3306)
     expect(portForKindChange(5432, 'sqlite', 'postgres')).toBe(5432)
+  })
+})
+
+describe('redis profiles', () => {
+  const stored: ConnectionProfile = {
+    id: 'c-3',
+    name: 'cache',
+    env: 'dev',
+    group: null,
+    params: { kind: 'redis', host: 'cache.internal', port: 6380, db: 2, username: 'app', tls: true, tunnelId: 't-1' },
+  }
+
+  it('validates on host and port alone', () => {
+    const values = { ...formValuesFromProfile(stored), password: 's3cret' }
+    const input = toConnectionInput(connectionSchema.parse(values))
+    expect(input.params).toEqual(stored.params)
+    expect(input.password).toBe('s3cret')
+
+    const noUser = connectionSchema.safeParse({ ...values, user: '' })
+    expect(noUser.success).toBe(true)
+    const noHost = connectionSchema.safeParse({ ...values, host: '' })
+    expect(noHost.success).toBe(false)
+    if (!noHost.success)
+      expect(zodFieldErrors(noHost.error).host).toBe('Host is required')
+  })
+
+  it('turns a blank user into a null acl username', () => {
+    const values = { ...formValuesFromProfile(stored), user: ' ' }
+    expect(toConnectionInput(connectionSchema.parse(values)).params).toMatchObject({ username: null })
+  })
+
+  it('parses redis:// urls with the db index in the path', () => {
+    expect(parseConnectionUrl('redis://app:pw@cache.internal:6380/2')).toMatchObject({
+      kind: 'redis',
+      host: 'cache.internal',
+      port: 6380,
+      dbIndex: 2,
+      user: 'app',
+      password: 'pw',
+      tls: false,
+      database: '',
+    })
+    expect(parseConnectionUrl('rediss://u@h/0')).toMatchObject({ tls: true, dbIndex: 0 })
+    expect(parseConnectionUrl('redis://h')).toMatchObject({ port: 6379, dbIndex: 0 })
+  })
+
+  it('renders identity lines and badges, valkey included', () => {
+    expect(connectionTarget(stored.params)).toBe('cache.internal:6380/2')
+    expect(connectionDsn(stored.params)).toBe('rediss://cache.internal:6380/2')
+    expect(serverBadge('redis', '7.4.1')).toEqual({ engine: 'Redis', version: '7.4.1' })
+    expect(serverBadge('redis', '8.0.1-valkey')).toEqual({ engine: 'Valkey', version: '8.0.1' })
   })
 })

@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import type { ColumnFilter, TableInfo } from '@/lib/bindings'
+import type { Capability, ColumnFilter, TableInfo } from '@/lib/bindings'
 import type { WorkspaceTab } from '@/lib/tabs'
-import { ArrowLeft, Plus, RefreshCw, SquareTerminal, Table2, Unplug, X } from '@lucide/vue'
+import { ArrowLeft, KeyRound, Plus, RefreshCw, SquareTerminal, Table2, Unplug, X } from '@lucide/vue'
 import { useEventListener } from '@vueuse/core'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, useTemplateRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import KeyDetailPanel from '@/components/KeyDetailPanel.vue'
+import KeyList from '@/components/KeyList.vue'
+import RedisConsolePanel from '@/components/RedisConsolePanel.vue'
 import SchemaTree from '@/components/SchemaTree.vue'
 import SqlEditorPanel from '@/components/SqlEditorPanel.vue'
 import TableGrid from '@/components/TableGrid.vue'
@@ -31,6 +34,17 @@ const sessions = useSqlSessions()
 
 const id = computed(() => String(route.params.id))
 const profile = computed(() => connections.value.find(p => p.id === id.value))
+// The UI branches on capabilities, never on the kind itself.
+const capabilities = ref<Capability[]>([])
+const isKv = computed(() => capabilities.value.includes('kv-browse'))
+const selectedKey = ref<string | null>(null)
+const kvView = ref<'key' | 'console'>('key')
+const keyList = useTemplateRef('keyList')
+
+function onKeyDeleted() {
+  selectedKey.value = null
+  keyList.value?.refresh()
+}
 const snapshot = computed(() => snapshots.value[id.value])
 const filter = ref('')
 const serverVersion = ref<string | null>(null)
@@ -43,7 +57,7 @@ const versionBadge = computed(() => {
 // sqlite's schema namespace is always "main"; servers use the profile database.
 const database = computed(() => {
   const params = profile.value?.params
-  if (!params)
+  if (!params || params.kind === 'redis')
     return ''
   return params.kind === 'sqlite' ? 'main' : params.database
 })
@@ -77,9 +91,9 @@ function closeTab(tab: WorkspaceTab) {
   tabs.close(tab.id)
 }
 
-// Tab shortcuts: new sql, close, cycle.
+// Tab shortcuts: new sql, close, cycle. No tabs on the kv surface.
 useEventListener('keydown', (event) => {
-  if (!event.ctrlKey || event.defaultPrevented)
+  if (!event.ctrlKey || event.defaultPrevented || isKv.value)
     return
   if (event.key === 't') {
     event.preventDefault()
@@ -102,10 +116,12 @@ onMounted(async () => {
     return
   }
   try {
+    capabilities.value = unwrap(await commands.connectorCapabilities(profile.value.params.kind))
     if (!activeIds.value.has(id.value))
       await connect(id.value)
     serverVersion.value = unwrap(await commands.serverVersion(id.value))
-    await load(id.value)
+    if (!isKv.value)
+      await load(id.value)
   }
   catch (error) {
     toast.error(error instanceof Error ? error.message : String(error))
@@ -184,7 +200,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           >
             {{ versionBadge.engine }} {{ versionBadge.version }}
           </Badge>
-          <Tooltip>
+          <Tooltip v-if="!isKv">
             <TooltipTrigger as-child>
               <Button
                 size="icon-sm"
@@ -208,21 +224,67 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
             <TooltipContent>Disconnect</TooltipContent>
           </Tooltip>
         </header>
-        <div class="px-2 py-2">
-          <Input v-model="filter" placeholder="filter tables" class="h-7 font-mono text-xs" data-testid="tree-filter" />
-        </div>
-        <ScrollArea class="min-h-0 flex-1">
-          <SchemaTree v-if="snapshot" :snapshot="snapshot" :filter="filter" @select="selectTable" />
-          <p v-else class="px-4 py-6 font-mono text-xs text-muted-foreground">
-            loading schema…
-          </p>
-        </ScrollArea>
+        <KeyList
+          v-if="isKv"
+          ref="keyList"
+          :connection-id="id"
+          :selected="selectedKey"
+          @select="key => { selectedKey = key; kvView = 'key' }"
+        />
+        <template v-else>
+          <div class="px-2 py-2">
+            <Input v-model="filter" placeholder="filter tables" class="h-7 font-mono text-xs" data-testid="tree-filter" />
+          </div>
+          <ScrollArea class="min-h-0 flex-1">
+            <SchemaTree v-if="snapshot" :snapshot="snapshot" :filter="filter" @select="selectTable" />
+            <p v-else class="px-4 py-6 font-mono text-xs text-muted-foreground">
+              loading schema…
+            </p>
+          </ScrollArea>
+        </template>
       </aside>
     </ResizablePanel>
 
     <ResizableHandle with-handle />
 
-    <ResizablePanel id="workspace-main" class="flex min-w-0 flex-col">
+    <ResizablePanel v-if="isKv" id="workspace-main" class="flex min-w-0 flex-col">
+      <header class="flex items-center gap-0.5 border-b px-1.5 py-1 font-mono text-xs text-muted-foreground">
+        <button
+          type="button"
+          class="flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5"
+          :class="kvView === 'key' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground'"
+          data-testid="kv-view-key"
+          @click="kvView = 'key'"
+        >
+          <KeyRound class="size-3 opacity-60" />
+          key
+        </button>
+        <button
+          type="button"
+          class="flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5"
+          :class="kvView === 'console' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground'"
+          data-testid="kv-view-console"
+          @click="kvView = 'console'"
+        >
+          <SquareTerminal class="size-3 opacity-60" />
+          console
+        </button>
+      </header>
+      <KeyDetailPanel
+        v-show="kvView === 'key'"
+        :connection-id="id"
+        :key-name="selectedKey"
+        @deleted="onKeyDeleted"
+        @changed="keyList?.refresh()"
+      />
+      <RedisConsolePanel
+        v-show="kvView === 'console'"
+        :connection-id="id"
+        @ran="keyList?.refresh()"
+      />
+    </ResizablePanel>
+
+    <ResizablePanel v-else id="workspace-main" class="flex min-w-0 flex-col">
       <header class="flex items-center border-b font-mono text-xs text-muted-foreground">
         <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-1.5 py-1" data-testid="tab-bar">
           <button

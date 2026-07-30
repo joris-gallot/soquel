@@ -34,6 +34,12 @@ export const commands = {
 	applyTableChanges: (id: string, changes: TableChanges) => typedError<ApplyResult, Error>(__TAURI_INVOKE("apply_table_changes", { id, changes })),
 	schemaSnapshot: (id: string) => typedError<SchemaSnapshot, Error>(__TAURI_INVOKE("schema_snapshot", { id })),
 	tableDdl: (id: string, schema: string, table: string) => typedError<string, Error>(__TAURI_INVOKE("table_ddl", { id, schema, table })),
+	scanKeys: (id: string, pattern: string, cursor: string | null, count: number) => typedError<KeyScanPage, Error>(__TAURI_INVOKE("scan_keys", { id, pattern, cursor, count })),
+	keyDetail: (id: string, key: string) => typedError<KeyDetail, Error>(__TAURI_INVOKE("key_detail", { id, key })),
+	kvSetString: (id: string, key: string, value: string) => typedError<null, Error>(__TAURI_INVOKE("kv_set_string", { id, key, value })),
+	kvDeleteKey: (id: string, key: string) => typedError<null, Error>(__TAURI_INVOKE("kv_delete_key", { id, key })),
+	kvSetTtl: (id: string, key: string, ttlMs: number | null) => typedError<null, Error>(__TAURI_INVOKE("kv_set_ttl", { id, key, ttlMs })),
+	kvRunCommand: (id: string, command: string) => typedError<string[], Error>(__TAURI_INVOKE("kv_run_command", { id, command })),
 	openSqlSession: (connectionId: string) => typedError<string, Error>(__TAURI_INVOKE("open_sql_session", { connectionId })),
 	runSessionQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_session_query", { id, sql })),
 	cancelSessionQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_session_query", { id })),
@@ -105,17 +111,16 @@ export type ConnectionProfile = {
 	params: ConnectorParams,
 };
 
-export type ConnectorKind = "postgres" | "mysql" | "sqlite";
+export type ConnectorKind = "postgres" | "mysql" | "sqlite" | "redis";
 
-/**
- *  Per-kind connection parameters; future kinds bring their own shapes
- *  (sqlite: a file path, redis: host + db index).
- */
+/**  Per-kind connection parameters; future kinds bring their own shapes. */
 export type ConnectorParams = {
 	kind: "postgres",
 } & SqlServerParams | {
 	kind: "mysql",
-} & SqlServerParams | { kind: "sqlite"; path: string };
+} & SqlServerParams | { kind: "sqlite"; path: string } | {
+	kind: "redis",
+} & RedisParams;
 
 export type Env = "dev" | "staging" | "prod";
 
@@ -138,11 +143,42 @@ export type ForeignKeyInfo = {
 	referencedColumns: string[],
 };
 
+export type HashField = {
+	field: string,
+	value: string,
+};
+
 export type IndexInfo = {
 	name: string,
 	definition: string,
 	unique: boolean,
 };
+
+export type KeyDetail = {
+	key: string,
+	/**  Milliseconds to expiry; None = no expiry. */
+	ttlMs: number | null,
+	/**  Full collection length (bytes for strings); entries hold a bounded sample. */
+	size: number | null,
+	value: KeyValue,
+};
+
+export type KeyEntry = {
+	key: string,
+	kind: KeyKind,
+	/**  Milliseconds to expiry; None = no expiry. */
+	ttlMs: number | null,
+};
+
+export type KeyKind = "string" | "list" | "set" | "zset" | "hash" | "stream" | "other";
+
+export type KeyScanPage = {
+	keys: KeyEntry[],
+	/**  Opaque continuation cursor; None when the iteration completed. */
+	cursor: string | null,
+};
+
+export type KeyValue = { kind: "string"; value: string } | { kind: "list"; entries: string[] } | { kind: "set"; entries: string[] } | { kind: "zset"; entries: ZsetMember[] } | { kind: "hash"; entries: HashField[] } | { kind: "stream"; entries: StreamEntry[] } | { kind: "other"; typeName: string };
 
 export type QueryColumn = {
 	name: string,
@@ -155,6 +191,19 @@ export type QueryResult = {
 	statements: StatementResult[],
 	notices: ServerNotice[],
 	durationMs: number | null,
+};
+
+/**
+ *  Redis speaks AUTH, not SQL: username is optional (ACL), the database is a
+ *  numeric index, and TLS is a plain toggle (rediss://).
+ */
+export type RedisParams = {
+	host: string,
+	port: number,
+	db?: number,
+	username?: string | null,
+	tls?: boolean,
+	tunnelId?: string | null,
 };
 
 export type RowDelete = {
@@ -226,6 +275,11 @@ export type StatementResult = {
 	rowsAffected: number | null,
 };
 
+export type StreamEntry = {
+	id: string,
+	fields: HashField[],
+};
+
 export type StreamSummary = {
 	rows: number | null,
 	durationMs: number | null,
@@ -287,6 +341,11 @@ export type TunnelProfile = {
 	port: number,
 	user: string,
 	auth: SshAuth,
+};
+
+export type ZsetMember = {
+	member: string,
+	score: number | null,
 };
 
 /* Tauri Specta runtime */

@@ -57,6 +57,7 @@ const KIND_ROW_IDENTITY: Record<ConnectorKind, { rescue: string | null, xmin: bo
   postgres: { rescue: 'ctid', xmin: true },
   mysql: { rescue: null, xmin: false },
   sqlite: { rescue: 'rowid', xmin: false },
+  redis: { rescue: null, xmin: false },
 }
 const rowIdentity = computed(() => KIND_ROW_IDENTITY[props.kind])
 

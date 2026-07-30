@@ -5,6 +5,7 @@ use crate::error::Error;
 use crate::mysql::MysqlConnector;
 use crate::postgres::PostgresConnector;
 use crate::profiles::{ConnectionProfile, ConnectorKind};
+use crate::redis::RedisConnector;
 use crate::sqlite::SqliteConnector;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
@@ -12,8 +13,6 @@ use crate::sqlite::SqliteConnector;
 pub enum Capability {
   SqlQuery,
   Introspection,
-  // Constructed once the Redis connector lands.
-  #[allow(dead_code)]
   KvBrowse,
 }
 
@@ -281,6 +280,101 @@ pub trait Introspect: Send + Sync {
   async fn table_ddl(&self, schema: &str, table: &str) -> Result<String, Error>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyKind {
+  String,
+  List,
+  Set,
+  Zset,
+  Hash,
+  Stream,
+  Other,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyEntry {
+  pub key: String,
+  pub kind: KeyKind,
+  /// Milliseconds to expiry; None = no expiry.
+  pub ttl_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyScanPage {
+  pub keys: Vec<KeyEntry>,
+  /// Opaque continuation cursor; None when the iteration completed.
+  pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ZsetMember {
+  pub member: String,
+  pub score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HashField {
+  pub field: String,
+  pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamEntry {
+  pub id: String,
+  pub fields: Vec<HashField>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+  tag = "kind",
+  rename_all = "kebab-case",
+  rename_all_fields = "camelCase"
+)]
+pub enum KeyValue {
+  String { value: String },
+  List { entries: Vec<String> },
+  Set { entries: Vec<String> },
+  Zset { entries: Vec<ZsetMember> },
+  Hash { entries: Vec<HashField> },
+  Stream { entries: Vec<StreamEntry> },
+  Other { type_name: String },
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyDetail {
+  pub key: String,
+  /// Milliseconds to expiry; None = no expiry.
+  pub ttl_ms: Option<f64>,
+  /// Full collection length (bytes for strings); entries hold a bounded sample.
+  pub size: f64,
+  pub value: KeyValue,
+}
+
+/// Key-value capability surface, mirroring `Capability::KvBrowse`.
+#[async_trait::async_trait]
+pub trait KvBrowse: Send + Sync {
+  async fn scan_keys(
+    &self,
+    pattern: &str,
+    cursor: Option<&str>,
+    count: u32,
+  ) -> Result<KeyScanPage, Error>;
+  async fn key_detail(&self, key: &str) -> Result<KeyDetail, Error>;
+  async fn set_string(&self, key: &str, value: &str) -> Result<(), Error>;
+  async fn delete_key(&self, key: &str) -> Result<(), Error>;
+  /// None clears the expiry (PERSIST).
+  async fn set_ttl(&self, key: &str, ttl_ms: Option<f64>) -> Result<(), Error>;
+  /// One console command; the reply rendered as display lines.
+  async fn run_command(&self, command: &str) -> Result<Vec<String>, Error>;
+}
+
 /// A live connection to a database, produced by a `Connector`.
 #[async_trait::async_trait]
 pub trait Connection: Send + Sync {
@@ -294,6 +388,9 @@ pub trait Connection: Send + Sync {
     None
   }
   fn introspect(&self) -> Option<&dyn Introspect> {
+    None
+  }
+  fn kv(&self) -> Option<&dyn KvBrowse> {
     None
   }
 }
@@ -386,6 +483,7 @@ pub fn connector_for(kind: ConnectorKind) -> &'static dyn Connector {
     ConnectorKind::Postgres => &PostgresConnector,
     ConnectorKind::Mysql => &MysqlConnector,
     ConnectorKind::Sqlite => &SqliteConnector,
+    ConnectorKind::Redis => &RedisConnector,
   }
 }
 
@@ -407,5 +505,13 @@ mod tests {
     assert!(caps.contains(&Capability::SqlQuery));
     assert!(caps.contains(&Capability::Introspection));
     assert!(!caps.contains(&Capability::KvBrowse));
+  }
+
+  #[test]
+  fn redis_declares_kv_only() {
+    let caps = connector_for(ConnectorKind::Redis).capabilities();
+    assert!(caps.contains(&Capability::KvBrowse));
+    assert!(!caps.contains(&Capability::SqlQuery));
+    assert!(!caps.contains(&Capability::Introspection));
   }
 }

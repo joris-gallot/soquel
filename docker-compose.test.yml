@@ -1,5 +1,6 @@
 # Test databases, one service per connector kind, seeded from scripts/test-seeds/.
-# Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459.
+# Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459,
+# postgres-oldest 5460 (minimum supported major = oldest non-EOL; bump on postgres EOL dates).
 name: soquel-test
 
 services:
@@ -16,6 +17,25 @@ services:
     # Throwaway data: fresh seed on every up.
     tmpfs:
       - /var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U soquel -d soquel_test]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Oldest supported major, same seed: the whole integration suite runs against it too.
+  postgres-oldest:
+    image: postgres:14-alpine
+    ports:
+      - '5460:5432'
+    environment:
+      POSTGRES_USER: soquel
+      POSTGRES_PASSWORD: soquel
+      POSTGRES_DB: soquel_test
+    volumes:
+      - ./scripts/test-seeds/postgres.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    tmpfs:
+      - /var/lib/postgresql/data
     healthcheck:
       test: [CMD-SHELL, pg_isready -U soquel -d soquel_test]
       interval: 2s

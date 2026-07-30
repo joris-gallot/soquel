@@ -82,7 +82,7 @@ async function copyResult(format: ExportFormat) {
   if (!statement)
     return
   try {
-    const text = unwrap(await commands.formatStatement(statement.columns, statement.rows, format, 'results'))
+    const text = unwrap(await commands.formatStatement(statement.columns, statement.rows, format, props.kind, 'results'))
     await copy(text)
     toast.success(`copied ${statement.rows.length} row${statement.rows.length === 1 ? '' : 's'} as ${EXPORT_FORMATS[format].label}`)
   }
@@ -99,7 +99,7 @@ async function saveResult(format: ExportFormat) {
   if (path === null)
     return
   try {
-    unwrap(await commands.exportStatement(statement.columns, statement.rows, format, 'results', path))
+    unwrap(await commands.exportStatement(statement.columns, statement.rows, format, props.kind, 'results', path))
     toast.success(`exported ${statement.rows.length} row${statement.rows.length === 1 ? '' : 's'} to ${path}`)
   }
   catch (caught) {

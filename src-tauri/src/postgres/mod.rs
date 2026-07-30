@@ -1744,6 +1744,7 @@ pub mod tests {
     let out = Arc::new(Mutex::new(ChunkSink::new(
       Vec::<u8>::new(),
       ExportFormat::Csv,
+      crate::profiles::ConnectorKind::Postgres,
       String::new(),
     )));
     let sink = out.clone();

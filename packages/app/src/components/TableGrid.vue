@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ColumnFilter, ConnectorKind, ExportFormat, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
+import type { ColumnFilter, ConnectorKind, ExportFormat, ExportProgress, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
 import type { StagedChanges } from '@/lib/staged'
 import { ArrowDown, ArrowUp, ArrowUpRight, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { Channel } from '@tauri-apps/api/core'
@@ -466,7 +466,7 @@ async function copyRows(format: ExportFormat) {
   const exportColumns = displayColumns.value.map(({ column }) => column)
   const exportRows = rows.value.map(row => displayColumns.value.map(({ index }) => row[index] ?? null))
   try {
-    const text = unwrap(await commands.formatStatement(exportColumns, exportRows, format, props.table.name))
+    const text = unwrap(await commands.formatStatement(exportColumns, exportRows, format, props.kind, props.table.name))
     await copy(text)
     toast.success(`copied ${exportRows.length} row${exportRows.length === 1 ? '' : 's'} as ${EXPORT_FORMATS[format].label}`)
   }
@@ -475,10 +475,19 @@ async function copyRows(format: ExportFormat) {
   }
 }
 
+const exportedRows = ref<number | null>(null)
+let cancelingExport = false
+
 async function saveRows(format: ExportFormat) {
   const path = await pickExportPath(format, props.table.name)
   if (path === null)
     return
+  const progress = new Channel<ExportProgress>()
+  progress.onmessage = (event) => {
+    exportedRows.value = event.rows
+  }
+  exportedRows.value = 0
+  cancelingExport = false
   try {
     const summary = unwrap(await commands.exportTableRows(props.connectionId, {
       schema: props.schema,
@@ -488,11 +497,29 @@ async function saveRows(format: ExportFormat) {
       sort: sort.value,
       filters: filters.value,
       includeCtid: false,
-    }, format, path))
+    }, format, path, progress))
     toast.success(`exported ${summary.rows} row${summary.rows === 1 ? '' : 's'} to ${path}`)
   }
   catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+    // The partial file is already gone server-side.
+    if (cancelingExport)
+      toast.info('export canceled')
+    else
+      toast.error(error instanceof Error ? error.message : String(error))
+  }
+  finally {
+    exportedRows.value = null
+    cancelingExport = false
+  }
+}
+
+async function cancelExport() {
+  cancelingExport = true
+  try {
+    unwrap(await commands.cancelQuery(props.connectionId))
+  }
+  catch {
+    // The export may have finished in the meantime; the export call reports.
   }
 }
 
@@ -864,9 +891,23 @@ useEventListener('keydown', (event) => {
             </Button>
           </template>
         </template>
+        <template v-if="exportedRows !== null">
+          <span class="text-muted-foreground" data-testid="export-progress">
+            exporting… {{ formatEstimatedRows(exportedRows) }} rows
+          </span>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Cancel export"
+            data-testid="cancel-export"
+            @click="cancelExport"
+          >
+            <X />
+          </Button>
+        </template>
         <ExportMenu
           v-if="gridView === 'data'"
-          :disabled="rows.length === 0"
+          :disabled="rows.length === 0 || exportedRows !== null"
           @copy="copyRows"
           @save="saveRows"
         />

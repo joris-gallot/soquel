@@ -6,6 +6,7 @@ use serde::Deserialize;
 use specta::Type;
 
 use crate::connectors::{ColumnKind, QueryColumn, RowsChunk};
+use crate::profiles::ConnectorKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
 #[serde(rename_all = "kebab-case")]
@@ -18,6 +19,8 @@ pub enum ExportFormat {
 
 pub struct ExportWriter<W: Write> {
   format: ExportFormat,
+  /// Drives ident quoting and literal escaping for SQL inserts.
+  kind: ConnectorKind,
   columns: Vec<QueryColumn>,
   /// Quoted target for SQL inserts, e.g. `"public"."users"`.
   table: String,
@@ -29,6 +32,7 @@ impl<W: Write> ExportWriter<W> {
   pub fn new(
     mut out: W,
     format: ExportFormat,
+    kind: ConnectorKind,
     columns: Vec<QueryColumn>,
     table: String,
   ) -> std::io::Result<Self> {
@@ -55,6 +59,7 @@ impl<W: Write> ExportWriter<W> {
     }
     Ok(Self {
       format,
+      kind,
       columns,
       table,
       out,
@@ -93,14 +98,14 @@ impl<W: Write> ExportWriter<W> {
         let names = self
           .columns
           .iter()
-          .map(|column| quote_ident(&column.name))
+          .map(|column| quote_ident(self.kind, &column.name))
           .collect::<Vec<_>>()
           .join(", ");
         let values = row
           .iter()
           .map(|value| match value {
             None => "NULL".to_string(),
-            Some(value) => sql_literal(value),
+            Some(value) => sql_literal(self.kind, value),
           })
           .collect::<Vec<_>>()
           .join(", ");
@@ -137,6 +142,7 @@ impl<W: Write> ExportWriter<W> {
 /// the stream callback can abort and the command surface the error.
 pub struct ChunkSink<W: Write> {
   format: ExportFormat,
+  kind: ConnectorKind,
   table: String,
   out: Option<W>,
   writer: Option<ExportWriter<W>>,
@@ -144,14 +150,20 @@ pub struct ChunkSink<W: Write> {
 }
 
 impl<W: Write> ChunkSink<W> {
-  pub fn new(out: W, format: ExportFormat, table: String) -> Self {
+  pub fn new(out: W, format: ExportFormat, kind: ConnectorKind, table: String) -> Self {
     Self {
       format,
+      kind,
       table,
       out: Some(out),
       writer: None,
       error: None,
     }
+  }
+
+  /// Rows written so far, for progress reporting.
+  pub fn rows(&self) -> u64 {
+    self.writer.as_ref().map_or(0, |writer| writer.rows)
   }
 
   pub fn push(&mut self, chunk: RowsChunk) -> bool {
@@ -169,6 +181,7 @@ impl<W: Write> ChunkSink<W> {
       self.writer = Some(ExportWriter::new(
         out,
         self.format,
+        self.kind,
         columns,
         self.table.clone(),
       )?);
@@ -188,8 +201,11 @@ impl<W: Write> ChunkSink<W> {
   }
 }
 
-pub fn quote_ident(ident: &str) -> String {
-  format!("\"{}\"", ident.replace('"', "\"\""))
+pub fn quote_ident(kind: ConnectorKind, ident: &str) -> String {
+  match kind {
+    ConnectorKind::Postgres => format!("\"{}\"", ident.replace('"', "\"\"")),
+    ConnectorKind::Mysql => format!("`{}`", ident.replace('`', "``")),
+  }
 }
 
 fn csv_field(value: &str) -> String {
@@ -200,8 +216,15 @@ fn csv_field(value: &str) -> String {
   }
 }
 
-fn sql_literal(value: &str) -> String {
-  format!("'{}'", value.replace('\'', "''"))
+fn sql_literal(kind: ConnectorKind, value: &str) -> String {
+  match kind {
+    // standard_conforming_strings: backslashes are literal in postgres.
+    ConnectorKind::Postgres => format!("'{}'", value.replace('\'', "''")),
+    // mysql treats backslash as an escape character inside strings.
+    ConnectorKind::Mysql => {
+      format!("'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
+    }
+  }
 }
 
 fn markdown_cell(value: &str) -> String {
@@ -275,14 +298,24 @@ mod tests {
     columns: Vec<QueryColumn>,
     rows: &[Vec<Option<String>>],
   ) -> String {
-    let mut out = Vec::new();
-    let mut writer = ExportWriter::new(
-      &mut out,
+    render_as(
+      ConnectorKind::Postgres,
+      "\"public\".\"users\"",
       format,
       columns,
-      "\"public\".\"users\"".to_string(),
+      rows,
     )
-    .unwrap();
+  }
+
+  fn render_as(
+    kind: ConnectorKind,
+    table: &str,
+    format: ExportFormat,
+    columns: Vec<QueryColumn>,
+    rows: &[Vec<Option<String>>],
+  ) -> String {
+    let mut out = Vec::new();
+    let mut writer = ExportWriter::new(&mut out, format, kind, columns, table.to_string()).unwrap();
     for row in rows {
       writer.row(row).unwrap();
     }
@@ -357,6 +390,25 @@ mod tests {
   }
 
   #[test]
+  fn sql_inserts_follow_the_mysql_dialect() {
+    let out = render_as(
+      ConnectorKind::Mysql,
+      "`app`.`users`",
+      ExportFormat::Sql,
+      vec![
+        column("na`me", ColumnKind::Text),
+        column("note", ColumnKind::Text),
+      ],
+      &[vec![cell("it's"), cell("C:\\path")]],
+    );
+    // Backtick idents, doubled quotes, escaped backslashes.
+    assert_eq!(
+      out,
+      "INSERT INTO `app`.`users` (`na``me`, `note`) VALUES ('it''s', 'C:\\\\path');\n"
+    );
+  }
+
+  #[test]
   fn markdown_escapes_pipes_and_newlines() {
     let out = render(
       ExportFormat::Markdown,
@@ -401,7 +453,12 @@ mod tests {
     }
 
     // writeln! issues two writes (payload, newline): budget covers the header only.
-    let mut sink = ChunkSink::new(FailAfter(2), ExportFormat::Csv, String::new());
+    let mut sink = ChunkSink::new(
+      FailAfter(2),
+      ExportFormat::Csv,
+      ConnectorKind::Postgres,
+      String::new(),
+    );
     assert!(sink.push(RowsChunk {
       columns: Some(vec![column("id", ColumnKind::Number)]),
       rows: vec![],

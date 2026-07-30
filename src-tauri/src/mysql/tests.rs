@@ -445,10 +445,12 @@ async fn integration_mysql_stream_rows_chunks_and_streams_unlimited() {
     .await
     .unwrap();
   assert_eq!(summary.rows, 500.0);
-  let chunks = chunks.lock().unwrap();
-  assert_eq!(chunks.len(), 3, "500 rows in 200-row chunks");
-  assert!(chunks[0].columns.is_some());
-  assert!(chunks[1..].iter().all(|c| c.columns.is_none()));
+  {
+    let chunks = chunks.lock().unwrap();
+    assert_eq!(chunks.len(), 3, "500 rows in 200-row chunks");
+    assert!(chunks[0].columns.is_some());
+    assert!(chunks[1..].iter().all(|c| c.columns.is_none()));
+  }
 
   let total: StdArc<StdMutex<usize>> = StdArc::default();
   let sink = total.clone();

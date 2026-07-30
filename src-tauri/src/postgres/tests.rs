@@ -738,10 +738,7 @@ async fn integration_postgres_filters_keep_server_text_values() {
   assert_eq!(receipts.rows[0][receipt].as_deref(), Some("\\xdeadbeef"));
 }
 
-fn collecting_chunks() -> (
-  Arc<Mutex<Vec<RowsChunk>>>,
-  Box<dyn Fn(RowsChunk) -> bool + Send>,
-) {
+fn collecting_chunks() -> (Arc<Mutex<Vec<RowsChunk>>>, crate::connectors::ChunkSink) {
   let chunks: Arc<Mutex<Vec<RowsChunk>>> = Arc::default();
   let sink = chunks.clone();
   (

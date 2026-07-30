@@ -186,6 +186,9 @@ pub struct ApplyResult {
   pub duration_ms: f64,
 }
 
+/// Chunk consumer for `stream_rows`; returning false aborts (receiver gone).
+pub type ChunkSink = Box<dyn Fn(RowsChunk) -> bool + Send>;
+
 /// SQL capability surface; only connections whose connector declares
 /// `Capability::SqlQuery` expose it.
 #[async_trait::async_trait]
@@ -193,11 +196,10 @@ pub trait SqlQuery: Send + Sync {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
   async fn cancel(&self) -> Result<(), Error>;
   async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error>;
-  /// Chunked delivery; `on_chunk` returning false aborts (receiver gone).
   async fn stream_rows(
     &self,
     request: &TableRowsRequest,
-    on_chunk: Box<dyn Fn(RowsChunk) -> bool + Send>,
+    on_chunk: ChunkSink,
   ) -> Result<StreamSummary, Error>;
   async fn apply_changes(&self, changes: &TableChanges) -> Result<ApplyResult, Error>;
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error>;

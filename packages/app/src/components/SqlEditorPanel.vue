@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ExportFormat, QueryResult, SchemaSnapshot } from '@/lib/bindings'
+import type { ConnectorKind, ExportFormat, QueryResult, SchemaSnapshot } from '@/lib/bindings'
 import type { HistoryEntry } from '@/lib/query-history'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { PostgreSQL, sql } from '@codemirror/lang-sql'
@@ -38,7 +38,7 @@ import { pushHistory } from '@/lib/query-history'
 import { unwrap } from '@/lib/result'
 import { DEFAULT_SCHEMA, snapshotToNamespace } from '@/lib/sql-schema'
 
-const props = defineProps<{ connectionId: string, tabId: string, snapshot?: SchemaSnapshot | null }>()
+const props = defineProps<{ connectionId: string, kind: ConnectorKind, tabId: string, snapshot?: SchemaSnapshot | null }>()
 
 const { run, cancel } = useSqlSessions()
 
@@ -232,7 +232,8 @@ function loadFromHistory(entry: HistoryEntry) {
         <Play />
         {{ hasSelection ? 'Run selection' : 'Run' }}
       </Button>
-      <DropdownMenu>
+      <!-- EXPLAIN (FORMAT JSON) is postgres syntax; mysql gets the button back with its own parser. -->
+      <DropdownMenu v-if="kind === 'postgres'">
         <DropdownMenuTrigger as-child>
           <Button size="sm" variant="ghost" data-testid="explain-menu" :disabled="running">
             Explain

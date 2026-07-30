@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/select'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { connectionSchema, ENVS, NO_TUNNEL, parsePostgresUrl, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { connectionSchema, ENVS, KIND_META, KINDS, NO_TUNNEL, parseConnectionUrl, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -90,14 +90,20 @@ watch(open, (isOpen) => {
 })
 
 function applyUrl() {
-  const parsed = parsePostgresUrl(importUrl.value)
+  const parsed = parseConnectionUrl(importUrl.value)
   if (!parsed) {
-    toast.error('Not a valid postgres:// URL')
+    toast.error('Not a valid postgres:// or mysql:// URL')
     return
   }
   values.value = { ...values.value, ...parsed }
   importUrl.value = ''
 }
+
+// Only an untouched port follows the kind: a hand-set one stays.
+watch(() => values.value.kind, (next, previous) => {
+  if (previous && Number(values.value.port) === KIND_META[previous].defaultPort)
+    values.value.port = KIND_META[next].defaultPort
+})
 
 function parse(): ConnectionInput | null {
   values.value.group = groupValue()
@@ -162,7 +168,7 @@ async function save() {
           {{ profile ? 'Edit connection' : 'New connection' }}
         </DialogTitle>
         <DialogDescription>
-          {{ profile ? 'Update the connection details.' : 'Point soquel at a postgres database.' }}
+          {{ profile ? 'Update the connection details.' : 'Point soquel at a database.' }}
         </DialogDescription>
       </DialogHeader>
 
@@ -171,7 +177,7 @@ async function save() {
           <Input
             v-model="importUrl"
             data-testid="import-url"
-            placeholder="paste a postgres:// url to prefill"
+            placeholder="paste a postgres:// or mysql:// url to prefill"
             class="font-mono text-xs"
           />
           <Button type="button" variant="secondary" :disabled="!importUrl" @click="applyUrl">
@@ -200,6 +206,20 @@ async function save() {
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        <div class="space-y-1.5">
+          <Label>Database engine</Label>
+          <Select v-model="values.kind">
+            <SelectTrigger data-testid="field-kind" class="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="kind in KINDS" :key="kind" :value="kind">
+                {{ KIND_META[kind].label }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div class="grid grid-cols-[1fr_8rem] gap-3">

@@ -7,4 +7,11 @@ export const TEST_DBS = {
     user: 'soquel',
     password: 'soquel',
   },
+  mysql: {
+    host: 'localhost',
+    port: '5456',
+    database: 'soquel_test',
+    user: 'soquel',
+    password: 'soquel',
+  },
 } as const

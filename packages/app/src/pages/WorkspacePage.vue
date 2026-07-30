@@ -20,7 +20,7 @@ import { useSchema } from '@/composables/useSchema'
 import { useSqlSessions } from '@/composables/useSqlSessions'
 import { useWorkspaceTabs } from '@/composables/useWorkspaceTabs'
 import { commands } from '@/lib/bindings'
-import { ENV_BADGE_CLASSES } from '@/lib/connections'
+import { ENV_BADGE_CLASSES, KIND_META } from '@/lib/connections'
 import { unwrap } from '@/lib/result'
 
 const route = useRoute()
@@ -165,13 +165,13 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
             {{ profile.env }}
           </Badge>
           <Badge
-            v-if="shortVersion"
+            v-if="shortVersion && profile"
             variant="outline"
             class="border-transparent bg-muted font-mono text-[10px] text-muted-foreground"
-            :title="`PostgreSQL ${serverVersion}`"
+            :title="`${KIND_META[profile.kind].label} ${serverVersion}`"
             data-testid="server-version"
           >
-            PG {{ shortVersion }}
+            {{ KIND_META[profile.kind].short }} {{ shortVersion }}
           </Badge>
           <Tooltip>
             <TooltipTrigger as-child>
@@ -286,6 +286,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           v-show="tab.id === tabs.state.value.activeId"
           class="min-h-0 flex-1"
           :connection-id="id"
+          :kind="profile?.kind ?? 'postgres'"
           :tab-id="tab.id"
           :snapshot="snapshot"
         />

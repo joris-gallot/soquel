@@ -3,9 +3,17 @@ import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
 
-// The form only creates postgres until the kind selector lands; editing keeps
-// whatever kind the profile already has.
 export const KINDS = ['postgres', 'mysql'] as const satisfies readonly ConnectorKind[]
+
+export const KIND_META: Record<ConnectorKind, {
+  label: string
+  short: string
+  defaultPort: number
+  protocols: string[]
+}> = {
+  postgres: { label: 'PostgreSQL', short: 'PG', defaultPort: 5432, protocols: ['postgres:', 'postgresql:'] },
+  mysql: { label: 'MySQL', short: 'MySQL', defaultPort: 3306, protocols: ['mysql:'] },
+}
 
 export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-full'] as const satisfies readonly SslMode[]
 
@@ -74,8 +82,17 @@ const URL_SSL_MODES: Record<LibpqSslMode, SslMode> = {
   'verify-full': 'verify-full',
 }
 
-/// Prefill form values from a postgres:// or postgresql:// URL.
-export function parsePostgresUrl(raw: string): Partial<ConnectionFormValues> | null {
+// mysql's ssl-mode vocabulary mapped onto the app's set.
+const MYSQL_URL_SSL_MODES: Record<string, SslMode> = {
+  DISABLED: 'disable',
+  PREFERRED: 'prefer',
+  REQUIRED: 'require',
+  VERIFY_CA: 'verify-full',
+  VERIFY_IDENTITY: 'verify-full',
+}
+
+/// Prefill form values from a postgres:// / postgresql:// / mysql:// URL.
+export function parseConnectionUrl(raw: string): Partial<ConnectionFormValues> | null {
   let url: URL
   try {
     url = new URL(raw.trim())
@@ -83,11 +100,13 @@ export function parsePostgresUrl(raw: string): Partial<ConnectionFormValues> | n
   catch {
     return null
   }
-  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:')
+  const kind = KINDS.find(candidate => KIND_META[candidate].protocols.includes(url.protocol))
+  if (!kind)
     return null
   const parsed: Partial<ConnectionFormValues> = {
+    kind,
     host: url.hostname || 'localhost',
-    port: url.port === '' ? 5432 : Number(url.port),
+    port: url.port === '' ? KIND_META[kind].defaultPort : Number(url.port),
     database: decodeURIComponent(url.pathname.replace(/^\//, '')),
     user: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
@@ -95,6 +114,9 @@ export function parsePostgresUrl(raw: string): Partial<ConnectionFormValues> | n
   const sslmode = url.searchParams.get('sslmode')
   if (sslmode && sslmode in URL_SSL_MODES)
     parsed.sslMode = URL_SSL_MODES[sslmode as LibpqSslMode]
+  const mysqlSslMode = url.searchParams.get('ssl-mode')?.toUpperCase()
+  if (mysqlSslMode && mysqlSslMode in MYSQL_URL_SSL_MODES)
+    parsed.sslMode = MYSQL_URL_SSL_MODES[mysqlSslMode]
   const sslrootcert = url.searchParams.get('sslrootcert')
   if (sslrootcert)
     parsed.sslRootCert = sslrootcert

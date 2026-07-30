@@ -4,19 +4,27 @@ import { TEST_DBS } from './fixtures'
 /// WebDriver unicode for the Control key (avoids importing webdriverio's Key enum).
 export const CTRL = '\u{E009}'
 
-export async function createPostgresConnection(name: string) {
-  const pg = TEST_DBS.postgres
+export async function createConnection(name: string, kind: keyof typeof TEST_DBS) {
+  const db = TEST_DBS[kind]
   await $('[data-testid="new-connection"]').click()
   await $('[data-testid="field-name"]').setValue(name)
-  await $('[data-testid="field-host"]').setValue(pg.host)
-  await $('[data-testid="field-port"]').setValue(pg.port)
-  await $('[data-testid="field-database"]').setValue(pg.database)
-  await $('[data-testid="field-user"]').setValue(pg.user)
-  await $('[data-testid="field-password"]').setValue(pg.password)
+  if (kind !== 'postgres') {
+    await $('[data-testid="field-kind"]').click()
+    await $(`[role="option"]*=${kind === 'mysql' ? 'MySQL' : kind}`).click()
+  }
+  await $('[data-testid="field-host"]').setValue(db.host)
+  await $('[data-testid="field-port"]').setValue(db.port)
+  await $('[data-testid="field-database"]').setValue(db.database)
+  await $('[data-testid="field-user"]').setValue(db.user)
+  await $('[data-testid="field-password"]').setValue(db.password)
   await $('[data-testid="save-connection"]').click()
   await $('[data-testid="connection-row"]').waitForExist()
   // The dialog overlay swallows clicks while its close animation runs.
   await $('[data-testid="field-name"]').waitForExist({ reverse: true })
+}
+
+export async function createPostgresConnection(name: string) {
+  await createConnection(name, 'postgres')
 }
 
 export async function deleteFirstConnection() {

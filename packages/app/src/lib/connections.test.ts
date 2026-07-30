@@ -1,6 +1,6 @@
 import type { ConnectionProfile } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { connectionSchema, groupConnections, parsePostgresUrl, toConnectionInput } from './connections'
+import { connectionSchema, groupConnections, parseConnectionUrl, toConnectionInput } from './connections'
 import { zodFieldErrors } from './validation'
 
 function profile(name: string, group: string | null): ConnectionProfile {
@@ -37,9 +37,10 @@ describe('groupConnections', () => {
   })
 })
 
-describe('parsePostgresUrl', () => {
+describe('parseConnectionUrl', () => {
   it('parses a full postgres:// url', () => {
-    expect(parsePostgresUrl('postgres://joris:s3cret@db.internal:5433/analytics')).toEqual({
+    expect(parseConnectionUrl('postgres://joris:s3cret@db.internal:5433/analytics')).toEqual({
+      kind: 'postgres',
       host: 'db.internal',
       port: 5433,
       database: 'analytics',
@@ -48,16 +49,27 @@ describe('parsePostgresUrl', () => {
     })
   })
 
+  it('parses a mysql:// url with its own defaults and ssl vocabulary', () => {
+    expect(parseConnectionUrl('mysql://u:p@db.internal/app')).toMatchObject({
+      kind: 'mysql',
+      port: 3306,
+    })
+    expect(parseConnectionUrl('mysql://u:p@h/app?ssl-mode=VERIFY_IDENTITY'))
+      .toMatchObject({ sslMode: 'verify-full' })
+    expect(parseConnectionUrl('mysql://u:p@h/app?ssl-mode=required'))
+      .toMatchObject({ sslMode: 'require' })
+  })
+
   it('accepts the postgresql:// protocol', () => {
-    expect(parsePostgresUrl('postgresql://u@h/db')).toMatchObject({ host: 'h', user: 'u' })
+    expect(parseConnectionUrl('postgresql://u@h/db')).toMatchObject({ host: 'h', user: 'u' })
   })
 
   it('defaults the port to 5432 when absent', () => {
-    expect(parsePostgresUrl('postgres://u:p@host/db')).toMatchObject({ port: 5432 })
+    expect(parseConnectionUrl('postgres://u:p@host/db')).toMatchObject({ port: 5432 })
   })
 
   it('decodes percent-encoded credentials and database', () => {
-    expect(parsePostgresUrl('postgres://user%40corp:p%40ss@h:5432/my%20db')).toMatchObject({
+    expect(parseConnectionUrl('postgres://user%40corp:p%40ss@h:5432/my%20db')).toMatchObject({
       user: 'user@corp',
       password: 'p@ss',
       database: 'my db',
@@ -65,26 +77,26 @@ describe('parsePostgresUrl', () => {
   })
 
   it('rejects other protocols', () => {
-    expect(parsePostgresUrl('mysql://u:p@h:3306/db')).toBeNull()
+    expect(parseConnectionUrl('redis://u:p@h:6379/0')).toBeNull()
   })
 
   it('rejects garbage', () => {
-    expect(parsePostgresUrl('not a url')).toBeNull()
+    expect(parseConnectionUrl('not a url')).toBeNull()
   })
 
   it('maps the sslmode query param onto the app modes', () => {
-    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=require')).toMatchObject({ sslMode: 'require' })
-    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=verify-ca')).toMatchObject({ sslMode: 'verify-full' })
-    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=allow')).toMatchObject({ sslMode: 'prefer' })
+    expect(parseConnectionUrl('postgres://u:p@h/db?sslmode=require')).toMatchObject({ sslMode: 'require' })
+    expect(parseConnectionUrl('postgres://u:p@h/db?sslmode=verify-ca')).toMatchObject({ sslMode: 'verify-full' })
+    expect(parseConnectionUrl('postgres://u:p@h/db?sslmode=allow')).toMatchObject({ sslMode: 'prefer' })
   })
 
   it('leaves sslMode untouched when absent or unknown', () => {
-    expect(parsePostgresUrl('postgres://u:p@h/db')).not.toHaveProperty('sslMode')
-    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=nonsense')).not.toHaveProperty('sslMode')
+    expect(parseConnectionUrl('postgres://u:p@h/db')).not.toHaveProperty('sslMode')
+    expect(parseConnectionUrl('postgres://u:p@h/db?sslmode=nonsense')).not.toHaveProperty('sslMode')
   })
 
   it('carries sslrootcert through', () => {
-    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=verify-full&sslrootcert=/etc/ca.pem'))
+    expect(parseConnectionUrl('postgres://u:p@h/db?sslmode=verify-full&sslrootcert=/etc/ca.pem'))
       .toMatchObject({ sslMode: 'verify-full', sslRootCert: '/etc/ca.pem' })
   })
 })

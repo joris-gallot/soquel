@@ -551,6 +551,61 @@ mod tests {
     connection.close().await.unwrap();
   }
 
+  /// The kv connector rides the same LocalForward plumbing as the sql ones.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_ssh_redis_through_tunnel() {
+    use crate::connectors::{Connector, LocalForward};
+    use crate::profiles::{ConnectionProfile, ConnectorParams, Env, RedisParams};
+    use crate::redis::RedisConnector;
+
+    let Some(profile) = tunnel_from_env(TEST_KEY) else {
+      return;
+    };
+    if std::env::var("SOQUEL_TEST_REDIS").is_err() {
+      return;
+    }
+    let key = host_key(&profile).await;
+    let tunnel = SshTunnel::open(
+      &profile,
+      None,
+      Some(key),
+      TunnelTarget {
+        host: "redis".to_string(),
+        port: 6379,
+      },
+    )
+    .await
+    .unwrap();
+
+    let connection = RedisConnector
+      .connect(
+        &ConnectionProfile {
+          id: String::new(),
+          name: String::new(),
+          env: Env::Dev,
+          group: None,
+          params: ConnectorParams::Redis(RedisParams {
+            host: "redis".to_string(),
+            port: 6379,
+            db: 0,
+            username: None,
+            tls: false,
+            tunnel_id: None,
+          }),
+        },
+        Some("soquel"),
+        Some(LocalForward {
+          port: tunnel.local_port,
+        }),
+      )
+      .await
+      .unwrap();
+    connection.health().await.unwrap();
+    let kv = connection.kv().unwrap();
+    kv.scan_keys("*", None, 10).await.unwrap();
+    connection.close().await.unwrap();
+  }
+
   /// End-to-end optimistic proof of the SNI/hostname override: verify-full
   /// through the tunnel validates the profile's logical host, not 127.0.0.1.
   #[tokio::test(flavor = "multi_thread")]

@@ -128,6 +128,21 @@ fn ttl_ms(pttl: i64) -> Option<f64> {
   (pttl >= 0).then_some(pttl as f64)
 }
 
+/// UTF-8 text as-is; binary payloads as 0x.. hex, like sql blob cells.
+fn display_bytes(bytes: Vec<u8>) -> String {
+  match String::from_utf8(bytes) {
+    Ok(text) => text,
+    Err(err) => {
+      let hex: String = err
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+      format!("0x{hex}")
+    }
+  }
+}
+
 #[async_trait::async_trait]
 impl KvBrowse for RedisConnection {
   async fn scan_keys(
@@ -144,7 +159,8 @@ impl KvBrowse for RedisConnection {
         message: "invalid scan cursor".to_string(),
       })?;
     let pattern = if pattern.is_empty() { "*" } else { pattern };
-    let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+    // Key names can be arbitrary bytes; display lossy, address by raw bytes.
+    let (next, keys): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
       .arg(cursor)
       .arg("MATCH")
       .arg(pattern)
@@ -155,14 +171,18 @@ impl KvBrowse for RedisConnection {
 
     let mut pipe = redis::pipe();
     for key in &keys {
-      pipe.cmd("TYPE").arg(key).cmd("PTTL").arg(key);
+      pipe
+        .cmd("TYPE")
+        .arg(key.as_slice())
+        .cmd("PTTL")
+        .arg(key.as_slice());
     }
     let meta: Vec<(String, i64)> = pipe.query_async(&mut conn).await?;
     let entries = keys
       .into_iter()
       .zip(meta)
       .map(|(key, (type_name, pttl))| KeyEntry {
-        key,
+        key: String::from_utf8_lossy(&key).into_owned(),
         kind: key_kind(&type_name),
         ttl_ms: ttl_ms(pttl),
       })
@@ -190,22 +210,29 @@ impl KvBrowse for RedisConnection {
 
     let (size, value) = match key_kind(&type_name) {
       KeyKind::String => {
-        let value: String = conn.get(key).await?;
-        (value.len() as f64, KeyValue::String { value })
+        let bytes: Vec<u8> = conn.get(key).await?;
+        (
+          bytes.len() as f64,
+          KeyValue::String {
+            value: display_bytes(bytes),
+          },
+        )
       }
       KeyKind::List => {
         let size: i64 = conn.llen(key).await?;
-        let entries: Vec<String> = conn.lrange(key, 0, VALUE_SAMPLE as isize - 1).await?;
+        let raw: Vec<Vec<u8>> = conn.lrange(key, 0, VALUE_SAMPLE as isize - 1).await?;
+        let entries = raw.into_iter().map(display_bytes).collect();
         (size as f64, KeyValue::List { entries })
       }
       KeyKind::Set => {
         let size: i64 = conn.scard(key).await?;
-        let entries = scan_collection(&mut conn, "SSCAN", key).await?;
+        let raw = scan_collection(&mut conn, "SSCAN", key).await?;
+        let entries = raw.into_iter().map(display_bytes).collect();
         (size as f64, KeyValue::Set { entries })
       }
       KeyKind::Zset => {
         let size: i64 = conn.zcard(key).await?;
-        let flat: Vec<(String, f64)> = redis::cmd("ZRANGE")
+        let flat: Vec<(Vec<u8>, f64)> = redis::cmd("ZRANGE")
           .arg(key)
           .arg(0)
           .arg(VALUE_SAMPLE as isize - 1)
@@ -214,7 +241,10 @@ impl KvBrowse for RedisConnection {
           .await?;
         let entries = flat
           .into_iter()
-          .map(|(member, score)| ZsetMember { member, score })
+          .map(|(member, score)| ZsetMember {
+            member: display_bytes(member),
+            score,
+          })
           .collect();
         (size as f64, KeyValue::Zset { entries })
       }
@@ -224,15 +254,15 @@ impl KvBrowse for RedisConnection {
         let entries = flat
           .chunks_exact(2)
           .map(|pair| HashField {
-            field: pair[0].clone(),
-            value: pair[1].clone(),
+            field: display_bytes(pair[0].clone()),
+            value: display_bytes(pair[1].clone()),
           })
           .collect();
         (size as f64, KeyValue::Hash { entries })
       }
       KeyKind::Stream => {
         let size: i64 = redis::cmd("XLEN").arg(key).query_async(&mut conn).await?;
-        let raw: Vec<(String, Vec<String>)> = redis::cmd("XRANGE")
+        let raw: Vec<(String, Vec<Vec<u8>>)> = redis::cmd("XRANGE")
           .arg(key)
           .arg("-")
           .arg("+")
@@ -247,8 +277,8 @@ impl KvBrowse for RedisConnection {
             fields: flat
               .chunks_exact(2)
               .map(|pair| HashField {
-                field: pair[0].clone(),
-                value: pair[1].clone(),
+                field: display_bytes(pair[0].clone()),
+                value: display_bytes(pair[1].clone()),
               })
               .collect(),
           })
@@ -353,11 +383,11 @@ async fn scan_collection(
   conn: &mut MultiplexedConnection,
   command: &str,
   key: &str,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<Vec<u8>>, Error> {
   let mut cursor = 0u64;
-  let mut out: Vec<String> = Vec::new();
+  let mut out: Vec<Vec<u8>> = Vec::new();
   loop {
-    let (next, mut chunk): (u64, Vec<String>) = redis::cmd(command)
+    let (next, mut chunk): (u64, Vec<Vec<u8>>) = redis::cmd(command)
       .arg(key)
       .arg(cursor)
       .arg("COUNT")

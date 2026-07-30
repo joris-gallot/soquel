@@ -136,7 +136,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: [redis-server, --requirepass, soquel]
+    # Default user via requirepass + an ACL user for the username form field.
+    command: [redis-server, --requirepass, soquel, --user, app, on, '>acl-pw', '~*', '+@all']
     ports:
       - '5457:6379'
     healthcheck:

@@ -68,6 +68,14 @@ fn ttl_sentinels_map_to_none() {
   assert_eq!(ttl_ms(1500), Some(1500.0));
 }
 
+#[test]
+fn display_bytes_hexes_non_utf8() {
+  assert_eq!(display_bytes(b"plain".to_vec()), "plain");
+  assert_eq!(display_bytes("héllo".as_bytes().to_vec()), "héllo");
+  assert_eq!(display_bytes(vec![0x00, 0xff, 0x67]), "0x00ff67");
+  assert_eq!(display_bytes(Vec::new()), "");
+}
+
 // -------- integration, gated on the compose redis --------
 
 fn params_from_env(db: u32) -> Option<RedisParams> {
@@ -103,6 +111,14 @@ async fn connection_from_env(db: u32) -> Option<Box<dyn Connection>> {
       .await
       .unwrap(),
   )
+}
+
+/// Raw client for seeding bytes the str-typed kv trait cannot inject.
+async fn raw_connection() -> Option<MultiplexedConnection> {
+  let params = params_from_env(0)?;
+  let client =
+    redis::Client::open(format!("redis://:soquel@{}:{}/0", params.host, params.port)).unwrap();
+  Some(client.get_multiplexed_tokio_connection().await.unwrap())
 }
 
 /// Each test owns a prefix; wiping it first keeps reruns deterministic.
@@ -381,4 +397,121 @@ async fn integration_redis_console_renders_and_blocks() {
     "{err}"
   );
   wipe_prefix(kv, prefix).await;
+}
+
+#[tokio::test]
+async fn integration_redis_binary_values_render_as_hex() {
+  let Some(connection) = connection_from_env(0).await else {
+    return;
+  };
+  let kv = connection.kv().unwrap();
+  let mut raw = raw_connection().await.unwrap();
+  let prefix = "soquel_test:bin:";
+  let mut bin_key = prefix.as_bytes().to_vec();
+  bin_key.extend_from_slice(b"\xfekey");
+  // wipe_prefix deletes by (lossy) name: the binary key needs the raw client.
+  let _: () = raw.del(bin_key.clone()).await.unwrap();
+  wipe_prefix(kv, prefix).await;
+
+  let blob: &[u8] = b"\x00\xffgz";
+  let hex = "0x00ff677a";
+  let _: () = raw.set(format!("{prefix}str"), blob).await.unwrap();
+  let _: () = raw.rpush(format!("{prefix}list"), blob).await.unwrap();
+  let _: () = raw.sadd(format!("{prefix}set"), blob).await.unwrap();
+  let _: () = raw.zadd(format!("{prefix}zset"), blob, 1.5).await.unwrap();
+  let _: () = raw.hset(format!("{prefix}hash"), blob, blob).await.unwrap();
+  let _: () = redis::cmd("XADD")
+    .arg(format!("{prefix}stream"))
+    .arg("*")
+    .arg("f")
+    .arg(blob)
+    .query_async(&mut raw)
+    .await
+    .unwrap();
+  let _: () = raw.set(bin_key.clone(), "v").await.unwrap();
+
+  let string = kv.key_detail(&format!("{prefix}str")).await.unwrap();
+  assert_eq!(string.size, 4.0);
+  assert!(matches!(string.value, KeyValue::String { ref value } if value == hex));
+
+  let list = kv.key_detail(&format!("{prefix}list")).await.unwrap();
+  assert!(matches!(list.value, KeyValue::List { ref entries } if entries == &[hex]));
+
+  let set = kv.key_detail(&format!("{prefix}set")).await.unwrap();
+  assert!(matches!(set.value, KeyValue::Set { ref entries } if entries == &[hex]));
+
+  let zset = kv.key_detail(&format!("{prefix}zset")).await.unwrap();
+  let KeyValue::Zset { entries } = &zset.value else {
+    panic!("expected a zset value");
+  };
+  assert_eq!(entries[0].member, hex);
+  assert_eq!(entries[0].score, 1.5);
+
+  let hash = kv.key_detail(&format!("{prefix}hash")).await.unwrap();
+  let KeyValue::Hash { entries } = &hash.value else {
+    panic!("expected a hash value");
+  };
+  assert_eq!(entries[0].field, hex);
+  assert_eq!(entries[0].value, hex);
+
+  let stream = kv.key_detail(&format!("{prefix}stream")).await.unwrap();
+  let KeyValue::Stream { entries } = &stream.value else {
+    panic!("expected a stream value");
+  };
+  assert_eq!(entries[0].fields[0].field, "f");
+  assert_eq!(entries[0].fields[0].value, hex);
+
+  // A binary key name still scans: lossy display, raw bytes for TYPE/PTTL.
+  let mut lossy = None;
+  let mut cursor: Option<String> = None;
+  loop {
+    let page = kv
+      .scan_keys(&format!("{prefix}*"), cursor.as_deref(), 100)
+      .await
+      .unwrap();
+    lossy = lossy.or_else(|| {
+      page
+        .keys
+        .iter()
+        .find(|entry| entry.key.contains('\u{FFFD}'))
+        .cloned()
+    });
+    cursor = page.cursor;
+    if cursor.is_none() {
+      break;
+    }
+  }
+  let lossy = lossy.expect("binary key must appear in the scan");
+  assert_eq!(lossy.kind, KeyKind::String);
+
+  let _: () = raw.del(bin_key).await.unwrap();
+  wipe_prefix(kv, prefix).await;
+}
+
+#[tokio::test]
+async fn integration_redis_acl_user_auth() {
+  let Some(params) = params_from_env(0) else {
+    return;
+  };
+  let profile = ConnectionProfile {
+    id: String::new(),
+    name: "test".to_string(),
+    env: Env::Dev,
+    group: None,
+    params: ConnectorParams::Redis(RedisParams {
+      username: Some("app".to_string()),
+      ..params
+    }),
+  };
+  let connection = RedisConnector
+    .connect(&profile, Some("acl-pw"), None)
+    .await
+    .unwrap();
+  connection.health().await.unwrap();
+  let kv = connection.kv().unwrap();
+  kv.set_string("soquel_test:acl:key", "v").await.unwrap();
+  kv.delete_key("soquel_test:acl:key").await.unwrap();
+
+  let wrong = RedisConnector.connect(&profile, Some("nope"), None).await;
+  assert!(matches!(wrong, Err(Error::Database { .. })));
 }

@@ -3,10 +3,10 @@ import type { KeyEntry } from '@/lib/bindings'
 import { onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { commands } from '@/lib/bindings'
-import { formatTtl, KEY_KIND_BADGE } from '@/lib/kv'
+import { containsPattern, formatTtl, KEY_KIND_BADGE } from '@/lib/kv'
 import { unwrap } from '@/lib/result'
 
 const props = defineProps<{ connectionId: string, selected: string | null }>()
@@ -15,10 +15,16 @@ const emit = defineEmits<{ select: [key: string] }>()
 const SCAN_COUNT = 200
 
 const pattern = ref('')
+const glob = ref(false)
 const keys = ref<KeyEntry[]>([])
 const cursor = ref<string | null>(null)
 const scanning = ref(false)
 const scannedOnce = ref(false)
+
+function toggleGlob() {
+  glob.value = !glob.value
+  scan(true)
+}
 
 async function scan(reset: boolean) {
   if (scanning.value)
@@ -27,7 +33,7 @@ async function scan(reset: boolean) {
   try {
     const page = unwrap(await commands.scanKeys(
       props.connectionId,
-      pattern.value,
+      glob.value ? pattern.value : containsPattern(pattern.value),
       reset ? null : cursor.value,
       SCAN_COUNT,
     ))
@@ -55,13 +61,27 @@ onMounted(() => scan(true))
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
     <div class="px-2 py-2">
-      <Input
-        v-model="pattern"
-        placeholder="match pattern (*)"
-        class="h-7 font-mono text-xs"
-        data-testid="key-pattern"
-        @keydown.enter="scan(true)"
-      />
+      <InputGroup class="h-7">
+        <InputGroupInput
+          v-model="pattern"
+          :placeholder="glob ? 'match pattern (*)' : 'search keys'"
+          class="font-mono text-xs"
+          data-testid="key-pattern"
+          @keydown.enter="scan(true)"
+        />
+        <InputGroupAddon align="inline-end">
+          <InputGroupButton
+            class="font-mono text-[10px]"
+            :class="glob && 'bg-accent text-accent-foreground'"
+            :aria-pressed="glob"
+            title="raw MATCH glob pattern"
+            data-testid="key-glob"
+            @click="toggleGlob"
+          >
+            glob
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
     </div>
     <ScrollArea class="min-h-0 flex-1">
       <button

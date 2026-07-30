@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { formatTtl, KEY_KIND_BADGE } from './kv'
+import { containsPattern, formatTtl, KEY_KIND_BADGE } from './kv'
+
+describe('containsPattern', () => {
+  it('wraps the text in wildcards', () => {
+    expect(containsPattern('session')).toBe('*session*')
+    expect(containsPattern('')).toBe('')
+  })
+
+  it('escapes glob specials so they match literally', () => {
+    expect(containsPattern('cache:user:*')).toBe('*cache:user:\\**')
+    expect(containsPattern('a?b[c]d\\e')).toBe('*a\\?b\\[c\\]d\\\\e*')
+  })
+})
 
 describe('formatTtl', () => {
   it('scales the unit with the duration', () => {

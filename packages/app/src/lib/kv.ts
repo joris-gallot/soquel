@@ -10,6 +10,13 @@ export const KEY_KIND_BADGE: Record<KeyKind, { short: string, classes: string }>
   other: { short: '?', classes: 'bg-muted text-muted-foreground' },
 }
 
+/// Contains-search as a scan pattern: glob specials escaped, wrapped in *.
+export function containsPattern(text: string): string {
+  if (text === '')
+    return ''
+  return `*${text.replace(/[\\*?[\]]/g, char => `\\${char}`)}*`
+}
+
 /// Compact countdown for key lists: "42s", "5m", "3h", "2d".
 export function formatTtl(ms: number): string {
   const seconds = ms / 1000

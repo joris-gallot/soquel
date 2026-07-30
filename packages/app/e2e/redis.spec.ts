@@ -38,10 +38,22 @@ describe('redis workspace', () => {
     await waitForText('[data-testid="redis-console"]', '(integer) 3')
     await runConsole('EXPIRE e2e:greeting 7200')
 
-    await $('[data-testid="key-pattern"]').setValue('e2e:*')
+    // Default search is contains: no glob syntax needed.
+    await $('[data-testid="key-pattern"]').setValue('e2e:')
     await browser.keys('Enter')
     await $('[data-testid="key-e2e:greeting"]').waitForExist()
     await $('[data-testid="key-e2e:list"]').waitForExist()
+    await waitForText('[data-testid="key-count"]', '2 keys')
+
+    // Glob mode passes the raw MATCH pattern through.
+    await $('[data-testid="key-glob"]').click()
+    await $('[data-testid="key-pattern"]').setValue('e2e:gr*')
+    await browser.keys('Enter')
+    await $('[data-testid="key-e2e:greeting"]').waitForExist()
+    await waitForText('[data-testid="key-count"]', '1 key')
+    await $('[data-testid="key-glob"]').click()
+    await $('[data-testid="key-pattern"]').setValue('e2e:')
+    await browser.keys('Enter')
     await waitForText('[data-testid="key-count"]', '2 keys')
   })
 

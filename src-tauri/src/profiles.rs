@@ -205,6 +205,7 @@ mod tests {
 
     let mut changed = input("renamed");
     changed.port = 5433;
+    changed.ssl_root_cert = Some("/etc/ca.pem".to_string());
     let updated = store.update(&created.id, &changed).unwrap();
     assert_eq!(updated.name, "renamed");
     assert_eq!(updated.port, 5433);
@@ -212,6 +213,10 @@ mod tests {
     // Reload from disk: state survives.
     let reloaded = ProfileStore::load(dir.path().join("connections.json")).unwrap();
     assert_eq!(reloaded.get(&created.id).unwrap().name, "renamed");
+    assert_eq!(
+      reloaded.get(&created.id).unwrap().ssl_root_cert.as_deref(),
+      Some("/etc/ca.pem")
+    );
 
     store.delete(&created.id).unwrap();
     assert!(store.list().is_empty());

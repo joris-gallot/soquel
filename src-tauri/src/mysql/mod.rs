@@ -911,6 +911,19 @@ mod tests {
     let kind = statement.columns.iter().find(|c| c.name == "kind").unwrap();
     assert_eq!(kind.kind, ColumnKind::Text);
 
+    // Numeric coercion of text params: no explicit casts here, the server
+    // must compare `n > '990'` numerically, not lexicographically.
+    let numeric = sql
+      .table_rows(&rows_request(
+        "events",
+        Some(100),
+        vec![text_filter("n", FilterOp::Gt, "990")],
+        None,
+      ))
+      .await
+      .unwrap();
+    assert_eq!(numeric.statements[0].rows.len(), 10);
+
     let unknown = sql
       .table_rows(&rows_request(
         "customers",
@@ -920,6 +933,61 @@ mod tests {
       ))
       .await;
     assert!(matches!(unknown, Err(Error::Unsupported { .. })));
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_stream_abort_leaves_connection_usable() {
+    let Some(connection) = test_connection_from_env().await else {
+      return;
+    };
+    let sql = connection.sql().unwrap();
+
+    let delivered: std::sync::Arc<std::sync::Mutex<usize>> = std::sync::Arc::default();
+    let sink = delivered.clone();
+    let summary = sql
+      .stream_rows(
+        &rows_request("events", None, vec![], None),
+        Box::new(move |chunk| {
+          *sink.lock().unwrap() += chunk.rows.len();
+          // Receiver gone after the first chunk.
+          false
+        }),
+      )
+      .await
+      .unwrap();
+    assert!(summary.rows < 1000.0, "abort must stop the stream early");
+
+    // The pooled conn went back with a half-read result set: the driver must
+    // drain it before the next query.
+    let after = sql.run_query("SELECT COUNT(*) FROM events").await.unwrap();
+    assert_eq!(after.statements[0].rows[0][0].as_deref(), Some("1000"));
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_default_only_insert() {
+    let Some(connection) = test_connection_from_env().await else {
+      return;
+    };
+    let applied = connection
+      .sql()
+      .unwrap()
+      .apply_changes(&TableChanges {
+        schema: "soquel_test".to_string(),
+        table: "defaults_probe".to_string(),
+        updates: vec![],
+        deletes: vec![],
+        inserts: vec![crate::connectors::RowInsert { values: vec![] }],
+      })
+      .await
+      .unwrap();
+    assert_eq!(applied.inserted, 1);
+    let rows = connection
+      .sql()
+      .unwrap()
+      .run_query("SELECT label FROM defaults_probe ORDER BY id DESC LIMIT 1")
+      .await
+      .unwrap();
+    assert_eq!(rows.statements[0].rows[0][0].as_deref(), Some("fresh"));
   }
 
   #[tokio::test]

@@ -68,6 +68,13 @@ WITH RECURSIVE seq AS (
 )
 SELECT CASE WHEN n % 2 = 0 THEN 'click' ELSE 'view' END, n FROM seq;
 
+-- Every column has a default: exercises INSERT INTO t () VALUES ().
+CREATE TABLE defaults_probe (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  label VARCHAR(32) NOT NULL DEFAULT 'fresh'
+);
+
 -- Second database: the snapshot groups per schema, one is never enough.
 CREATE DATABASE soquel_other;
 GRANT ALL ON soquel_other.* TO 'soquel'@'%';

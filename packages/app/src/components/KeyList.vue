@@ -34,16 +34,26 @@ async function scan(reset: boolean) {
   const seq = ++scanSeq
   scanning.value = true
   try {
-    const page = unwrap(await commands.scanKeys(
-      props.connectionId,
-      glob.value ? pattern.value : containsPattern(pattern.value),
-      reset ? null : cursor.value,
-      SCAN_COUNT,
-    ))
-    if (seq !== scanSeq)
-      return
-    keys.value = reset ? page.keys : [...keys.value, ...page.keys]
-    cursor.value = page.cursor
+    let next = reset ? null : cursor.value
+    let collected: KeyEntry[] = []
+    // MATCH filters per page: drain empty pages until something matches,
+    // the cursor is exhausted, or a hop cap (pathological keyspaces).
+    for (let hop = 0; hop < 50; hop++) {
+      const page = unwrap(await commands.scanKeys(
+        props.connectionId,
+        glob.value ? pattern.value : containsPattern(pattern.value),
+        next,
+        SCAN_COUNT,
+      ))
+      if (seq !== scanSeq)
+        return
+      collected = collected.concat(page.keys)
+      next = page.cursor
+      if (next === null || collected.length > 0)
+        break
+    }
+    keys.value = reset ? collected : [...keys.value, ...collected]
+    cursor.value = next
     scannedOnce.value = true
   }
   catch (error) {

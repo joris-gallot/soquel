@@ -413,6 +413,12 @@ mod tests {
   use crate::connectors::{Connector, TableKind};
   use crate::profiles::{ConnectorKind, Env};
 
+  #[test]
+  fn quote_ident_doubles_backticks() {
+    assert_eq!(quote_ident("plain"), "`plain`");
+    assert_eq!(quote_ident("weird`name"), "`weird``name`");
+  }
+
   fn profile_from_env() -> Option<ConnectionProfile> {
     let addr = std::env::var("SOQUEL_TEST_MYSQL").ok()?;
     let (host, port) = addr
@@ -734,6 +740,34 @@ mod tests {
     assert_eq!(fk.referenced_schema, "soquel_test");
     assert_eq!(fk.referenced_table, "customers");
     assert_eq!(fk.referenced_columns, vec!["id"]);
+    // The FK's auto-created index shows up as non-unique.
+    assert!(
+      orders
+        .indexes
+        .iter()
+        .any(|i| !i.unique && i.definition.contains("customer_id")),
+      "{:?}",
+      orders.indexes
+    );
+
+    // Composite FK: both column pairs, in key order.
+    let subscriptions = schema
+      .tables
+      .iter()
+      .find(|t| t.name == "subscriptions")
+      .unwrap();
+    let composite = &subscriptions.foreign_keys[0];
+    assert_eq!(composite.columns, vec!["org_id", "plan_code"]);
+    assert_eq!(composite.referenced_table, "plans");
+    assert_eq!(composite.referenced_columns, vec!["org_id", "code"]);
+
+    // Databases group as schemas, alphabetical input order preserved.
+    let other = snapshot
+      .schemas
+      .iter()
+      .find(|s| s.name == "soquel_other")
+      .expect("granted second database visible");
+    assert!(other.tables.iter().any(|t| t.name == "notes"));
 
     let view = schema
       .tables

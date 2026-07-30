@@ -29,6 +29,24 @@ INSERT INTO orders (customer_id, amount, note, receipt) VALUES
   (1, 49.00, NULL, NULL),
   (2, 999.99, 'wire transfer', NULL);
 
+-- Composite key + composite FK: exercises the hand-rolled FK assembly.
+CREATE TABLE plans (
+  org_id INT NOT NULL,
+  code VARCHAR(32) NOT NULL,
+  label TEXT,
+  PRIMARY KEY (org_id, code)
+);
+
+CREATE TABLE subscriptions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  org_id INT NOT NULL,
+  plan_code VARCHAR(32) NOT NULL,
+  CONSTRAINT subscriptions_plan_fk FOREIGN KEY (org_id, plan_code) REFERENCES plans (org_id, code)
+);
+
+INSERT INTO plans (org_id, code, label) VALUES (1, 'pro', 'Pro'), (1, 'free', 'Free');
+INSERT INTO subscriptions (org_id, plan_code) VALUES (1, 'pro');
+
 CREATE VIEW recent_orders AS
 SELECT o.id, c.name AS customer, o.amount, o.placed_at
 FROM orders o
@@ -49,3 +67,12 @@ WITH RECURSIVE seq AS (
   SELECT n + 1 FROM seq WHERE n < 1000
 )
 SELECT CASE WHEN n % 2 = 0 THEN 'click' ELSE 'view' END, n FROM seq;
+
+-- Second database: the snapshot groups per schema, one is never enough.
+CREATE DATABASE soquel_other;
+GRANT ALL ON soquel_other.* TO 'soquel'@'%';
+CREATE TABLE soquel_other.notes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  body TEXT
+);
+INSERT INTO soquel_other.notes (body) VALUES ('from the other side');

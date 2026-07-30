@@ -1735,41 +1735,72 @@ pub mod tests {
 
   // Export path: no limit streams the full table, past MAX_FETCH_ROWS.
   #[tokio::test]
-  async fn integration_postgres_stream_rows_unlimited_exports_csv() {
-    use crate::export::{ChunkSink, ExportFormat};
+  async fn integration_postgres_export_writes_file_and_reports_progress() {
+    use crate::export::{run_export, ExportFormat};
 
     let Some(pg) = test_connection_from_env().await else {
       return;
     };
-    let out = Arc::new(Mutex::new(ChunkSink::new(
-      Vec::<u8>::new(),
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.csv");
+    let progress: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let sink = progress.clone();
+    let summary = run_export(
+      &pg,
+      &TableRowsRequest {
+        schema: "app".to_string(),
+        table: "events".to_string(),
+        limit: None,
+        offset: 0,
+        sort: None,
+        filters: vec![],
+        include_ctid: false,
+        include_xmin: false,
+      },
       ExportFormat::Csv,
       crate::profiles::ConnectorKind::Postgres,
-      String::new(),
-    )));
-    let sink = out.clone();
-    let summary = pg
-      .stream_rows(
-        &TableRowsRequest {
-          schema: "app".to_string(),
-          table: "events".to_string(),
-          limit: None,
-          offset: 0,
-          sort: None,
-          filters: vec![],
-          include_ctid: false,
-          include_xmin: false,
-        },
-        Box::new(move |chunk| sink.lock().unwrap().push(chunk)),
-      )
-      .await
-      .unwrap();
+      path.to_str().unwrap(),
+      move |rows| sink.lock().unwrap().push(rows),
+    )
+    .await
+    .unwrap();
     assert_eq!(summary.rows, 10000.0);
 
-    let mut sink = Arc::into_inner(out).unwrap().into_inner().unwrap();
-    assert!(sink.error.take().is_none());
-    let csv = String::from_utf8(sink.finish().unwrap()).unwrap();
+    let csv = std::fs::read_to_string(&path).unwrap();
     assert_eq!(csv.lines().count(), 10001, "header + every row");
+    // 10k rows in 200-row chunks = 50 pushes: one report every 25.
+    assert_eq!(*progress.lock().unwrap(), vec![5000, 10000]);
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_export_failure_removes_the_partial_file() {
+    use crate::export::{run_export, ExportFormat};
+
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ghost.csv");
+    let result = run_export(
+      &pg,
+      &TableRowsRequest {
+        schema: "app".to_string(),
+        table: "nope".to_string(),
+        limit: None,
+        offset: 0,
+        sort: None,
+        filters: vec![],
+        include_ctid: false,
+        include_xmin: false,
+      },
+      ExportFormat::Csv,
+      crate::profiles::ConnectorKind::Postgres,
+      path.to_str().unwrap(),
+      |_| {},
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(!path.exists(), "a failed export must not leave a file");
   }
 
   #[tokio::test]

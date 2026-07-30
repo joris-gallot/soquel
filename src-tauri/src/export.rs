@@ -5,8 +5,68 @@ use std::io::Write;
 use serde::Deserialize;
 use specta::Type;
 
-use crate::connectors::{ColumnKind, QueryColumn, RowsChunk};
+use crate::connectors::{
+  ColumnKind, QueryColumn, RowsChunk, SqlQuery, StreamSummary, TableRowsRequest,
+};
+use crate::error::Error;
 use crate::profiles::ConnectorKind;
+
+// ~5k rows between progress reports keeps the chatter negligible.
+const PROGRESS_EVERY_CHUNKS: u64 = 25;
+
+/// Full-table export: streams into `path`, reporting rows-written every
+/// `PROGRESS_EVERY_CHUNKS` chunks. A failed or canceled export never leaves a
+/// partial file behind.
+pub async fn run_export(
+  sql: &dyn SqlQuery,
+  request: &TableRowsRequest,
+  format: ExportFormat,
+  kind: ConnectorKind,
+  path: &str,
+  on_progress: impl Fn(u64) + Send + 'static,
+) -> Result<StreamSummary, Error> {
+  let table = format!(
+    "{}.{}",
+    quote_ident(kind, &request.schema),
+    quote_ident(kind, &request.table)
+  );
+  let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+  let sink = std::sync::Arc::new(std::sync::Mutex::new(ChunkSink::new(
+    file, format, kind, table,
+  )));
+  let chunk_sink = sink.clone();
+  let pushes = std::sync::atomic::AtomicU64::new(0);
+  let result = sql
+    .stream_rows(
+      request,
+      Box::new(move |chunk| {
+        let mut sink = chunk_sink.lock().unwrap();
+        let ok = sink.push(chunk);
+        let count = pushes.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if count % PROGRESS_EVERY_CHUNKS == 0 {
+          on_progress(sink.rows());
+        }
+        ok
+      }),
+    )
+    .await;
+
+  // The stream callback was dropped with stream_rows: this Arc is the last one.
+  let mut sink = std::sync::Arc::into_inner(sink)
+    .expect("stream callback dropped")
+    .into_inner()
+    .unwrap();
+  let discard = |err: Error| {
+    let _ = std::fs::remove_file(path);
+    err
+  };
+  let summary = result.map_err(discard)?;
+  if let Some(err) = sink.error.take() {
+    return Err(discard(err.into()));
+  }
+  sink.finish().map_err(|err| discard(err.into()))?;
+  Ok(summary)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
 #[serde(rename_all = "kebab-case")]

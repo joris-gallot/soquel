@@ -7,7 +7,7 @@ use crate::connectors::{
   RowsChunk, SchemaSnapshot, SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
-use crate::export::{quote_ident, ChunkSink, ExportFormat, ExportWriter};
+use crate::export::{quote_ident, ExportFormat, ExportWriter};
 use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind};
 use crate::ssh::{self, SshTunnel, TunnelTarget};
 use crate::tunnels::{TunnelInput, TunnelProfile};
@@ -266,9 +266,6 @@ pub struct ExportProgress {
   pub rows: f64,
 }
 
-// ~5k rows between progress events keeps the IPC chatter negligible.
-const PROGRESS_EVERY_CHUNKS: u64 = 25;
-
 /// Streams the full filtered/sorted table to a file; rows never enter the
 /// webview. Cancel = `cancel_query` on the same connection; a canceled or
 /// failed export removes the partial file.
@@ -284,49 +281,17 @@ pub async fn export_table_rows(
 ) -> Result<StreamSummary, Error> {
   let kind = state.profiles.lock().unwrap().get(&id)?.params.kind();
   let connection = active(&state, &id).await?;
-  let table = format!(
-    "{}.{}",
-    quote_ident(kind, &request.schema),
-    quote_ident(kind, &request.table)
-  );
-  let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
-  let sink = Arc::new(std::sync::Mutex::new(ChunkSink::new(
-    file, format, kind, table,
-  )));
-  let chunk_sink = sink.clone();
-  let pushes = Arc::new(std::sync::atomic::AtomicU64::new(0));
-  let result = sql_surface(&connection)?
-    .stream_rows(
-      &request,
-      Box::new(move |chunk| {
-        let mut sink = chunk_sink.lock().unwrap();
-        let ok = sink.push(chunk);
-        let count = pushes.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if count % PROGRESS_EVERY_CHUNKS == 0 {
-          let _ = channel.send(ExportProgress {
-            rows: sink.rows() as f64,
-          });
-        }
-        ok
-      }),
-    )
-    .await;
-
-  // The stream callback was dropped with stream_rows: this Arc is the last one.
-  let mut sink = Arc::into_inner(sink)
-    .expect("stream callback dropped")
-    .into_inner()
-    .unwrap();
-  let discard = |err: Error| {
-    let _ = std::fs::remove_file(&path);
-    err
-  };
-  let summary = result.map_err(discard)?;
-  if let Some(err) = sink.error.take() {
-    return Err(discard(err.into()));
-  }
-  sink.finish().map_err(|err| discard(err.into()))?;
-  Ok(summary)
+  crate::export::run_export(
+    sql_surface(&connection)?,
+    &request,
+    format,
+    kind,
+    &path,
+    move |rows| {
+      let _ = channel.send(ExportProgress { rows: rows as f64 });
+    },
+  )
+  .await
 }
 
 /// Materialized results (SQL editor); the grid path is `export_table_rows`.

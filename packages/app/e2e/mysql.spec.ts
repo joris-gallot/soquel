@@ -31,12 +31,17 @@ describe('mysql workspace', () => {
     await clickVisible('[data-testid="grid-view-data"]')
   })
 
-  it('runs sql without an explain button', async () => {
+  it('runs sql and renders a mysql explain tree', async () => {
     await typeSql('select count(*) as n from customers')
     await clickVisible('[data-testid="run-query"]')
     await waitForText('[data-testid="sql-results"]', 'n')
-    // EXPLAIN (FORMAT JSON) is postgres syntax: the button must be absent here.
-    await $('[data-testid="explain-menu"]').waitForExist({ reverse: true })
+
+    await typeSql('select o.id, c.name from orders o join customers c on c.id = o.customer_id')
+    await clickVisible('[data-testid="explain-menu"]')
+    await $('[data-testid="explain-plain"]').click()
+    await waitForText('[data-testid="explain-tree"]', 'Nested loop')
+    await waitForText('[data-testid="explain-tree"]', 'estimated costs only')
+    await browser.saveScreenshot('./e2e/screenshots/mysql-explain.png')
   })
 
   it('disconnects and cleans up', async () => {

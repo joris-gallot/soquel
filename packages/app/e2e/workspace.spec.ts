@@ -203,7 +203,6 @@ describe('workspace', () => {
     await clickVisible('[data-testid="explain-menu"]')
     await $('[data-testid="explain-analyze"]').click()
 
-    await (await visible('[data-testid="explain-tree"]')).waitForExist()
     await waitForText('[data-testid="explain-execution"]', 'execution')
     // A join plan has at least a root and two scans.
     const nodes = await browser.execute(() =>

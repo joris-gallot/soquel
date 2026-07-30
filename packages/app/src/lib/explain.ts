@@ -1,4 +1,4 @@
-import type { StatementResult } from '@/lib/bindings'
+import type { ConnectorKind, StatementResult } from '@/lib/bindings'
 
 export interface PlanNode {
   /** Hierarchical path ("0", "0.1", …): ancestor checks are prefix checks. */
@@ -46,11 +46,32 @@ const CONDITION_KEYS = [
 
 type RawNode = Record<string, unknown>
 
-/// Null unless the statement is an EXPLAIN (FORMAT JSON) result set.
+/// The dialect-specific SQL that produces a tree-renderable plan.
+export function explainSql(kind: ConnectorKind, analyze: boolean, sql: string): string {
+  if (kind === 'mysql')
+    return analyze ? `EXPLAIN ANALYZE ${sql}` : `EXPLAIN FORMAT=JSON ${sql}`
+  return `EXPLAIN (${analyze ? 'ANALYZE, FORMAT JSON' : 'FORMAT JSON'}) ${sql}`
+}
+
+/// mysql's EXPLAIN ANALYZE speaks TREE text (no JSON on 8.0): render it as-is.
+export function explainTreeText(
+  statement: Pick<StatementResult, 'columns' | 'rows'>,
+): string | null {
+  if (statement.columns.length !== 1 || statement.columns[0].name !== 'EXPLAIN')
+    return null
+  const text = statement.rows.map(row => row[0] ?? '').join('\n').trim()
+  return text.startsWith('->') ? text : null
+}
+
+/// Null unless the statement is a json plan result set (pg or mysql).
 export function parseExplain(
   statement: Pick<StatementResult, 'columns' | 'rows'>,
 ): ExplainPlan[] | null {
-  if (statement.columns.length !== 1 || statement.columns[0].name !== 'QUERY PLAN')
+  if (statement.columns.length !== 1)
+    return null
+  if (statement.columns[0].name === 'EXPLAIN')
+    return parseMysqlExplain(statement)
+  if (statement.columns[0].name !== 'QUERY PLAN')
     return null
   const text = statement.rows.map(row => row[0] ?? '').join('\n').trim()
   if (!text.startsWith('['))
@@ -92,6 +113,174 @@ export function hiddenByCollapse(id: string, collapsed: ReadonlySet<string>): bo
       return true
   }
   return false
+}
+
+// -------- mysql: query_block / nested_loop / table shapes --------
+
+const MYSQL_WRAPPERS: Record<string, string> = {
+  ordering_operation: 'Ordering',
+  grouping_operation: 'Grouping',
+  duplicates_removal: 'Distinct',
+  windowing: 'Windowing',
+  buffer_result: 'Buffer',
+}
+
+const MYSQL_ACCESS_TYPES: Record<string, string> = {
+  ALL: 'Table scan',
+  index: 'Index scan',
+  range: 'Range scan',
+  ref: 'Ref lookup',
+  eq_ref: 'Unique lookup',
+  const: 'Const row',
+  system: 'Const row',
+  fulltext: 'Fulltext search',
+  index_merge: 'Index merge',
+  unique_subquery: 'Unique subquery',
+  index_subquery: 'Index subquery',
+}
+
+function parseMysqlExplain(
+  statement: Pick<StatementResult, 'columns' | 'rows'>,
+): ExplainPlan[] | null {
+  const text = statement.rows.map(row => row[0] ?? '').join('\n').trim()
+  if (!text.startsWith('{'))
+    return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  }
+  catch {
+    return null
+  }
+  const block = (parsed as RawNode)?.query_block as RawNode | undefined
+  if (!block)
+    return null
+
+  const root = mysqlQueryBlock(block)
+  finalizeMysqlPlan(root, '0', 0)
+  const basis = root.inclusiveCost > 0 ? root.inclusiveCost : 1
+  applyHeat(root, basis, false)
+  // FORMAT=JSON carries estimates only; ANALYZE speaks TREE text instead.
+  return [{ root, planningMs: null, executionMs: null, analyzed: false }]
+}
+
+function mysqlQueryBlock(block: RawNode): PlanNode {
+  const node = mysqlNode('Query block', block)
+  node.inclusiveCost = mysqlCost(block, 'query_cost') ?? 0
+  node.totalCost = node.inclusiveCost
+  return node
+}
+
+function mysqlNode(nodeType: string, raw: RawNode): PlanNode {
+  const children = mysqlChildren(raw)
+  const flags = [
+    raw.using_filesort === true ? 'using filesort' : null,
+    raw.using_temporary_table === true ? 'using temporary' : null,
+  ].filter((flag): flag is string => flag !== null)
+  const cost = mysqlCost(raw, 'prefix_cost') ?? mysqlCost(raw, 'query_cost')
+  const inclusiveCost
+    = cost ?? children.reduce((total, child) => Math.max(total, child.inclusiveCost), 0)
+  return {
+    id: '',
+    depth: 0,
+    nodeType,
+    target: mysqlTarget(raw),
+    condition:
+      typeof raw.attached_condition === 'string'
+        ? `Filter: ${raw.attached_condition}`
+        : flags.length > 0
+          ? flags.join(', ')
+          : null,
+    totalCost: inclusiveCost,
+    planRows: numberOrNull(raw.rows_examined_per_scan) ?? 0,
+    actualRows: null,
+    actualLoops: null,
+    inclusiveMs: null,
+    exclusiveMs: null,
+    inclusiveCost,
+    exclusiveCost: 0,
+    heat: 0,
+    estimateOff: false,
+    neverExecuted: false,
+    children,
+  }
+}
+
+function mysqlChildren(raw: RawNode): PlanNode[] {
+  const children: PlanNode[] = []
+  for (const [key, label] of Object.entries(MYSQL_WRAPPERS)) {
+    const wrapped = raw[key]
+    if (wrapped && typeof wrapped === 'object')
+      children.push(mysqlNode(label, wrapped as RawNode))
+  }
+  if (Array.isArray(raw.nested_loop)) {
+    const tables = (raw.nested_loop as RawNode[])
+      .map(entry => entry.table)
+      .filter((table): table is RawNode => typeof table === 'object' && table !== null)
+      .map(mysqlTable)
+    // prefix_cost is cumulative across join siblings: displayed cost keeps the
+    // prefix, but the heat math needs each table's own share (the delta).
+    let previousPrefix = 0
+    for (const table of tables) {
+      const prefix = table.inclusiveCost
+      table.inclusiveCost = Math.max(prefix - previousPrefix, 0)
+      previousPrefix = Math.max(prefix, previousPrefix)
+    }
+    const loop = mysqlNode('Nested loop', {})
+    loop.children = tables
+    loop.inclusiveCost = previousPrefix
+    loop.totalCost = previousPrefix
+    children.push(loop)
+  }
+  if (raw.table && typeof raw.table === 'object')
+    children.push(mysqlTable(raw.table as RawNode))
+  if (Array.isArray(raw.attached_subqueries)) {
+    for (const entry of raw.attached_subqueries as RawNode[]) {
+      const block = entry.query_block
+      if (block && typeof block === 'object') {
+        const subquery = mysqlNode('Subquery', {})
+        subquery.children = [mysqlQueryBlock(block as RawNode)]
+        subquery.inclusiveCost = subquery.children[0].inclusiveCost
+        subquery.totalCost = subquery.inclusiveCost
+        children.push(subquery)
+      }
+    }
+  }
+  const materialized = raw.materialized_from_subquery as RawNode | undefined
+  if (materialized?.query_block && typeof materialized.query_block === 'object')
+    children.push(mysqlQueryBlock(materialized.query_block as RawNode))
+  return children
+}
+
+function mysqlTable(raw: RawNode): PlanNode {
+  const access = typeof raw.access_type === 'string' ? raw.access_type : ''
+  return mysqlNode(MYSQL_ACCESS_TYPES[access] ?? `Access (${access || 'unknown'})`, raw)
+}
+
+function mysqlTarget(raw: RawNode): string | null {
+  const parts: string[] = []
+  if (typeof raw.table_name === 'string')
+    parts.push(`on ${raw.table_name}`)
+  if (typeof raw.key === 'string')
+    parts.push(`using ${raw.key}`)
+  return parts.length > 0 ? parts.join(' ') : null
+}
+
+function mysqlCost(raw: RawNode, key: string): number | null {
+  const info = raw.cost_info as RawNode | undefined
+  const value = info?.[key]
+  if (typeof value === 'string' && value !== '')
+    return Number.isFinite(Number(value)) ? Number(value) : null
+  return numberOrNull(value)
+}
+
+/// mysql costs are cumulative (prefix_cost): same inclusive/exclusive math as pg.
+function finalizeMysqlPlan(node: PlanNode, id: string, depth: number) {
+  node.id = id
+  node.depth = depth
+  const childrenCost = node.children.reduce((total, child) => total + child.inclusiveCost, 0)
+  node.exclusiveCost = Math.max(node.inclusiveCost - childrenCost, 0)
+  node.children.forEach((child, index) => finalizeMysqlPlan(child, `${id}.${index}`, depth + 1))
 }
 
 /// Pre-order flatten for flat rendering with indent guides.

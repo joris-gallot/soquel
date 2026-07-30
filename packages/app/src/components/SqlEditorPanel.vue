@@ -32,7 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useSqlSessions } from '@/composables/useSqlSessions'
 import { commands } from '@/lib/bindings'
 import { soquelEditorTheme } from '@/lib/codemirror'
-import { parseExplain } from '@/lib/explain'
+import { explainSql, explainTreeText, parseExplain } from '@/lib/explain'
 import { EXPORT_FORMATS, pickExportPath } from '@/lib/export'
 import { pushHistory } from '@/lib/query-history'
 import { unwrap } from '@/lib/result'
@@ -70,6 +70,11 @@ const activeResult = computed(() => {
 
 const explainPlans = computed(() =>
   (result.value?.statements ?? []).map(statement => parseExplain(statement)),
+)
+
+// mysql EXPLAIN ANALYZE output: an indented TREE, unreadable as a table cell.
+const explainTexts = computed(() =>
+  (result.value?.statements ?? []).map(statement => explainTreeText(statement)),
 )
 
 function explainRaw(index: number): string {
@@ -172,8 +177,7 @@ function runExplain(analyze: boolean) {
   const statementSql = currentSql().trim().replace(/;\s*$/, '')
   if (statementSql === '')
     return
-  const options = analyze ? 'ANALYZE, FORMAT JSON' : 'FORMAT JSON'
-  return execute(`EXPLAIN (${options}) ${statementSql}`)
+  return execute(explainSql(props.kind, analyze, statementSql))
 }
 
 async function execute(statementSql: string) {
@@ -232,8 +236,7 @@ function loadFromHistory(entry: HistoryEntry) {
         <Play />
         {{ hasSelection ? 'Run selection' : 'Run' }}
       </Button>
-      <!-- EXPLAIN (FORMAT JSON) is postgres syntax; mysql gets the button back with its own parser. -->
-      <DropdownMenu v-if="kind === 'postgres'">
+      <DropdownMenu>
         <DropdownMenuTrigger as-child>
           <Button size="sm" variant="ghost" data-testid="explain-menu" :disabled="running">
             Explain
@@ -314,6 +317,11 @@ function loadFromHistory(entry: HistoryEntry) {
                 :plans="explainPlans[0]"
                 :raw="explainRaw(0)"
               />
+              <pre
+                v-else-if="explainTexts[0]"
+                class="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5"
+                data-testid="explain-text"
+              >{{ explainTexts[0] }}</pre>
               <ResultsTable v-else :statement="result.statements[0]" />
             </template>
             <Tabs
@@ -342,6 +350,10 @@ function loadFromHistory(entry: HistoryEntry) {
                   :plans="explainPlans[index]"
                   :raw="explainRaw(index)"
                 />
+                <pre
+                  v-else-if="explainTexts[index]"
+                  class="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5"
+                >{{ explainTexts[index] }}</pre>
                 <ResultsTable v-else :statement="statement" />
               </TabsContent>
             </Tabs>

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import costOnlyRaw from '@/lib/__fixtures__/explain-cost-only.json?raw'
 import joinSortRaw from '@/lib/__fixtures__/explain-join-sort.json?raw'
+import mysqlJoinRaw from '@/lib/__fixtures__/explain-mysql-join.json?raw'
+import mysqlSubqueryRaw from '@/lib/__fixtures__/explain-mysql-subquery.json?raw'
 import parallelRaw from '@/lib/__fixtures__/explain-parallel.json?raw'
 import subplanRaw from '@/lib/__fixtures__/explain-subplan.json?raw'
-import { flattenPlan, formatMs, hiddenByCollapse, parseExplain } from '@/lib/explain'
+import { explainSql, explainTreeText, flattenPlan, formatMs, hiddenByCollapse, parseExplain } from '@/lib/explain'
 
 function statementWith(json: unknown) {
   return {
@@ -200,6 +202,76 @@ describe('parseExplain on real postgres output', () => {
     expect(plans[0].executionMs).toBeNull()
     expect(nodes.every(node => node.inclusiveMs === null)).toBe(true)
     expect(plans[0].root.heat).toBeGreaterThan(0)
+  })
+})
+
+// Captured from the seeded test mysql (EXPLAIN FORMAT=JSON via the mysql client).
+describe('parseExplain on real mysql output', () => {
+  function mysqlStatement(raw: string) {
+    return {
+      columns: [{ name: 'EXPLAIN', dataType: 'json', kind: 'json' as const }],
+      rows: [[raw.trimEnd()]],
+    }
+  }
+
+  it('parses wrappers, nested loops and table access types', () => {
+    const plans = parseExplain(mysqlStatement(mysqlJoinRaw))!
+    expect(plans).toHaveLength(1)
+    const { root, analyzed } = plans[0]
+    expect(analyzed).toBe(false)
+    expect(root.nodeType).toBe('Query block')
+    expect(root.inclusiveCost).toBeCloseTo(1.65)
+
+    const nodes = flattenPlan(root)
+    const types = nodes.map(node => node.nodeType)
+    expect(types).toContain('Ordering')
+    expect(types).toContain('Grouping')
+    expect(types).toContain('Nested loop')
+    expect(types).toContain('Table scan')
+    expect(types).toContain('Unique lookup')
+
+    const scan = nodes.find(node => node.nodeType === 'Table scan')!
+    expect(scan.target).toBe('on o')
+    expect(scan.condition).toContain('amount')
+    const lookup = nodes.find(node => node.nodeType === 'Unique lookup')!
+    expect(lookup.target).toBe('on c using PRIMARY')
+    // Displayed cost keeps mysql's cumulative prefix_cost.
+    expect(lookup.totalCost).toBeCloseTo(1.65)
+
+    const ids = new Set(nodes.map(node => node.id))
+    expect(ids.size).toBe(nodes.length)
+    for (const node of nodes) {
+      expect(node.heat).toBeGreaterThanOrEqual(0)
+      expect(node.heat).toBeLessThanOrEqual(1)
+      expect(node.exclusiveCost).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('attaches subqueries as child query blocks', () => {
+    const plans = parseExplain(mysqlStatement(mysqlSubqueryRaw))!
+    const nodes = flattenPlan(plans[0].root)
+    expect(nodes.map(node => node.nodeType)).toContain('Subquery')
+    expect(nodes.filter(node => node.nodeType === 'Query block').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('detects the EXPLAIN ANALYZE tree text and rejects json for it', () => {
+    const tree = '-> Aggregate: count(0)  (cost=2.01 rows=1)\n    -> Table scan on events'
+    const statement = {
+      columns: [{ name: 'EXPLAIN', dataType: 'text', kind: 'text' as const }],
+      rows: [[tree]],
+    }
+    expect(explainTreeText(statement)).toBe(tree)
+    expect(parseExplain(statement)).toBeNull()
+    expect(explainTreeText(mysqlStatement(mysqlJoinRaw))).toBeNull()
+  })
+})
+
+describe('explainSql', () => {
+  it('wraps per dialect', () => {
+    expect(explainSql('postgres', false, 'select 1')).toBe('EXPLAIN (FORMAT JSON) select 1')
+    expect(explainSql('postgres', true, 'select 1')).toBe('EXPLAIN (ANALYZE, FORMAT JSON) select 1')
+    expect(explainSql('mysql', false, 'select 1')).toBe('EXPLAIN FORMAT=JSON select 1')
+    expect(explainSql('mysql', true, 'select 1')).toBe('EXPLAIN ANALYZE select 1')
   })
 })
 

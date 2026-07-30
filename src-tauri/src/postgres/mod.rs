@@ -433,6 +433,9 @@ async fn plan_select(pg: &PooledPg, request: &TableRowsRequest) -> Result<Select
     })
     .collect::<Vec<_>>()
     .join(", ");
+  if request.include_xmin {
+    projection = format!("\"xmin\"::text AS \"xmin\", {projection}");
+  }
   if request.include_ctid {
     projection = format!("\"ctid\"::text AS \"ctid\", {projection}");
   }
@@ -479,6 +482,17 @@ async fn plan_select(pg: &PooledPg, request: &TableRowsRequest) -> Result<Select
       QueryColumn {
         name: "ctid".to_string(),
         data_type: Some("tid".to_string()),
+        kind: ColumnKind::Other,
+      },
+    );
+  }
+  if request.include_xmin {
+    let position = usize::from(request.include_ctid);
+    result_columns.insert(
+      position,
+      QueryColumn {
+        name: "xmin".to_string(),
+        data_type: Some("xid".to_string()),
         kind: ColumnKind::Other,
       },
     );
@@ -596,10 +610,14 @@ fn build_change_statements(
   Ok(statements)
 }
 
-// ctid is a system column: absent from the prepared list, valid as a key.
+// System columns are absent from the prepared list but valid as keys:
+// ctid for PK-less tables, xmin as the optimistic-lock guard.
 fn change_cast(columns: &[(String, PgType)], column: &str) -> Result<String, Error> {
   if column == "ctid" {
     return Ok("tid".to_string());
+  }
+  if column == "xmin" {
+    return Ok("xid".to_string());
   }
   columns
     .iter()
@@ -646,14 +664,19 @@ async fn run_change_statements(
     match statement.kind {
       ChangeKind::Update | ChangeKind::Delete => {
         if affected != 1 {
+          let kind = if statement.kind == ChangeKind::Update {
+            "row update"
+          } else {
+            "row delete"
+          };
+          let hint = if affected == 0 {
+            "; the row may have been changed or deleted since it was loaded - refresh and retry"
+          } else {
+            ""
+          };
           return Err(Error::Database {
             message: format!(
-              "a {} matched {affected} rows instead of exactly 1; nothing was applied",
-              if statement.kind == ChangeKind::Update {
-                "row update"
-              } else {
-                "row delete"
-              }
+              "a {kind} matched {affected} rows instead of exactly 1; nothing was applied{hint}"
             ),
           });
         }
@@ -1099,6 +1122,26 @@ pub mod tests {
   }
 
   #[test]
+  fn change_statements_key_on_xmin_as_xid() {
+    let columns = vec![
+      ("id".to_string(), PgType::INT4),
+      ("name".to_string(), PgType::TEXT),
+    ];
+    let changes = TableChanges {
+      updates: vec![crate::connectors::RowUpdate {
+        key: vec![cell("id", Some("1")), cell("xmin", Some("12345"))],
+        set: vec![cell("name", Some("Ada"))],
+      }],
+      ..no_changes()
+    };
+    let statements = build_change_statements("app", "customers", &columns, &changes).unwrap();
+    assert_eq!(
+      statements[0].sql,
+      r#"UPDATE "app"."customers" SET "name" = $1::text WHERE "id" IS NOT DISTINCT FROM $2::int4 AND "xmin" IS NOT DISTINCT FROM $3::xid"#
+    );
+  }
+
+  #[test]
   fn column_kind_maps_common_types() {
     assert_eq!(column_kind(&PgType::INT8), ColumnKind::Number);
     assert_eq!(column_kind(&PgType::NUMERIC), ColumnKind::Number);
@@ -1391,6 +1434,7 @@ pub mod tests {
         }),
         filters: vec![],
         include_ctid: false,
+        include_xmin: false,
       })
       .await
       .unwrap();
@@ -1413,6 +1457,7 @@ pub mod tests {
         }),
         filters: vec![],
         include_ctid: false,
+        include_xmin: false,
       })
       .await
       .unwrap();
@@ -1436,6 +1481,7 @@ pub mod tests {
       sort: None,
       filters,
       include_ctid: false,
+      include_xmin: false,
     })
     .await
     .unwrap()
@@ -1564,6 +1610,7 @@ pub mod tests {
           }),
           filters: vec![],
           include_ctid: false,
+          include_xmin: false,
         },
         on_chunk,
       )
@@ -1596,6 +1643,7 @@ pub mod tests {
           sort: None,
           filters: vec![filter("kind", FilterOp::Eq, Some("purchase"))],
           include_ctid: false,
+          include_xmin: false,
         },
         on_chunk,
       )
@@ -1631,6 +1679,7 @@ pub mod tests {
           sort: None,
           filters: vec![],
           include_ctid: false,
+          include_xmin: false,
         },
         Box::new(move |chunk| sink.lock().unwrap().push(chunk)),
       )
@@ -1661,6 +1710,7 @@ pub mod tests {
           sort: None,
           filters: vec![],
           include_ctid: false,
+          include_xmin: false,
         },
         Box::new(move |_chunk| {
           let mut count = sink.lock().unwrap();
@@ -1764,6 +1814,109 @@ pub mod tests {
     assert_eq!(rows.rows[0][1].as_deref(), Some("Ada Lovelace"));
     // The pooled client came back clean (no open transaction).
     pg.run_query("SELECT 1").await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_xmin_guard_detects_concurrent_writes() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    pg.apply_changes(&TableChanges {
+      inserts: vec![crate::connectors::RowInsert {
+        values: vec![
+          cell("name", Some("Xmin Guard")),
+          cell("email", Some("xmin@example.com")),
+        ],
+      }],
+      ..no_changes()
+    })
+    .await
+    .unwrap();
+
+    let fetched = pg
+      .table_rows(&TableRowsRequest {
+        schema: "app".to_string(),
+        table: "customers".to_string(),
+        limit: Some(1),
+        offset: 0,
+        sort: None,
+        filters: vec![filter("email", FilterOp::Eq, Some("xmin@example.com"))],
+        include_ctid: false,
+        include_xmin: true,
+      })
+      .await
+      .unwrap();
+    let statement = &fetched.statements[0];
+    assert_eq!(statement.columns[0].name, "xmin");
+    let stale_xmin = statement.rows[0][0].clone();
+
+    // A concurrent write bumps xmin: the stale guard must match nothing.
+    pg.run_query(
+      "UPDATE app.customers SET name = 'Moved Underneath' WHERE email = 'xmin@example.com'",
+    )
+    .await
+    .unwrap();
+    let result = pg
+      .apply_changes(&TableChanges {
+        updates: vec![crate::connectors::RowUpdate {
+          key: vec![
+            cell("email", Some("xmin@example.com")),
+            crate::connectors::CellValue {
+              column: "xmin".to_string(),
+              value: stale_xmin,
+            },
+          ],
+          set: vec![cell("name", Some("Should Conflict"))],
+        }],
+        ..no_changes()
+      })
+      .await;
+    let Err(Error::Database { message }) = result else {
+      panic!("expected the stale xmin to conflict");
+    };
+    assert!(message.contains("changed or deleted"), "{message}");
+
+    // With the fresh xmin the same update goes through.
+    let fresh = pg
+      .table_rows(&TableRowsRequest {
+        schema: "app".to_string(),
+        table: "customers".to_string(),
+        limit: Some(1),
+        offset: 0,
+        sort: None,
+        filters: vec![filter("email", FilterOp::Eq, Some("xmin@example.com"))],
+        include_ctid: false,
+        include_xmin: true,
+      })
+      .await
+      .unwrap();
+    let fresh_xmin = fresh.statements[0].rows[0][0].clone();
+    let applied = pg
+      .apply_changes(&TableChanges {
+        updates: vec![crate::connectors::RowUpdate {
+          key: vec![
+            cell("email", Some("xmin@example.com")),
+            crate::connectors::CellValue {
+              column: "xmin".to_string(),
+              value: fresh_xmin,
+            },
+          ],
+          set: vec![cell("name", Some("Guard Passed"))],
+        }],
+        ..no_changes()
+      })
+      .await
+      .unwrap();
+    assert_eq!(applied.updated, 1);
+
+    pg.apply_changes(&TableChanges {
+      deletes: vec![crate::connectors::RowDelete {
+        key: vec![cell("email", Some("xmin@example.com"))],
+      }],
+      ..no_changes()
+    })
+    .await
+    .unwrap();
   }
 
   #[tokio::test]
@@ -1891,6 +2044,7 @@ pub mod tests {
         sort: None,
         filters: vec![filter("message", FilterOp::Eq, Some("ctid test row"))],
         include_ctid: true,
+        include_xmin: false,
       })
       .await
       .unwrap();
@@ -1966,6 +2120,7 @@ pub mod tests {
         }),
         filters: vec![filter("amount", FilterOp::Gt, Some("40"))],
         include_ctid: false,
+        include_xmin: false,
       })
       .await
       .unwrap();

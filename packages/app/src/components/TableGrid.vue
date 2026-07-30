@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { ColumnFilter, ExportFormat, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
 import type { StagedChanges } from '@/lib/staged'
-import { ArrowDown, ArrowUp, ArrowUpRight, Ban, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
+import { ArrowDown, ArrowUp, ArrowUpRight, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { Channel } from '@tauri-apps/api/core'
 import { useClipboard, useEventListener, useScroll } from '@vueuse/core'
 import { computed, nextTick, ref, shallowRef, triggerRef, useTemplateRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
+import CellEditor from '@/components/CellEditor.vue'
 import ExportMenu from '@/components/ExportMenu.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -79,7 +80,6 @@ const { copy: copyDdl, copied: ddlCopied } = useClipboard()
 const staged = ref<StagedChanges>(emptyStaged())
 const ctidMode = ref(false)
 const editingCell = ref<{ rowIndex: number, columnIndex: number } | null>(null)
-const editingValue = ref('')
 const previewOpen = ref(false)
 const applying = ref(false)
 
@@ -91,12 +91,14 @@ const canEverEdit = computed(() => props.table.kind === 'table')
 const editable = computed(() => canEverEdit.value && keyColumns.value.length > 0)
 const pending = computed(() => stagedCount(staged.value))
 
-// ctid is fetched for keying but never displayed.
+// System columns (ctid key, xmin guard) are fetched for keying but never displayed.
 const displayColumns = computed(() =>
   columns.value
     .map((column, index) => ({ column, index }))
-    .filter(({ column }) => column.name !== 'ctid'),
+    .filter(({ column }) => column.name !== 'ctid' && column.name !== 'xmin'),
 )
+
+const hasXmin = computed(() => columns.value.some(column => column.name === 'xmin'))
 
 const nullableColumns = computed(() =>
   new Map(props.table.columns.map(column => [column.name, column.nullable])),
@@ -181,6 +183,7 @@ async function fetchRows(reset = true) {
       sort: sort.value,
       filters: filters.value,
       includeCtid: ctidMode.value,
+      includeXmin: canEverEdit.value,
     }, channel))
     if (mine === generation) {
       durationMs.value = summary.durationMs ?? 0
@@ -335,7 +338,6 @@ function beginEdit(rowIndex: number, columnIndex: number) {
   if (!editable.value)
     return
   editingCell.value = { rowIndex, columnIndex }
-  editingValue.value = displayedValue(rowIndex, columnIndex) ?? ''
 }
 
 function stageEdit(value: string | null) {
@@ -356,6 +358,28 @@ function stageEdit(value: string | null) {
     all[cell.rowIndex] = edits
   staged.value = { ...staged.value, edits: all }
   editingCell.value = null
+}
+
+/// Tab / shift-tab: stage the current edit and hop to the adjacent editable cell.
+function stageAndMove(value: string | null, direction: 1 | -1) {
+  const cell = editingCell.value
+  stageEdit(value)
+  if (!cell)
+    return
+  const positions = displayColumns.value
+  let position = positions.findIndex(({ index }) => index === cell.columnIndex) + direction
+  let row = cell.rowIndex
+  if (position < 0) {
+    position = positions.length - 1
+    row -= 1
+  }
+  else if (position >= positions.length) {
+    position = 0
+    row += 1
+  }
+  if (row < 0 || row >= rows.value.length)
+    return
+  beginEdit(row, positions[position].index)
 }
 
 function addRow(fromRow?: number) {
@@ -401,11 +425,13 @@ function discardAll() {
   editingCell.value = null
 }
 
+// xmin rides along as an optimistic-lock guard: a concurrent write bumps it
+// and the update/delete then matches nothing instead of overwriting.
 const changes = computed(() => buildTableChanges(
   staged.value,
   rows.value,
   columns.value,
-  keyColumns.value,
+  hasXmin.value ? [...keyColumns.value, 'xmin'] : keyColumns.value,
   props.schema,
   props.table.name,
 ))
@@ -654,33 +680,15 @@ useEventListener('keydown', (event) => {
                 @click="selectedCell = { rowIndex, columnIndex }"
                 @dblclick="beginEdit(rowIndex, columnIndex)"
               >
-                <span
+                <CellEditor
                   v-if="editingCell?.rowIndex === rowIndex && editingCell?.columnIndex === columnIndex"
-                  class="flex items-center gap-1"
-                >
-                  <!-- eslint-disable-next-line vuejs-accessibility/no-autofocus -->
-                  <input
-                    v-model="editingValue"
-                    autofocus
-                    class="w-full min-w-24 border-b border-ring bg-transparent font-mono text-xs outline-none"
-                    data-testid="cell-editor"
-                    @keydown.enter="stageEdit(editingValue)"
-                    @keydown.escape="editingCell = null"
-                    @blur="stageEdit(editingValue)"
-                    @click.stop
-                  >
-                  <button
-                    v-if="nullableColumns.get(columns[columnIndex].name)"
-                    type="button"
-                    class="shrink-0 text-muted-foreground hover:text-foreground"
-                    aria-label="Set NULL"
-                    data-testid="cell-set-null"
-                    title="Set NULL"
-                    @mousedown.prevent.stop="stageEdit(null)"
-                  >
-                    <Ban class="size-3" />
-                  </button>
-                </span>
+                  :column="columns[columnIndex]"
+                  :nullable="nullableColumns.get(columns[columnIndex].name) ?? false"
+                  :initial="displayedValue(rowIndex, columnIndex)"
+                  @stage="stageEdit"
+                  @cancel="editingCell = null"
+                  @navigate="stageAndMove"
+                />
                 <span v-else class="inline-flex max-w-full items-center gap-1">
                   <span v-if="displayedValue(rowIndex, columnIndex) === null" class="text-muted-foreground/60 italic">NULL</span>
                   <span v-else class="truncate">{{ displayedValue(rowIndex, columnIndex) }}</span>

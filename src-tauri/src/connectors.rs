@@ -117,6 +117,9 @@ pub struct TableRowsRequest {
   /// ctid-keyed editing for tables without a primary key.
   #[serde(default)]
   pub include_ctid: bool,
+  /// Optimistic-lock guard for editing: any concurrent write bumps xmin.
+  #[serde(default)]
+  pub include_xmin: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]

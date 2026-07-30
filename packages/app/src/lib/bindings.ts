@@ -244,6 +244,8 @@ export type TableRowsRequest = {
 	filters?: ColumnFilter[],
 	/**  ctid-keyed editing for tables without a primary key. */
 	includeCtid?: boolean,
+	/**  Optimistic-lock guard for editing: any concurrent write bumps xmin. */
+	includeXmin?: boolean,
 };
 
 /**

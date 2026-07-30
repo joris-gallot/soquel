@@ -37,6 +37,7 @@ defineEmits<{ copy: [format: ExportFormat], save: [format: ExportFormat] }>()
       <DropdownMenuItem
         v-for="format in EXPORT_FORMAT_KEYS"
         :key="`copy-${format}`"
+        class="text-xs"
         :data-testid="`export-copy-${format}`"
         @click="$emit('copy', format)"
       >
@@ -49,6 +50,7 @@ defineEmits<{ copy: [format: ExportFormat], save: [format: ExportFormat] }>()
       <DropdownMenuItem
         v-for="format in EXPORT_FORMAT_KEYS"
         :key="`save-${format}`"
+        class="text-xs"
         :data-testid="`export-save-${format}`"
         @click="$emit('save', format)"
       >

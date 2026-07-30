@@ -239,11 +239,11 @@ function loadFromHistory(entry: HistoryEntry) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" class="min-w-44 font-mono text-xs">
-          <DropdownMenuItem data-testid="explain-plain" @click="runExplain(false)">
+          <DropdownMenuItem class="text-xs" data-testid="explain-plain" @click="runExplain(false)">
             Explain
           </DropdownMenuItem>
           <DropdownMenuItem
-            class="flex-col items-start gap-0.5"
+            class="flex-col items-start gap-0.5 text-xs"
             data-testid="explain-analyze"
             @click="runExplain(true)"
           >

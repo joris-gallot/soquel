@@ -1,5 +1,5 @@
 import { $, $$, browser, expect } from '@wdio/globals'
-import { beginCellEdit, clickVisible, createPostgresConnection, CTRL, deleteFirstConnection, setEditorValue, typeSql, visible, waitForText, waitForToastsGone, waitForVisibleRows } from './helpers'
+import { beginCellEdit, clickVisible, createPostgresConnection, CTRL, deleteFirstConnection, setEditorValue, typeSql, visible, waitForText, waitForToast, waitForToastsGone, waitForVisibleRows } from './helpers'
 
 describe('workspace', () => {
   it('opens a workspace with the schema tree after connecting', async () => {
@@ -10,6 +10,7 @@ describe('workspace', () => {
     await waitForText('[data-testid="workspace-name"]', 'fixture db')
     await $('[data-testid="table-app.customers"]').waitForExist({ timeout: 10_000 })
     await $('[data-testid="table-public.settings"]').waitForExist()
+    await waitForText('[data-testid="server-version"]', 'PG')
     await browser.saveScreenshot('./e2e/screenshots/workspace.png')
   })
 
@@ -195,6 +196,38 @@ describe('workspace', () => {
 
     await tabs[1].click()
     await waitForText('[data-testid="sql-results"]', 'second')
+  })
+
+  it('renders an explain plan as a tree with a raw toggle', async () => {
+    await typeSql('select o.id, c.name from app.orders o join app.customers c on c.id = o.customer_id')
+    await clickVisible('[data-testid="explain-menu"]')
+    await $('[data-testid="explain-analyze"]').click()
+
+    await (await visible('[data-testid="explain-tree"]')).waitForExist()
+    await waitForText('[data-testid="explain-execution"]', 'execution')
+    // A join plan has at least a root and two scans.
+    const nodes = await browser.execute(() =>
+      [...document.querySelectorAll('[data-testid="explain-node"]')]
+        .filter(node => node instanceof HTMLElement && node.offsetParent !== null)
+        .length)
+    expect(nodes).toBeGreaterThanOrEqual(3)
+    await waitForText('[data-testid="explain-tree"]', 'rows')
+    await browser.saveScreenshot('./e2e/screenshots/workspace-explain.png')
+
+    await clickVisible('[data-testid="explain-view-raw"]')
+    await waitForText('[data-testid="explain-tree"]', '"Node Type"')
+    await clickVisible('[data-testid="explain-view-tree"]')
+  })
+
+  it('copies query results from the export menu', async () => {
+    await typeSql('select name from app.customers order by name')
+    await clickVisible('[data-testid="run-query"]')
+    await waitForText('[data-testid="sql-results"]', 'Ada Lovelace')
+
+    await clickVisible('[data-testid="export-menu"]')
+    await $('[data-testid="export-copy-csv"]').click()
+    await waitForToast('copied 3 rows as CSV')
+    await waitForToastsGone()
   })
 
   it('reloads a statement from history', async () => {

@@ -100,6 +100,19 @@ export async function setEditorValue(selector: string, value: string) {
   await browser.execute(text => document.execCommand('insertText', false, text), value)
 }
 
+/// Toasts are position:fixed (offsetParent null), invisible to waitForText.
+export async function waitForToast(text: string, timeout = 10_000) {
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        needle => [...document.querySelectorAll('[data-sonner-toast]')]
+          .some(toast => (toast.textContent ?? '').includes(needle)),
+        text,
+      ),
+    { timeout, timeoutMsg: `no toast containing "${text}"` },
+  )
+}
+
 /// Toasts overlay the grid footer and intercept clicks: wait them out.
 export async function waitForToastsGone(timeout = 8_000) {
   await browser.waitUntil(

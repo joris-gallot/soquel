@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import type { ColumnFilter, ConnectorKind, ExportFormat, ExportProgress, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
+import type { ColumnFilter, ConnectorKind, ExportFormat, ExportProgress, FilterOp, SortSpec, TableInfo } from '@/lib/bindings'
 import type { StagedChanges } from '@/lib/staged'
 import { ArrowDown, ArrowUp, ArrowUpRight, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { Channel } from '@tauri-apps/api/core'
 import { useClipboard, useEventListener, useScroll } from '@vueuse/core'
-import { computed, nextTick, ref, shallowRef, triggerRef, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import CellEditor from '@/components/CellEditor.vue'
 import ExportMenu from '@/components/ExportMenu.vue'
+import GridInspector from '@/components/GridInspector.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -29,13 +30,14 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useGridRows } from '@/composables/useGridRows'
 import { useVirtualRows } from '@/composables/useVirtualRows'
 import { commands } from '@/lib/bindings'
 import { nextEditablePosition } from '@/lib/cell-editing'
 import { EXPORT_FORMATS, pickExportPath } from '@/lib/export'
 import { FILTER_OP_LABELS, FILTER_OPS_BY_KIND, filterLabel, OP_NEEDS_VALUE } from '@/lib/filters'
 import { formatEstimatedRows } from '@/lib/format'
-import { highlightJson, highlightSql } from '@/lib/highlight'
+import { highlightSql } from '@/lib/highlight'
 import { unwrap } from '@/lib/result'
 import { buildTableChanges, emptyStaged, previewSql, stagedCount } from '@/lib/staged'
 
@@ -52,29 +54,15 @@ const emit = defineEmits<{ hop: [schema: string, table: string, filters: ColumnF
 // ctid rescue and the xmin guard are postgres system columns.
 const isPostgres = computed(() => props.kind === 'postgres')
 
-const FETCH_SIZE = 2000
-
-const columns = ref<QueryColumn[]>([])
-// shallowRef + explicit triggers: rows can reach 6 digits, deep proxying costs.
-const rows = shallowRef<(string | null)[][]>([])
-const durationMs = ref(0)
 const sort = ref<SortSpec | null>(null)
-const loading = ref(false)
-const fetchedAll = ref(false)
 const filters = ref<ColumnFilter[]>([])
-let generation = 0
-
-const scroller = useTemplateRef('scroller')
-const rowCount = computed(() => rows.value.length)
-const { window: virtualWindow } = useVirtualRows(scroller, rowCount)
-const { y: scrollY } = useScroll(scroller)
 
 const openFilterColumn = ref<string | null>(null)
 const draftOp = ref<FilterOp>('eq')
 const draftValue = ref('')
 
 const selectedCell = ref<{ rowIndex: number, columnIndex: number } | null>(null)
-const { copy, copied } = useClipboard()
+const { copy } = useClipboard()
 
 const gridView = ref<'data' | 'ddl'>('data')
 const ddl = ref<string | null>(null)
@@ -95,6 +83,28 @@ const keyColumns = computed(() =>
 const canEverEdit = computed(() => props.table.kind === 'table')
 const editable = computed(() => canEverEdit.value && keyColumns.value.length > 0)
 const pending = computed(() => stagedCount(staged.value))
+
+const { columns, rows, durationMs, loading, fetchedAll, fetchRows: fetchWindow } = useGridRows(
+  () => props.connectionId,
+  () => ({
+    schema: props.schema,
+    table: props.table.name,
+    sort: sort.value,
+    filters: filters.value,
+    includeCtid: ctidMode.value,
+    includeXmin: canEverEdit.value && isPostgres.value,
+  }),
+)
+
+async function fetchRows(reset = true) {
+  await fetchWindow(reset)
+  nextTick(maybeAppend)
+}
+
+const scroller = useTemplateRef('scroller')
+const rowCount = computed(() => rows.value.length)
+const { window: virtualWindow } = useVirtualRows(scroller, rowCount)
+const { y: scrollY } = useScroll(scroller)
 
 // System columns (ctid key, xmin guard) are fetched for keying but never displayed.
 const displayColumns = computed(() =>
@@ -139,73 +149,6 @@ const inspected = computed(() => {
     return null
   return { column, value: row[columnIndex], rowIndex, columnIndex }
 })
-
-const inspectedPretty = computed(() => {
-  const cell = inspected.value
-  if (!cell || cell.value === null)
-    return null
-  if (cell.column.kind !== 'json')
-    return cell.value
-  try {
-    return JSON.stringify(JSON.parse(cell.value), null, 2)
-  }
-  catch {
-    return cell.value
-  }
-})
-
-const inspectedHtml = computed(() =>
-  inspected.value?.column.kind === 'json' && inspectedPretty.value !== null
-    ? highlightJson(inspectedPretty.value)
-    : null,
-)
-
-/// Streams one FETCH_SIZE window; `reset` restarts from the top, otherwise the
-/// next offset appends (infinite scroll). Stale generations are ignored.
-async function fetchRows(reset = true) {
-  const mine = ++generation
-  loading.value = true
-  if (reset) {
-    rows.value = []
-    triggerRef(rows)
-  }
-  const offset = reset ? 0 : rows.value.length
-  const channel = new Channel<RowsChunk>()
-  channel.onmessage = (chunk) => {
-    if (mine !== generation)
-      return
-    if (chunk.columns)
-      columns.value = chunk.columns
-    rows.value.push(...chunk.rows)
-    triggerRef(rows)
-  }
-  try {
-    const summary = unwrap(await commands.streamTableRows(props.connectionId, {
-      schema: props.schema,
-      table: props.table.name,
-      limit: FETCH_SIZE,
-      offset,
-      sort: sort.value,
-      filters: filters.value,
-      includeCtid: ctidMode.value,
-      includeXmin: canEverEdit.value && isPostgres.value,
-    }, channel))
-    if (mine === generation) {
-      durationMs.value = summary.durationMs ?? 0
-      fetchedAll.value = (summary.rows ?? 0) < FETCH_SIZE
-    }
-  }
-  catch (error) {
-    if (mine === generation)
-      toast.error(error instanceof Error ? error.message : String(error))
-  }
-  finally {
-    if (mine === generation) {
-      loading.value = false
-      nextTick(maybeAppend)
-    }
-  }
-}
 
 watch(
   () => [props.connectionId, props.schema, props.table.name],
@@ -954,57 +897,13 @@ useEventListener('keydown', (event) => {
     <template v-if="inspected">
       <ResizableHandle with-handle />
       <ResizablePanel id="grid-inspector" :default-size="28" :min-size="15" :max-size="60">
-        <aside class="flex h-full min-h-0 flex-col" data-testid="cell-inspector">
-          <header class="flex items-center gap-2 border-b px-3 py-1.5">
-            <span class="min-w-0 truncate font-mono text-xs font-medium">{{ inspected.column.name }}</span>
-            <span class="font-mono text-[10px] text-muted-foreground">{{ inspected.column.dataType }}</span>
-            <span class="flex-1" />
-            <!-- Controlled open: the tooltip only flashes "Copied" after a click. -->
-            <Tooltip v-if="inspected.value !== null" :open="copied">
-              <TooltipTrigger as-child>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label="Copy value"
-                  data-testid="inspector-copy"
-                  @click="copy(inspected.value)"
-                >
-                  <Copy />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Copied</TooltipContent>
-            </Tooltip>
-            <Tooltip v-if="fkByColumn.has(inspected.column.name) && inspected.value !== null">
-              <TooltipTrigger as-child>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label="Open referenced row"
-                  data-testid="inspector-hop"
-                  @click="hopFrom(inspected.rowIndex, inspected.column.name)"
-                >
-                  <ArrowUpRight />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Open referenced row</TooltipContent>
-            </Tooltip>
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              aria-label="Close inspector"
-              data-testid="inspector-close"
-              @click="selectedCell = null"
-            >
-              <X />
-            </Button>
-          </header>
-          <div class="min-h-0 flex-1 overflow-auto p-3">
-            <span v-if="inspected.value === null" class="font-mono text-xs text-muted-foreground/60 italic">NULL</span>
-            <!-- eslint-disable-next-line vue/no-v-html -- highlightJson escapes every text node -->
-            <pre v-else-if="inspectedHtml" class="font-mono text-xs break-all whitespace-pre-wrap" data-testid="inspector-value" v-html="inspectedHtml" />
-            <pre v-else class="font-mono text-xs break-all whitespace-pre-wrap" data-testid="inspector-value">{{ inspectedPretty }}</pre>
-          </div>
-        </aside>
+        <GridInspector
+          :column="inspected.column"
+          :value="inspected.value"
+          :can-hop="fkByColumn.has(inspected.column.name)"
+          @hop="hopFrom(inspected.rowIndex, inspected.column.name)"
+          @close="selectedCell = null"
+        />
       </ResizablePanel>
     </template>
   </ResizablePanelGroup>

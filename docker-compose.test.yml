@@ -1,7 +1,7 @@
 # Test databases, one service per connector kind, seeded from scripts/test-seeds/.
 # Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459,
 # postgres-oldest 5460 (minimum supported major = oldest non-EOL; bump on postgres EOL dates),
-# sshd-reconnect 5461.
+# sshd-reconnect 5461, mysql-oldest 5462 (8.0: upstream EOL but dominant via RDS/Aurora).
 name: soquel-test
 
 services:
@@ -61,6 +61,26 @@ services:
       interval: 2s
       timeout: 3s
       # First boot initializes the datadir: slower than postgres.
+      retries: 45
+
+  # Oldest supported mysql, same seed: the integration_mysql_* suite runs against it too.
+  mysql-oldest:
+    image: mysql:8.0
+    ports:
+      - '5462:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: soquel_test
+      MYSQL_USER: soquel
+      MYSQL_PASSWORD: soquel
+    volumes:
+      - ./scripts/test-seeds/mysql.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: [CMD-SHELL, mysqladmin ping -h 127.0.0.1 -usoquel -psoquel]
+      interval: 2s
+      timeout: 3s
       retries: 45
 
   # TLS-only handshake target (throwaway self-signed cert from scripts/test-tls/); no seed.

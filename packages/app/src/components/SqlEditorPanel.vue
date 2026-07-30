@@ -27,6 +27,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useSqlSessions } from '@/composables/useSqlSessions'
 import { commands } from '@/lib/bindings'
@@ -278,70 +279,78 @@ function loadFromHistory(entry: HistoryEntry) {
       </Button>
     </div>
 
-    <div ref="host" class="min-h-0 flex-1 overflow-hidden" data-testid="sql-input" />
-
-    <div
-      v-if="error || result"
-      class="flex min-h-0 flex-[1.2] flex-col border-t"
-      data-testid="sql-results"
-    >
-      <div v-if="result && result.notices.length > 0" class="border-b px-3 py-1.5">
-        <p
-          v-for="(notice, index) in result.notices"
-          :key="index"
-          class="font-mono text-[11px] text-muted-foreground"
+    <ResizablePanelGroup direction="vertical" auto-save-id="soquel-editor" class="min-h-0 flex-1">
+      <ResizablePanel id="editor-input" :min-size="15">
+        <div ref="host" class="h-full min-h-0 overflow-hidden" data-testid="sql-input" />
+      </ResizablePanel>
+      <template v-if="error || result">
+        <ResizableHandle with-handle />
+        <ResizablePanel
+          id="editor-results"
+          :default-size="55"
+          :min-size="15"
+          class="flex min-h-0 flex-col"
+          data-testid="sql-results"
         >
-          <span class="text-amber-500">{{ notice.severity }}</span> {{ notice.message }}
-        </p>
-      </div>
-
-      <p v-if="error" class="overflow-auto px-3 py-2 font-mono text-xs text-destructive" data-testid="sql-error">
-        {{ error }}
-      </p>
-
-      <template v-else-if="result">
-        <template v-if="result.statements.length === 1">
-          <ExplainTree
-            v-if="explainPlans[0]"
-            :plans="explainPlans[0]"
-            :raw="explainRaw(0)"
-          />
-          <ResultsTable v-else :statement="result.statements[0]" />
-        </template>
-        <Tabs
-          v-else-if="result.statements.length > 1"
-          v-model="activeStatement"
-          class="flex min-h-0 flex-1 flex-col gap-0"
-        >
-          <TabsList class="m-1 self-start">
-            <TabsTrigger
-              v-for="(_, index) in result.statements"
+          <div v-if="result && result.notices.length > 0" class="border-b px-3 py-1.5">
+            <p
+              v-for="(notice, index) in result.notices"
               :key="index"
-              :value="String(index)"
-              class="font-mono text-xs"
+              class="font-mono text-[11px] text-muted-foreground"
             >
-              {{ index + 1 }}
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent
-            v-for="(statement, index) in result.statements"
-            :key="index"
-            :value="String(index)"
-            class="flex min-h-0 flex-1 flex-col"
-          >
-            <ExplainTree
-              v-if="explainPlans[index]"
-              :plans="explainPlans[index]"
-              :raw="explainRaw(index)"
-            />
-            <ResultsTable v-else :statement="statement" />
-          </TabsContent>
-        </Tabs>
-        <p v-else class="px-3 py-2 font-mono text-xs text-muted-foreground">
-          done, no result set
-        </p>
+              <span class="text-amber-500">{{ notice.severity }}</span> {{ notice.message }}
+            </p>
+          </div>
+
+          <p v-if="error" class="overflow-auto px-3 py-2 font-mono text-xs text-destructive" data-testid="sql-error">
+            {{ error }}
+          </p>
+
+          <template v-else-if="result">
+            <template v-if="result.statements.length === 1">
+              <ExplainTree
+                v-if="explainPlans[0]"
+                :plans="explainPlans[0]"
+                :raw="explainRaw(0)"
+              />
+              <ResultsTable v-else :statement="result.statements[0]" />
+            </template>
+            <Tabs
+              v-else-if="result.statements.length > 1"
+              v-model="activeStatement"
+              class="flex min-h-0 flex-1 flex-col gap-0"
+            >
+              <TabsList class="m-1 self-start">
+                <TabsTrigger
+                  v-for="(_, index) in result.statements"
+                  :key="index"
+                  :value="String(index)"
+                  class="font-mono text-xs"
+                >
+                  {{ index + 1 }}
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent
+                v-for="(statement, index) in result.statements"
+                :key="index"
+                :value="String(index)"
+                class="flex min-h-0 flex-1 flex-col"
+              >
+                <ExplainTree
+                  v-if="explainPlans[index]"
+                  :plans="explainPlans[index]"
+                  :raw="explainRaw(index)"
+                />
+                <ResultsTable v-else :statement="statement" />
+              </TabsContent>
+            </Tabs>
+            <p v-else class="px-3 py-2 font-mono text-xs text-muted-foreground">
+              done, no result set
+            </p>
+          </template>
+        </ResizablePanel>
       </template>
-    </div>
+    </ResizablePanelGroup>
 
     <CommandDialog v-model:open="historyOpen">
       <CommandInput placeholder="Search query history…" data-testid="history-search" />

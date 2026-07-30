@@ -43,6 +43,26 @@ services:
       timeout: 3s
       retries: 15
 
+  mysql:
+    image: mysql:8.4
+    ports:
+      - '5456:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: soquel_test
+      MYSQL_USER: soquel
+      MYSQL_PASSWORD: soquel
+    volumes:
+      - ./scripts/test-seeds/mysql.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: [CMD-SHELL, mysqladmin ping -h 127.0.0.1 -usoquel -psoquel]
+      interval: 2s
+      timeout: 3s
+      # First boot initializes the datadir: slower than postgres.
+      retries: 45
+
   # TLS-only handshake target (throwaway self-signed cert from scripts/test-tls/); no seed.
   postgres-tls:
     image: postgres:18.4-alpine

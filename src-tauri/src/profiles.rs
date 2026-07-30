@@ -18,6 +18,7 @@ pub enum Env {
 #[serde(rename_all = "kebab-case")]
 pub enum ConnectorKind {
   Postgres,
+  Mysql,
 }
 
 /// libpq semantics: `require` encrypts without verifying the certificate,

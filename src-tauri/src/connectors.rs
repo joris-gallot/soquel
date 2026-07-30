@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::error::Error;
+use crate::mysql::MysqlConnector;
 use crate::postgres::PostgresConnector;
 use crate::profiles::{ConnectionProfile, ConnectorKind};
 
@@ -320,6 +321,7 @@ pub trait Connector: Send + Sync {
 pub fn connector_for(kind: ConnectorKind) -> &'static dyn Connector {
   match kind {
     ConnectorKind::Postgres => &PostgresConnector,
+    ConnectorKind::Mysql => &MysqlConnector,
   }
 }
 

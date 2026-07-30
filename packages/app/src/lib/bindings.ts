@@ -116,7 +116,7 @@ export type ConnectionProfile = {
 	group?: string | null,
 };
 
-export type ConnectorKind = "postgres";
+export type ConnectorKind = "postgres" | "mysql";
 
 export type Env = "dev" | "staging" | "prod";
 

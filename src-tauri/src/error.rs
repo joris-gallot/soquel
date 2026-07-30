@@ -52,6 +52,17 @@ impl From<tokio_postgres::Error> for Error {
   }
 }
 
+impl From<mysql_async::Error> for Error {
+  fn from(err: mysql_async::Error) -> Self {
+    // Server errors carry the useful message; wrap the rest verbatim.
+    let message = match err {
+      mysql_async::Error::Server(server) => server.message,
+      other => other.to_string(),
+    };
+    Error::Database { message }
+  }
+}
+
 impl From<std::io::Error> for Error {
   fn from(err: std::io::Error) -> Self {
     Error::Storage {

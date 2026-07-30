@@ -1,7 +1,11 @@
-import type { ConnectionInput, ConnectionProfile, Env, SslMode } from '@/lib/bindings'
+import type { ConnectionInput, ConnectionProfile, ConnectorKind, Env, SslMode } from '@/lib/bindings'
 import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
+
+// The form only creates postgres until the kind selector lands; editing keeps
+// whatever kind the profile already has.
+export const KINDS = ['postgres', 'mysql'] as const satisfies readonly ConnectorKind[]
 
 export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-full'] as const satisfies readonly SslMode[]
 
@@ -16,7 +20,7 @@ export const ENV_BADGE_CLASSES: Record<Env, string> = {
 export const connectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   env: z.enum(ENVS),
-  kind: z.literal('postgres'),
+  kind: z.enum(KINDS),
   host: z.string().min(1, 'Host is required'),
   port: z.coerce.number().int('Port must be a whole number').min(1, 'Port is required').max(65535, 'Port must be below 65536'),
   database: z.string().min(1, 'Database is required'),
@@ -32,7 +36,7 @@ export const connectionSchema = z.object({
 export interface ConnectionFormValues {
   name: string
   env: Env
-  kind: 'postgres'
+  kind: ConnectorKind
   host: string
   // Bound to a text input: coerced by the schema on submit.
   port: number | string

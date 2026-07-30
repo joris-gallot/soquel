@@ -15,6 +15,7 @@ mod connectors;
 mod error;
 mod export;
 mod known_hosts;
+mod mysql;
 mod postgres;
 mod profiles;
 mod secrets;

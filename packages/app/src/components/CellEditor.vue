@@ -2,6 +2,13 @@
 import type { QueryColumn } from '@/lib/bindings'
 import { Ban } from '@lucide/vue'
 import { computed, onMounted, ref, useTemplateRef } from 'vue'
+import {
+  editorMode,
+  editorValueValid,
+  initialEditorValue,
+  NULL_OPTION,
+  stagedValue,
+} from '@/lib/cell-editing'
 
 const props = defineProps<{
   column: QueryColumn
@@ -15,53 +22,17 @@ const emit = defineEmits<{
   navigate: [value: string | null, direction: 1 | -1]
 }>()
 
-const NULL_OPTION = '__null__'
-
-type Mode = 'bool' | 'date' | 'json' | 'text'
-
-const mode = computed<Mode>(() => {
-  if (props.column.kind === 'bool')
-    return 'bool'
-  // Only plain dates: datetime-local would drop timezone and microseconds.
-  if (props.column.dataType === 'date')
-    return 'date'
-  if (props.column.kind === 'json')
-    return 'json'
-  return 'text'
-})
-
-const value = ref(
-  mode.value === 'bool' && props.initial === null ? NULL_OPTION : props.initial ?? '',
-)
-
-const jsonValid = computed(() => {
-  if (mode.value !== 'json' || value.value.trim() === '')
-    return true
-  try {
-    JSON.parse(value.value)
-    return true
-  }
-  catch {
-    return false
-  }
-})
+const mode = computed(() => editorMode(props.column))
+const value = ref(initialEditorValue(mode.value, props.initial))
+const jsonValid = computed(() => editorValueValid(mode.value, value.value))
 
 const field = useTemplateRef<HTMLElement>('field')
 onMounted(() => field.value?.focus())
 
-function staged(): string | null {
-  if (mode.value === 'bool')
-    return value.value === NULL_OPTION ? null : value.value
-  // A cleared date reads as NULL: '' can never cast to date anyway.
-  if (mode.value === 'date' && value.value === '')
-    return null
-  return value.value
-}
-
 function stage() {
   if (!jsonValid.value)
     return
-  emit('stage', staged())
+  emit('stage', stagedValue(mode.value, value.value))
 }
 
 function blurStage() {
@@ -70,13 +41,13 @@ function blurStage() {
     emit('cancel')
     return
   }
-  emit('stage', staged())
+  emit('stage', stagedValue(mode.value, value.value))
 }
 
 function navigate(direction: 1 | -1) {
   if (!jsonValid.value)
     return
-  emit('navigate', staged(), direction)
+  emit('navigate', stagedValue(mode.value, value.value), direction)
 }
 </script>
 

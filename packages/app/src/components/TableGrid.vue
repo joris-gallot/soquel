@@ -31,6 +31,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useVirtualRows } from '@/composables/useVirtualRows'
 import { commands } from '@/lib/bindings'
+import { nextEditablePosition } from '@/lib/cell-editing'
 import { EXPORT_FORMATS, pickExportPath } from '@/lib/export'
 import { FILTER_OP_LABELS, FILTER_OPS_BY_KIND, filterLabel, OP_NEEDS_VALUE } from '@/lib/filters'
 import { formatEstimatedRows } from '@/lib/format'
@@ -367,19 +368,17 @@ function stageAndMove(value: string | null, direction: 1 | -1) {
   if (!cell)
     return
   const positions = displayColumns.value
-  let position = positions.findIndex(({ index }) => index === cell.columnIndex) + direction
-  let row = cell.rowIndex
-  if (position < 0) {
-    position = positions.length - 1
-    row -= 1
-  }
-  else if (position >= positions.length) {
-    position = 0
-    row += 1
-  }
-  if (row < 0 || row >= rows.value.length)
-    return
-  beginEdit(row, positions[position].index)
+  const next = nextEditablePosition(
+    {
+      rowIndex: cell.rowIndex,
+      position: positions.findIndex(({ index }) => index === cell.columnIndex),
+    },
+    direction,
+    positions.length,
+    rows.value.length,
+  )
+  if (next)
+    beginEdit(next.rowIndex, positions[next.position].index)
 }
 
 function addRow(fromRow?: number) {

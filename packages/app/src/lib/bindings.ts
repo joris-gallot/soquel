@@ -40,6 +40,12 @@ export const commands = {
 	kvDeleteKey: (id: string, key: string) => typedError<null, Error>(__TAURI_INVOKE("kv_delete_key", { id, key })),
 	kvSetTtl: (id: string, key: string, ttlMs: number | null) => typedError<null, Error>(__TAURI_INVOKE("kv_set_ttl", { id, key, ttlMs })),
 	kvRunCommand: (id: string, command: string) => typedError<string[], Error>(__TAURI_INVOKE("kv_run_command", { id, command })),
+	kvDatabases: (id: string) => typedError<KvDatabases, Error>(__TAURI_INVOKE("kv_databases", { id })),
+	/**
+	 *  Reconnect on the target db and swap the active connection: a SELECT on the
+	 *  multiplexed socket would silently revert on reconnect.
+	 */
+	kvSelectDb: (id: string, db: number) => typedError<null, Error>(__TAURI_INVOKE("kv_select_db", { id, db })),
 	openSqlSession: (connectionId: string) => typedError<string, Error>(__TAURI_INVOKE("open_sql_session", { connectionId })),
 	runSessionQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_session_query", { id, sql })),
 	cancelSessionQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_session_query", { id })),
@@ -179,6 +185,19 @@ export type KeyScanPage = {
 };
 
 export type KeyValue = { kind: "string"; value: string } | { kind: "list"; entries: string[] } | { kind: "set"; entries: string[] } | { kind: "zset"; entries: ZsetMember[] } | { kind: "hash"; entries: HashField[] } | { kind: "stream"; entries: StreamEntry[] } | { kind: "other"; typeName: string };
+
+export type KvDatabaseKeys = {
+	db: number,
+	keys: number | null,
+};
+
+export type KvDatabases = {
+	current: number,
+	/**  Configured database count; selection targets 0..total. */
+	total: number,
+	/**  Non-empty databases with their key counts. */
+	used: KvDatabaseKeys[],
+};
 
 export type QueryColumn = {
 	name: string,

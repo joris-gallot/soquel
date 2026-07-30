@@ -359,9 +359,27 @@ pub struct KeyDetail {
   pub value: KeyValue,
 }
 
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KvDatabaseKeys {
+  pub db: u32,
+  pub keys: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KvDatabases {
+  pub current: u32,
+  /// Configured database count; selection targets 0..total.
+  pub total: u32,
+  /// Non-empty databases with their key counts.
+  pub used: Vec<KvDatabaseKeys>,
+}
+
 /// Key-value capability surface, mirroring `Capability::KvBrowse`.
 #[async_trait::async_trait]
 pub trait KvBrowse: Send + Sync {
+  async fn databases(&self) -> Result<KvDatabases, Error>;
   async fn scan_keys(
     &self,
     pattern: &str,

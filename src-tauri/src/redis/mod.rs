@@ -5,7 +5,7 @@ use redis::{AsyncCommands, ConnectionAddr, ConnectionInfo, RedisConnectionInfo, 
 
 use crate::connectors::{
   Capability, Connection, Connector, HashField, KeyDetail, KeyEntry, KeyKind, KeyScanPage,
-  KeyValue, KvBrowse, LocalForward, StreamEntry, ZsetMember,
+  KeyValue, KvBrowse, KvDatabaseKeys, KvDatabases, LocalForward, StreamEntry, ZsetMember,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, ConnectorParams};
@@ -65,6 +65,7 @@ impl Connector for RedisConnector {
     Ok(Box::new(RedisConnection {
       conn,
       server_version: parse_info_version(&info_raw),
+      db: params.db,
     }))
   }
 }
@@ -73,6 +74,7 @@ pub struct RedisConnection {
   /// Cheap to clone; commands multiplex over one socket.
   conn: MultiplexedConnection,
   server_version: Option<String>,
+  db: u32,
 }
 
 /// "redis_version:7.4.1" -> "7.4.1"; Valkey ships both lines, its own wins.
@@ -143,8 +145,47 @@ fn display_bytes(bytes: Vec<u8>) -> String {
   }
 }
 
+/// "db0:keys=13036,expires=…" lines from INFO keyspace.
+fn parse_keyspace(info: &str) -> Vec<KvDatabaseKeys> {
+  info
+    .lines()
+    .filter_map(|line| {
+      let (name, rest) = line.split_once(':')?;
+      let db = name.strip_prefix("db")?.parse().ok()?;
+      let keys = rest
+        .split(',')
+        .find_map(|field| field.strip_prefix("keys="))?
+        .parse()
+        .ok()?;
+      Some(KvDatabaseKeys { db, keys })
+    })
+    .collect()
+}
+
 #[async_trait::async_trait]
 impl KvBrowse for RedisConnection {
+  async fn databases(&self) -> Result<KvDatabases, Error> {
+    let mut conn = self.conn.clone();
+    let info: String = redis::cmd("INFO")
+      .arg("keyspace")
+      .query_async(&mut conn)
+      .await?;
+    // CONFIG may be renamed or ACL-blocked on managed instances: assume 16.
+    let total = redis::cmd("CONFIG")
+      .arg("GET")
+      .arg("databases")
+      .query_async::<Vec<String>>(&mut conn)
+      .await
+      .ok()
+      .and_then(|pair| pair.get(1)?.parse().ok())
+      .unwrap_or(16);
+    Ok(KvDatabases {
+      current: self.db,
+      total,
+      used: parse_keyspace(&info),
+    })
+  }
+
   async fn scan_keys(
     &self,
     pattern: &str,

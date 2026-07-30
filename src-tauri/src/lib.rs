@@ -75,6 +75,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::kv_delete_key,
       commands::kv_set_ttl,
       commands::kv_run_command,
+      commands::kv_databases,
+      commands::kv_select_db,
       commands::open_sql_session,
       commands::run_session_query,
       commands::cancel_session_query,

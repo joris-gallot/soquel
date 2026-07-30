@@ -71,6 +71,19 @@ describe('redis workspace', () => {
     await browser.saveScreenshot('./e2e/screenshots/redis-key.png')
   })
 
+  it('switches databases from the workspace selector', async () => {
+    // db 1 is empty: the browser resets and the count drops to zero.
+    await $('[data-testid="kv-db"]').click()
+    await $('[data-testid="kv-db-option-1"]').click()
+    await waitForText('[data-testid="kv-db"]', 'db 1')
+    await waitForText('[data-testid="key-count"]', '0 keys')
+
+    await $('[data-testid="kv-db"]').click()
+    await $('[data-testid="kv-db-option-0"]').click()
+    await waitForText('[data-testid="kv-db"]', 'db 0')
+    await $('[data-testid="key-e2e:greeting"]').waitForExist()
+  })
+
   it('browses a list key and deletes it', async () => {
     await $('[data-testid="key-e2e:list"]').click()
     await waitForText('[data-testid="detail-key"]', 'e2e:list')

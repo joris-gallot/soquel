@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import KeyDetailPanel from '@/components/KeyDetailPanel.vue'
 import KeyList from '@/components/KeyList.vue'
+import KvDbSelect from '@/components/KvDbSelect.vue'
 import RedisConsolePanel from '@/components/RedisConsolePanel.vue'
 import SchemaTree from '@/components/SchemaTree.vue'
 import SqlEditorPanel from '@/components/SqlEditorPanel.vue'
@@ -41,7 +42,19 @@ const selectedKey = ref<string | null>(null)
 const kvView = ref<'key' | 'console'>('key')
 const keyList = useTemplateRef('keyList')
 
+const dbSelect = useTemplateRef('dbSelect')
+
+function onKvChanged() {
+  keyList.value?.refresh()
+  dbSelect.value?.refresh()
+}
+
 function onKeyDeleted() {
+  selectedKey.value = null
+  onKvChanged()
+}
+
+function onDbSwitched() {
   selectedKey.value = null
   keyList.value?.refresh()
 }
@@ -269,18 +282,20 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           <SquareTerminal class="size-3 opacity-60" />
           console
         </button>
+        <span class="flex-1" />
+        <KvDbSelect v-if="serverVersion" ref="dbSelect" :connection-id="id" @switched="onDbSwitched" />
       </header>
       <KeyDetailPanel
         v-show="kvView === 'key'"
         :connection-id="id"
         :key-name="selectedKey"
         @deleted="onKeyDeleted"
-        @changed="keyList?.refresh()"
+        @changed="onKvChanged"
       />
       <RedisConsolePanel
         v-show="kvView === 'console'"
         :connection-id="id"
-        @ran="keyList?.refresh()"
+        @ran="onKvChanged"
       />
     </ResizablePanel>
 

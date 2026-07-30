@@ -76,6 +76,17 @@ fn display_bytes_hexes_non_utf8() {
   assert_eq!(display_bytes(Vec::new()), "");
 }
 
+#[test]
+fn parse_keyspace_reads_db_lines() {
+  let info =
+    "# Keyspace\r\ndb0:keys=13036,expires=12000,avg_ttl=42\r\ndb3:keys=2,expires=0,avg_ttl=0\r\n";
+  let used = parse_keyspace(info);
+  assert_eq!(used.len(), 2);
+  assert_eq!((used[0].db, used[0].keys), (0, 13036.0));
+  assert_eq!((used[1].db, used[1].keys), (3, 2.0));
+  assert!(parse_keyspace("# Keyspace\r\n").is_empty());
+}
+
 // -------- integration, gated on the compose redis --------
 
 fn params_from_env(db: u32) -> Option<RedisParams> {
@@ -331,6 +342,27 @@ async fn integration_redis_ttl_and_string_edit_roundtrip() {
     kv.delete_key(key).await,
     Err(Error::NotFound { .. })
   ));
+}
+
+#[tokio::test]
+async fn integration_redis_databases_reports_keyspace() {
+  let Some(zero) = connection_from_env(0).await else {
+    return;
+  };
+  let Some(one) = connection_from_env(1).await else {
+    return;
+  };
+  let kv1 = one.kv().unwrap();
+  kv1.set_string("soquel_test:dbs:marker", "x").await.unwrap();
+
+  let databases = zero.kv().unwrap().databases().await.unwrap();
+  assert_eq!(databases.current, 0);
+  assert!(databases.total >= 16, "{}", databases.total);
+  let db1 = databases.used.iter().find(|entry| entry.db == 1).unwrap();
+  assert!(db1.keys >= 1.0);
+
+  assert_eq!(kv1.databases().await.unwrap().current, 1);
+  kv1.delete_key("soquel_test:dbs:marker").await.unwrap();
 }
 
 #[tokio::test]

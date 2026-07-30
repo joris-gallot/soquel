@@ -292,18 +292,10 @@ async function save() {
           </div>
         </div>
 
-        <div v-if="isRedis" class="grid grid-cols-[8rem_1fr] items-end gap-3">
-          <div class="space-y-1.5">
-            <Label for="conn-db-index">DB index</Label>
-            <Input id="conn-db-index" v-model="values.dbIndex" data-testid="field-db-index" type="number" min="0" class="font-mono" />
-            <p v-if="errors.dbIndex" class="text-xs text-destructive">
-              {{ errors.dbIndex }}
-            </p>
-          </div>
-          <div class="flex items-center gap-2 pb-2">
-            <Switch id="conn-tls" v-model="values.tls" data-testid="field-tls" />
-            <Label for="conn-tls" class="cursor-pointer">TLS (rediss)</Label>
-          </div>
+        <!-- The db lives in the workspace selector; a url prefill still carries it. -->
+        <div v-if="isRedis" class="flex items-center gap-2">
+          <Switch id="conn-tls" v-model="values.tls" data-testid="field-tls" />
+          <Label for="conn-tls" class="cursor-pointer">TLS (rediss)</Label>
         </div>
 
         <div v-if="values.sslMode === 'verify-full'" class="space-y-1.5">

@@ -400,4 +400,12 @@ mod tests {
     assert!(caps.contains(&Capability::Introspection));
     assert!(!caps.contains(&Capability::KvBrowse));
   }
+
+  #[test]
+  fn sqlite_declares_sql_capabilities() {
+    let caps = connector_for(ConnectorKind::Sqlite).capabilities();
+    assert!(caps.contains(&Capability::SqlQuery));
+    assert!(caps.contains(&Capability::Introspection));
+    assert!(!caps.contains(&Capability::KvBrowse));
+  }
 }

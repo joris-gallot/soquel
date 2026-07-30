@@ -176,6 +176,101 @@ async fn sessions_keep_their_own_state() {
 }
 
 #[tokio::test]
+async fn stream_rows_chunks_and_sends_columns_once() {
+  let (_dir, connection) = fixture().await;
+  connection
+    .run_query(
+      "CREATE TABLE big (n INTEGER);
+       INSERT INTO big
+       WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 450)
+       SELECT x FROM cnt;",
+    )
+    .await
+    .unwrap();
+
+  let chunks: Arc<std::sync::Mutex<Vec<RowsChunk>>> = Arc::default();
+  let sink = chunks.clone();
+  let mut req = request("big");
+  req.limit = None;
+  let summary = connection
+    .stream_rows(
+      &req,
+      Box::new(move |chunk| {
+        sink.lock().unwrap().push(chunk);
+        true
+      }),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(summary.rows, 450.0);
+  let chunks = chunks.lock().unwrap();
+  let sizes: Vec<usize> = chunks.iter().map(|chunk| chunk.rows.len()).collect();
+  assert_eq!(sizes, [200, 200, 50]);
+  // Column metadata rides the first chunk only.
+  assert!(chunks[0].columns.is_some());
+  assert!(chunks[1].columns.is_none());
+  assert_eq!(chunks[2].rows[49][0].as_deref(), Some("450"));
+}
+
+#[tokio::test]
+async fn stream_abort_leaves_the_connection_usable() {
+  let (_dir, connection) = fixture().await;
+  connection
+    .run_query(
+      "CREATE TABLE big (n INTEGER);
+       INSERT INTO big
+       WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 450)
+       SELECT x FROM cnt;",
+    )
+    .await
+    .unwrap();
+
+  let mut req = request("big");
+  req.limit = None;
+  let summary = connection
+    .stream_rows(&req, Box::new(|_chunk| false))
+    .await
+    .unwrap();
+  // The receiver bailed after the first full chunk: reading stops there.
+  assert_eq!(summary.rows, 200.0);
+
+  let result = connection
+    .run_query("SELECT count(*) FROM big")
+    .await
+    .unwrap();
+  assert_eq!(result.statements[0].rows[0][0].as_deref(), Some("450"));
+}
+
+#[tokio::test]
+async fn wal_lets_the_shared_connection_read_past_an_open_write() {
+  let (_dir, connection) = fixture().await;
+  let session = connection.open_session().await.unwrap();
+  session
+    .run_query(
+      "BEGIN IMMEDIATE;
+       INSERT INTO customers (id, name) VALUES (50, 'uncommitted')",
+    )
+    .await
+    .unwrap();
+
+  // WAL snapshot: the write lock never blocks or leaks into readers.
+  let count = connection
+    .run_query("SELECT count(*) FROM customers")
+    .await
+    .unwrap();
+  assert_eq!(count.statements[0].rows[0][0].as_deref(), Some("3"));
+
+  session.run_query("COMMIT").await.unwrap();
+  let count = connection
+    .run_query("SELECT count(*) FROM customers")
+    .await
+    .unwrap();
+  assert_eq!(count.statements[0].rows[0][0].as_deref(), Some("4"));
+  session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn table_rows_filters_sorts_and_paginates() {
   let (_dir, connection) = fixture().await;
   let mut req = request("customers");

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ConnectorKind, ExportFormat, QueryResult, SchemaSnapshot } from '@/lib/bindings'
 import type { HistoryEntry } from '@/lib/query-history'
+import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { PostgreSQL, sql } from '@codemirror/lang-sql'
 import { Compartment, EditorState } from '@codemirror/state'
@@ -38,7 +39,7 @@ import { pushHistory } from '@/lib/query-history'
 import { unwrap } from '@/lib/result'
 import { DEFAULT_SCHEMA, snapshotToNamespace } from '@/lib/sql-schema'
 
-const props = defineProps<{ connectionId: string, kind: ConnectorKind, tabId: string, snapshot?: SchemaSnapshot | null }>()
+const props = defineProps<{ connectionId: string, kind: ConnectorKind, database: string, tabId: string, snapshot?: SchemaSnapshot | null }>()
 
 const { run, cancel } = useSqlSessions()
 
@@ -116,7 +117,8 @@ function sqlExtension() {
   return sql({
     dialect: PostgreSQL,
     schema: props.snapshot ? snapshotToNamespace(props.snapshot) : undefined,
-    defaultSchema: DEFAULT_SCHEMA,
+    // Unqualified completion: pg resolves via public, mysql via the database.
+    defaultSchema: props.kind === 'postgres' ? DEFAULT_SCHEMA : props.database,
   })
 }
 
@@ -129,6 +131,7 @@ onMounted(() => {
         lineNumbers(),
         history(),
         placeholder('select … (ctrl+enter to run)'),
+        autocompletion(),
         keymap.of([
           {
             key: 'Mod-Enter',
@@ -137,6 +140,7 @@ onMounted(() => {
               return true
             },
           },
+          ...completionKeymap,
           ...defaultKeymap,
           ...historyKeymap,
         ]),

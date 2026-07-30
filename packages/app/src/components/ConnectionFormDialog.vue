@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ConnectionInput, ConnectionProfile } from '@/lib/bindings'
-import type { ConnectionFormValues } from '@/lib/connections'
+import type { ConnectionFormValues, EngineChoice } from '@/lib/connections'
 import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import HostKeyTrustPanel from '@/components/HostKeyTrustPanel.vue'
@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/select'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { connectionSchema, ENVS, formValuesFromProfile, KIND_META, KINDS, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { connectionSchema, ENGINE_CHOICES, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -55,6 +55,16 @@ function emptyValues(): ConnectionFormValues {
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
+const engineChoice = ref<EngineChoice>('postgres')
+
+// The select shows engines (MariaDB included); the profile stores the kind.
+watch(engineChoice, (id) => {
+  const choice = ENGINE_CHOICES.find(entry => entry.id === id)!
+  const previous = values.value.kind
+  values.value.kind = choice.kind
+  values.value.port = portForKindChange(values.value.port, previous, choice.kind)
+})
+
 const errors = ref<Record<string, string>>({})
 const importUrl = ref('')
 const testing = ref(false)
@@ -72,6 +82,8 @@ watch(open, (isOpen) => {
   groupChoice.value = group === null ? NO_GROUP : group
   newGroup.value = ''
   values.value = props.profile ? formValuesFromProfile(props.profile) : emptyValues()
+  // A stored mariadb profile reads back as mysql: same kind by design.
+  engineChoice.value = values.value.kind
 })
 
 function applyUrl() {
@@ -81,13 +93,10 @@ function applyUrl() {
     return
   }
   values.value = { ...values.value, ...parsed }
+  if (parsed.kind)
+    engineChoice.value = parsed.kind
   importUrl.value = ''
 }
-
-watch(() => values.value.kind, (next, previous) => {
-  if (previous)
-    values.value.port = portForKindChange(values.value.port, previous, next)
-})
 
 function parse(): ConnectionInput | null {
   values.value.group = groupValue()
@@ -194,13 +203,13 @@ async function save() {
 
         <div class="space-y-1.5">
           <Label>Database engine</Label>
-          <Select v-model="values.kind">
+          <Select v-model="engineChoice">
             <SelectTrigger data-testid="field-kind" class="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem v-for="kind in KINDS" :key="kind" :value="kind">
-                {{ KIND_META[kind].label }}
+              <SelectItem v-for="choice in ENGINE_CHOICES" :key="choice.id" :value="choice.id">
+                {{ choice.label }}
               </SelectItem>
             </SelectContent>
           </Select>

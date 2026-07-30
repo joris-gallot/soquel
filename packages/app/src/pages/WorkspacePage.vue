@@ -291,6 +291,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           class="min-h-0 flex-1"
           :connection-id="id"
           :kind="profile?.params.kind ?? 'postgres'"
+          :database="profile?.params.database ?? ''"
           :tab-id="tab.id"
           :snapshot="snapshot"
         />

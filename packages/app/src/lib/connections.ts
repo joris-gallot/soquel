@@ -15,6 +15,16 @@ export const KIND_META: Record<ConnectorKind, {
   mysql: { label: 'MySQL', short: 'MySQL', defaultPort: 3306, protocols: ['mysql:'] },
 }
 
+/// What the form's engine select shows: MariaDB is a display entry riding the
+/// mysql kind (wire-compatible, quirks handled at runtime via the version).
+export const ENGINE_CHOICES = [
+  { id: 'postgres', label: 'PostgreSQL', kind: 'postgres' },
+  { id: 'mysql', label: 'MySQL', kind: 'mysql' },
+  { id: 'mariadb', label: 'MariaDB', kind: 'mysql' },
+] as const satisfies readonly { id: string, label: string, kind: ConnectorKind }[]
+
+export type EngineChoice = (typeof ENGINE_CHOICES)[number]['id']
+
 export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-full'] as const satisfies readonly SslMode[]
 
 export const NO_TUNNEL = 'none'

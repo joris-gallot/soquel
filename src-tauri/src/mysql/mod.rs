@@ -505,6 +505,99 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(nulls.statements[0].rows[0], vec![None, None]);
+
+    // Formatting branches: date-only, negative time, float.
+    let literals = connection
+      .sql()
+      .unwrap()
+      .run_query(
+        "SELECT DATE '2026-01-02' AS d, CAST('-25:00:00' AS TIME) AS t, CAST(1.5 AS FLOAT) AS f",
+      )
+      .await
+      .unwrap();
+    let row = &literals.statements[0].rows[0];
+    assert_eq!(row[0].as_deref(), Some("2026-01-02"));
+    assert_eq!(row[1].as_deref(), Some("-25:00:00"));
+    assert_eq!(row[2].as_deref(), Some("1.5"));
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_server_errors_carry_the_message() {
+    let Some(connection) = test_connection_from_env().await else {
+      return;
+    };
+    let result = connection
+      .sql()
+      .unwrap()
+      .run_query("SELECT * FROM nope_table")
+      .await;
+    let Err(Error::Database { message }) = result else {
+      panic!("expected a database error");
+    };
+    assert!(message.contains("doesn't exist"), "{message}");
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_connection_cancel_kills_pooled_query() {
+    let Some(connection) = test_connection_from_env().await else {
+      return;
+    };
+    let connection: std::sync::Arc<Box<dyn Connection>> = connection.into();
+    let runner = connection.clone();
+    let query =
+      tokio::spawn(async move { runner.sql().unwrap().run_query("SELECT SLEEP(30)").await });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let started = Instant::now();
+    connection.sql().unwrap().cancel().await.unwrap();
+    let outcome = query.await.unwrap().unwrap();
+    assert!(
+      started.elapsed() < std::time::Duration::from_secs(5),
+      "cancel took {:?}",
+      started.elapsed()
+    );
+    // KILL QUERY interrupts SLEEP, which then returns 1.
+    assert_eq!(outcome.statements[0].rows[0][0].as_deref(), Some("1"));
+    // The pool hands out a healthy connection afterwards.
+    connection.health().await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_ssl_mode_controls_encryption() {
+    let Some(mut profile) = profile_from_env() else {
+      return;
+    };
+    let cipher = |result: QueryResult| result.statements[0].rows[0][1].clone();
+
+    // mysql 8 auto-generates certs: require must yield an encrypted session.
+    profile.ssl_mode = SslMode::Require;
+    let encrypted = MysqlConnector
+      .connect(&profile, Some("soquel"), None)
+      .await
+      .unwrap();
+    let status = encrypted
+      .sql()
+      .unwrap()
+      .run_query("SHOW STATUS LIKE 'Ssl_cipher'")
+      .await
+      .unwrap();
+    assert!(
+      !cipher(status).unwrap_or_default().is_empty(),
+      "require must encrypt"
+    );
+
+    profile.ssl_mode = SslMode::Disable;
+    let plaintext = MysqlConnector
+      .connect(&profile, Some("soquel"), None)
+      .await
+      .unwrap();
+    let status = plaintext
+      .sql()
+      .unwrap()
+      .run_query("SHOW STATUS LIKE 'Ssl_cipher'")
+      .await
+      .unwrap();
+    assert_eq!(cipher(status).unwrap_or_default(), "");
   }
 
   #[tokio::test]

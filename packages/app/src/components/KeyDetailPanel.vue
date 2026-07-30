@@ -45,6 +45,7 @@ async function load() {
   try {
     detail.value = unwrap(await commands.keyDetail(props.connectionId, props.keyName))
     draft.value = detail.value.value.kind === 'string' ? detail.value.value.value : ''
+    ttlSeconds.value = detail.value.ttlMs === null ? '' : String(Math.ceil(detail.value.ttlMs / 1000))
   }
   catch (error) {
     detail.value = null

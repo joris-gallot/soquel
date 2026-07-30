@@ -13,6 +13,7 @@ use crate::tunnels::TunnelStore;
 mod commands;
 mod connectors;
 mod error;
+mod export;
 mod known_hosts;
 mod postgres;
 mod profiles;
@@ -58,6 +59,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::cancel_query,
       commands::table_rows,
       commands::stream_table_rows,
+      commands::export_table_rows,
+      commands::export_statement,
+      commands::format_statement,
       commands::apply_table_changes,
       commands::schema_snapshot,
       commands::table_ddl,
@@ -94,6 +98,7 @@ pub fn run() {
     .expect("failed to export typescript bindings");
 
   tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
     .invoke_handler(builder.invoke_handler())
     .setup(|app| {
       if cfg!(debug_assertions) {

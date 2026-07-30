@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import type { QueryResult, SchemaSnapshot } from '@/lib/bindings'
+import type { ExportFormat, QueryResult, SchemaSnapshot } from '@/lib/bindings'
 import type { HistoryEntry } from '@/lib/query-history'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { PostgreSQL, sql } from '@codemirror/lang-sql'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, placeholder } from '@codemirror/view'
 import { History, OctagonX, Play } from '@lucide/vue'
-import { useLocalStorage } from '@vueuse/core'
+import { useClipboard, useLocalStorage } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
+import { toast } from 'vue-sonner'
+import ExportMenu from '@/components/ExportMenu.vue'
 import ResultsTable from '@/components/ResultsTable.vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,8 +22,11 @@ import {
 } from '@/components/ui/command'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useSqlSessions } from '@/composables/useSqlSessions'
+import { commands } from '@/lib/bindings'
 import { soquelEditorTheme } from '@/lib/codemirror'
+import { EXPORT_FORMATS, pickExportPath } from '@/lib/export'
 import { pushHistory } from '@/lib/query-history'
+import { unwrap } from '@/lib/result'
 import { DEFAULT_SCHEMA, snapshotToNamespace } from '@/lib/sql-schema'
 
 const props = defineProps<{ connectionId: string, tabId: string, snapshot?: SchemaSnapshot | null }>()
@@ -46,6 +51,43 @@ const activeStatement = ref('0')
 const rowsAffected = computed(() =>
   result.value?.statements.reduce((total, statement) => total + (statement.rowsAffected ?? 0), 0) ?? 0,
 )
+
+const { copy } = useClipboard()
+
+const activeResult = computed(() => {
+  const statements = result.value?.statements ?? []
+  return statements.length === 1 ? statements[0] : statements[Number(activeStatement.value)] ?? null
+})
+
+async function copyResult(format: ExportFormat) {
+  const statement = activeResult.value
+  if (!statement)
+    return
+  try {
+    const text = unwrap(await commands.formatStatement(statement.columns, statement.rows, format, 'results'))
+    await copy(text)
+    toast.success(`copied ${statement.rows.length} row${statement.rows.length === 1 ? '' : 's'} as ${EXPORT_FORMATS[format].label}`)
+  }
+  catch (caught) {
+    toast.error(caught instanceof Error ? caught.message : String(caught))
+  }
+}
+
+async function saveResult(format: ExportFormat) {
+  const statement = activeResult.value
+  if (!statement)
+    return
+  const path = await pickExportPath(format, 'results')
+  if (path === null)
+    return
+  try {
+    unwrap(await commands.exportStatement(statement.columns, statement.rows, format, 'results', path))
+    toast.success(`exported ${statement.rows.length} row${statement.rows.length === 1 ? '' : 's'} to ${path}`)
+  }
+  catch (caught) {
+    toast.error(caught instanceof Error ? caught.message : String(caught))
+  }
+}
 
 function sqlExtension() {
   return sql({
@@ -175,6 +217,11 @@ function loadFromHistory(entry: HistoryEntry) {
       <span v-if="result" class="font-mono text-[11px] text-muted-foreground" data-testid="query-timing">
         {{ rowsAffected }} row{{ rowsAffected === 1 ? '' : 's' }} · {{ (result.durationMs ?? 0).toFixed(0) }}ms
       </span>
+      <ExportMenu
+        v-if="activeResult && activeResult.columns.length > 0"
+        @copy="copyResult"
+        @save="saveResult"
+      />
       <Button size="sm" variant="ghost" data-testid="query-history" @click="historyOpen = true">
         <History />
         History

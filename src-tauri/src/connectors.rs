@@ -17,7 +17,7 @@ pub enum Capability {
 
 /// Coarse type family for UI decisions (alignment, editors, viewers);
 /// `data_type` keeps the exact postgres name.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum ColumnKind {
   Bool,
@@ -32,7 +32,8 @@ pub enum ColumnKind {
   Other,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+// Deserialize: the export commands take columns back from the webview.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryColumn {
   pub name: String,
@@ -107,7 +108,8 @@ pub struct ColumnFilter {
 pub struct TableRowsRequest {
   pub schema: String,
   pub table: String,
-  pub limit: u32,
+  /// None streams the full result set (export).
+  pub limit: Option<u32>,
   pub offset: u32,
   pub sort: Option<SortSpec>,
   #[serde(default)]

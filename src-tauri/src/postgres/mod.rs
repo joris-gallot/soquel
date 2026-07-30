@@ -443,11 +443,10 @@ async fn plan_select(pg: &PooledPg, request: &TableRowsRequest) -> Result<Select
       quote_ident(&sort.column)
     ));
   }
-  sql.push_str(&format!(
-    " LIMIT {} OFFSET {}",
-    request.limit.min(MAX_FETCH_ROWS),
-    request.offset
-  ));
+  if let Some(limit) = request.limit {
+    sql.push_str(&format!(" LIMIT {}", limit.min(MAX_FETCH_ROWS)));
+  }
+  sql.push_str(&format!(" OFFSET {}", request.offset));
 
   let mut result_columns: Vec<QueryColumn> = columns
     .iter()
@@ -1234,7 +1233,7 @@ pub mod tests {
       .table_rows(&TableRowsRequest {
         schema: "app".to_string(),
         table: "customers".to_string(),
-        limit: 2,
+        limit: Some(2),
         offset: 0,
         sort: Some(crate::connectors::SortSpec {
           column: "name".to_string(),
@@ -1256,7 +1255,7 @@ pub mod tests {
       .table_rows(&TableRowsRequest {
         schema: "app".to_string(),
         table: "customers".to_string(),
-        limit: 2,
+        limit: Some(2),
         offset: 2,
         sort: Some(crate::connectors::SortSpec {
           column: "name".to_string(),
@@ -1279,7 +1278,7 @@ pub mod tests {
     pg.table_rows(&TableRowsRequest {
       schema: "app".to_string(),
       table: table.to_string(),
-      limit: 100,
+      limit: Some(100),
       offset: 0,
       sort: None,
       filters,
@@ -1404,7 +1403,7 @@ pub mod tests {
         &TableRowsRequest {
           schema: "app".to_string(),
           table: "events".to_string(),
-          limit: 1000,
+          limit: Some(1000),
           offset: 0,
           sort: Some(crate::connectors::SortSpec {
             column: "id".to_string(),
@@ -1439,7 +1438,7 @@ pub mod tests {
         &TableRowsRequest {
           schema: "app".to_string(),
           table: "events".to_string(),
-          limit: 5000,
+          limit: Some(5000),
           offset: 0,
           sort: None,
           filters: vec![filter("kind", FilterOp::Eq, Some("purchase"))],
@@ -1455,6 +1454,43 @@ pub mod tests {
     assert_eq!(total, 3333);
   }
 
+  // Export path: no limit streams the full table, past MAX_FETCH_ROWS.
+  #[tokio::test]
+  async fn integration_postgres_stream_rows_unlimited_exports_csv() {
+    use crate::export::{ChunkSink, ExportFormat};
+
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let out = Arc::new(Mutex::new(ChunkSink::new(
+      Vec::<u8>::new(),
+      ExportFormat::Csv,
+      String::new(),
+    )));
+    let sink = out.clone();
+    let summary = pg
+      .stream_rows(
+        &TableRowsRequest {
+          schema: "app".to_string(),
+          table: "events".to_string(),
+          limit: None,
+          offset: 0,
+          sort: None,
+          filters: vec![],
+          include_ctid: false,
+        },
+        Box::new(move |chunk| sink.lock().unwrap().push(chunk)),
+      )
+      .await
+      .unwrap();
+    assert_eq!(summary.rows, 10000.0);
+
+    let mut sink = Arc::into_inner(out).unwrap().into_inner().unwrap();
+    assert!(sink.error.take().is_none());
+    let csv = String::from_utf8(sink.finish().unwrap()).unwrap();
+    assert_eq!(csv.lines().count(), 10001, "header + every row");
+  }
+
   #[tokio::test]
   async fn integration_postgres_stream_abort_leaves_connection_usable() {
     let Some(pg) = test_connection_from_env().await else {
@@ -1467,7 +1503,7 @@ pub mod tests {
         &TableRowsRequest {
           schema: "app".to_string(),
           table: "events".to_string(),
-          limit: 5000,
+          limit: Some(5000),
           offset: 0,
           sort: None,
           filters: vec![],
@@ -1692,7 +1728,7 @@ pub mod tests {
       .table_rows(&TableRowsRequest {
         schema: "public".to_string(),
         table: "audit_log".to_string(),
-        limit: 100,
+        limit: Some(100),
         offset: 0,
         sort: None,
         filters: vec![filter("message", FilterOp::Eq, Some("ctid test row"))],
@@ -1764,7 +1800,7 @@ pub mod tests {
       .table_rows(&TableRowsRequest {
         schema: "app".to_string(),
         table: "orders".to_string(),
-        limit: 1,
+        limit: Some(1),
         offset: 1,
         sort: Some(crate::connectors::SortSpec {
           column: "amount".to_string(),

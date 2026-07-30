@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import type { ColumnFilter, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
+import type { ColumnFilter, ExportFormat, FilterOp, QueryColumn, RowsChunk, SortSpec, TableInfo } from '@/lib/bindings'
 import type { StagedChanges } from '@/lib/staged'
 import { ArrowDown, ArrowUp, ArrowUpRight, Ban, Copy, CopyPlus, Funnel, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { Channel } from '@tauri-apps/api/core'
 import { useClipboard, useEventListener, useScroll } from '@vueuse/core'
 import { computed, nextTick, ref, shallowRef, triggerRef, useTemplateRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
+import ExportMenu from '@/components/ExportMenu.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -29,6 +30,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useVirtualRows } from '@/composables/useVirtualRows'
 import { commands } from '@/lib/bindings'
+import { EXPORT_FORMATS, pickExportPath } from '@/lib/export'
 import { FILTER_OP_LABELS, FILTER_OPS_BY_KIND, filterLabel, OP_NEEDS_VALUE } from '@/lib/filters'
 import { formatEstimatedRows } from '@/lib/format'
 import { highlightJson, highlightSql } from '@/lib/highlight'
@@ -429,6 +431,42 @@ async function applyChanges() {
   }
 }
 
+// Copy formats the fetched rows; save re-streams the whole filtered/sorted
+// table on the Rust side, so it covers rows beyond what the grid loaded.
+async function copyRows(format: ExportFormat) {
+  const exportColumns = displayColumns.value.map(({ column }) => column)
+  const exportRows = rows.value.map(row => displayColumns.value.map(({ index }) => row[index] ?? null))
+  try {
+    const text = unwrap(await commands.formatStatement(exportColumns, exportRows, format, props.table.name))
+    await copy(text)
+    toast.success(`copied ${exportRows.length} row${exportRows.length === 1 ? '' : 's'} as ${EXPORT_FORMATS[format].label}`)
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function saveRows(format: ExportFormat) {
+  const path = await pickExportPath(format, props.table.name)
+  if (path === null)
+    return
+  try {
+    const summary = unwrap(await commands.exportTableRows(props.connectionId, {
+      schema: props.schema,
+      table: props.table.name,
+      limit: null,
+      offset: 0,
+      sort: sort.value,
+      filters: filters.value,
+      includeCtid: false,
+    }, format, path))
+    toast.success(`exported ${summary.rows} row${summary.rows === 1 ? '' : 's'} to ${path}`)
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
+}
+
 function enableCtidEditing() {
   ctidMode.value = true
   staged.value = emptyStaged()
@@ -808,6 +846,12 @@ useEventListener('keydown', (event) => {
             </Button>
           </template>
         </template>
+        <ExportMenu
+          v-if="gridView === 'data'"
+          :disabled="rows.length === 0"
+          @copy="copyRows"
+          @save="saveRows"
+        />
         <Tooltip v-if="gridView === 'data'">
           <TooltipTrigger as-child>
             <Button

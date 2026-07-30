@@ -20,6 +20,12 @@ export const commands = {
 	cancelQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_query", { id })),
 	tableRows: (id: string, request: TableRowsRequest) => typedError<QueryResult, Error>(__TAURI_INVOKE("table_rows", { id, request })),
 	streamTableRows: (id: string, request: TableRowsRequest, channel: Channel<RowsChunk>) => typedError<StreamSummary, Error>(__TAURI_INVOKE("stream_table_rows", { id, request, channel })),
+	/**  Streams the full filtered/sorted table to a file; rows never enter the webview. */
+	exportTableRows: (id: string, request: TableRowsRequest, format: ExportFormat, path: string) => typedError<StreamSummary, Error>(__TAURI_INVOKE("export_table_rows", { id, request, format, path })),
+	/**  Materialized results (SQL editor); the grid path is `export_table_rows`. */
+	exportStatement: (columns: QueryColumn[], rows: ((string | null)[])[], format: ExportFormat, table: string, path: string) => typedError<null, Error>(__TAURI_INVOKE("export_statement", { columns, rows, format, table, path })),
+	/**  Clipboard copy: same formats, returned as a string. */
+	formatStatement: (columns: QueryColumn[], rows: ((string | null)[])[], format: ExportFormat, table: string) => typedError<string, Error>(__TAURI_INVOKE("format_statement", { columns, rows, format, table })),
 	applyTableChanges: (id: string, changes: TableChanges) => typedError<ApplyResult, Error>(__TAURI_INVOKE("apply_table_changes", { id, changes })),
 	schemaSnapshot: (id: string) => typedError<SchemaSnapshot, Error>(__TAURI_INVOKE("schema_snapshot", { id })),
 	tableDdl: (id: string, schema: string, table: string) => typedError<string, Error>(__TAURI_INVOKE("table_ddl", { id, schema, table })),
@@ -112,6 +118,8 @@ export type Env = "dev" | "staging" | "prod";
 
 /**  Normalized error shape crossing the IPC boundary. */
 export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean };
+
+export type ExportFormat = "csv" | "json" | "sql" | "markdown";
 
 export type FilterOp = "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "contains" | "starts-with" | "is-null" | "is-not-null";
 
@@ -229,7 +237,8 @@ export type TableKind = "table" | "view" | "materialized-view";
 export type TableRowsRequest = {
 	schema: string,
 	table: string,
-	limit: number,
+	/**  None streams the full result set (export). */
+	limit: number | null,
 	offset: number,
 	sort: SortSpec | null,
 	filters?: ColumnFilter[],

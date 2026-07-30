@@ -3,10 +3,11 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::connectors::{
-  connector_for, ApplyResult, Capability, Connection, QueryResult, RowsChunk, SchemaSnapshot,
-  SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
+  connector_for, ApplyResult, Capability, Connection, QueryColumn, QueryResult, RowsChunk,
+  SchemaSnapshot, SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
+use crate::export::{quote_ident, ChunkSink, ExportFormat, ExportWriter};
 use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind};
 use crate::ssh::{self, SshTunnel, TunnelTarget};
 use crate::tunnels::{TunnelInput, TunnelProfile};
@@ -248,6 +249,80 @@ pub async fn stream_table_rows(
   sql_surface(&connection)?
     .stream_rows(&request, Box::new(move |chunk| channel.send(chunk).is_ok()))
     .await
+}
+
+/// Streams the full filtered/sorted table to a file; rows never enter the webview.
+#[tauri::command]
+#[specta::specta]
+pub async fn export_table_rows(
+  state: State<'_, AppState>,
+  id: String,
+  request: TableRowsRequest,
+  format: ExportFormat,
+  path: String,
+) -> Result<StreamSummary, Error> {
+  let connection = active(&state, &id).await?;
+  let table = format!(
+    "{}.{}",
+    quote_ident(&request.schema),
+    quote_ident(&request.table)
+  );
+  let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+  let sink = Arc::new(std::sync::Mutex::new(ChunkSink::new(file, format, table)));
+  let chunk_sink = sink.clone();
+  let summary = sql_surface(&connection)?
+    .stream_rows(
+      &request,
+      Box::new(move |chunk| chunk_sink.lock().unwrap().push(chunk)),
+    )
+    .await?;
+  // The stream callback was dropped with stream_rows: this Arc is the last one.
+  let mut sink = Arc::into_inner(sink)
+    .expect("stream callback dropped")
+    .into_inner()
+    .unwrap();
+  if let Some(err) = sink.error.take() {
+    return Err(err.into());
+  }
+  sink.finish()?;
+  Ok(summary)
+}
+
+/// Materialized results (SQL editor); the grid path is `export_table_rows`.
+#[tauri::command]
+#[specta::specta]
+pub fn export_statement(
+  columns: Vec<QueryColumn>,
+  rows: Vec<Vec<Option<String>>>,
+  format: ExportFormat,
+  table: String,
+  path: String,
+) -> Result<(), Error> {
+  let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+  let mut writer = ExportWriter::new(file, format, columns, quote_ident(&table))?;
+  for row in &rows {
+    writer.row(row)?;
+  }
+  writer.finish()?;
+  Ok(())
+}
+
+/// Clipboard copy: same formats, returned as a string.
+#[tauri::command]
+#[specta::specta]
+pub fn format_statement(
+  columns: Vec<QueryColumn>,
+  rows: Vec<Vec<Option<String>>>,
+  format: ExportFormat,
+  table: String,
+) -> Result<String, Error> {
+  let mut out = Vec::new();
+  let mut writer = ExportWriter::new(&mut out, format, columns, quote_ident(&table))?;
+  for row in &rows {
+    writer.row(row)?;
+  }
+  writer.finish()?;
+  Ok(String::from_utf8(out).expect("formats emit utf-8"))
 }
 
 #[tauri::command]

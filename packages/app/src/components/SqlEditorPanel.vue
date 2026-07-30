@@ -5,10 +5,11 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { PostgreSQL, sql } from '@codemirror/lang-sql'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, placeholder } from '@codemirror/view'
-import { History, OctagonX, Play } from '@lucide/vue'
+import { ChevronDown, History, OctagonX, Play } from '@lucide/vue'
 import { useClipboard, useLocalStorage } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
+import ExplainTree from '@/components/ExplainTree.vue'
 import ExportMenu from '@/components/ExportMenu.vue'
 import ResultsTable from '@/components/ResultsTable.vue'
 import { Button } from '@/components/ui/button'
@@ -20,10 +21,17 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useSqlSessions } from '@/composables/useSqlSessions'
 import { commands } from '@/lib/bindings'
 import { soquelEditorTheme } from '@/lib/codemirror'
+import { parseExplain } from '@/lib/explain'
 import { EXPORT_FORMATS, pickExportPath } from '@/lib/export'
 import { pushHistory } from '@/lib/query-history'
 import { unwrap } from '@/lib/result'
@@ -58,6 +66,15 @@ const activeResult = computed(() => {
   const statements = result.value?.statements ?? []
   return statements.length === 1 ? statements[0] : statements[Number(activeStatement.value)] ?? null
 })
+
+const explainPlans = computed(() =>
+  (result.value?.statements ?? []).map(statement => parseExplain(statement)),
+)
+
+function explainRaw(index: number): string {
+  const statement = result.value?.statements[index]
+  return statement ? statement.rows.map(row => row[0] ?? '').join('\n') : ''
+}
 
 async function copyResult(format: ExportFormat) {
   const statement = activeResult.value
@@ -145,8 +162,20 @@ function currentSql(): string {
     : view.state.sliceDoc(selection.from, selection.to)
 }
 
-async function runQuery() {
-  const statementSql = currentSql().trim()
+function runQuery() {
+  return execute(currentSql().trim())
+}
+
+/// EXPLAIN wraps a single statement: use the selection to explain one of many.
+function runExplain(analyze: boolean) {
+  const statementSql = currentSql().trim().replace(/;\s*$/, '')
+  if (statementSql === '')
+    return
+  const options = analyze ? 'ANALYZE, FORMAT JSON' : 'FORMAT JSON'
+  return execute(`EXPLAIN (${options}) ${statementSql}`)
+}
+
+async function execute(statementSql: string) {
   if (statementSql === '' || running.value)
     return
   running.value = true
@@ -202,6 +231,27 @@ function loadFromHistory(entry: HistoryEntry) {
         <Play />
         {{ hasSelection ? 'Run selection' : 'Run' }}
       </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger as-child>
+          <Button size="sm" variant="ghost" data-testid="explain-menu" :disabled="running">
+            Explain
+            <ChevronDown />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" class="min-w-44 font-mono text-xs">
+          <DropdownMenuItem data-testid="explain-plain" @click="runExplain(false)">
+            Explain
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            class="flex-col items-start gap-0.5"
+            data-testid="explain-analyze"
+            @click="runExplain(true)"
+          >
+            <span>Explain analyze</span>
+            <span class="text-[10px] text-muted-foreground">runs the query</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <Button
         v-if="running"
         size="sm"
@@ -250,10 +300,14 @@ function loadFromHistory(entry: HistoryEntry) {
       </p>
 
       <template v-else-if="result">
-        <ResultsTable
-          v-if="result.statements.length === 1"
-          :statement="result.statements[0]"
-        />
+        <template v-if="result.statements.length === 1">
+          <ExplainTree
+            v-if="explainPlans[0]"
+            :plans="explainPlans[0]"
+            :raw="explainRaw(0)"
+          />
+          <ResultsTable v-else :statement="result.statements[0]" />
+        </template>
         <Tabs
           v-else-if="result.statements.length > 1"
           v-model="activeStatement"
@@ -275,7 +329,12 @@ function loadFromHistory(entry: HistoryEntry) {
             :value="String(index)"
             class="flex min-h-0 flex-1 flex-col"
           >
-            <ResultsTable :statement="statement" />
+            <ExplainTree
+              v-if="explainPlans[index]"
+              :plans="explainPlans[index]"
+              :raw="explainRaw(index)"
+            />
+            <ResultsTable v-else :statement="statement" />
           </TabsContent>
         </Tabs>
         <p v-else class="px-3 py-2 font-mono text-xs text-muted-foreground">

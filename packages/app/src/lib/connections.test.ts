@@ -1,6 +1,6 @@
 import type { ConnectionProfile } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { connectionSchema, groupConnections, parseConnectionUrl, toConnectionInput } from './connections'
+import { connectionSchema, groupConnections, parseConnectionUrl, portForKindChange, toConnectionInput } from './connections'
 import { zodFieldErrors } from './validation'
 
 function profile(name: string, group: string | null): ConnectionProfile {
@@ -98,6 +98,20 @@ describe('parseConnectionUrl', () => {
   it('carries sslrootcert through', () => {
     expect(parseConnectionUrl('postgres://u:p@h/db?sslmode=verify-full&sslrootcert=/etc/ca.pem'))
       .toMatchObject({ sslMode: 'verify-full', sslRootCert: '/etc/ca.pem' })
+  })
+})
+
+describe('portForKindChange', () => {
+  it('follows the kind while the port sits on the previous default', () => {
+    expect(portForKindChange(5432, 'postgres', 'mysql')).toBe(3306)
+    expect(portForKindChange(3306, 'mysql', 'postgres')).toBe(5432)
+    // Text input delivers strings: the comparison must still match.
+    expect(portForKindChange('5432', 'postgres', 'mysql')).toBe(3306)
+  })
+
+  it('never touches a hand-set port', () => {
+    expect(portForKindChange(5471, 'postgres', 'mysql')).toBe(5471)
+    expect(portForKindChange('5471', 'mysql', 'postgres')).toBe('5471')
   })
 })
 

@@ -25,6 +25,18 @@ export const ENV_BADGE_CLASSES: Record<Env, string> = {
   prod: 'border-destructive/30 bg-destructive/10 text-destructive',
 }
 
+/// Follow the kind only when the port still sits on the previous kind's
+/// default; a hand-set port survives engine switches.
+export function portForKindChange(
+  port: number | string,
+  previousKind: ConnectorKind,
+  nextKind: ConnectorKind,
+): number | string {
+  return Number(port) === KIND_META[previousKind].defaultPort
+    ? KIND_META[nextKind].defaultPort
+    : port
+}
+
 export const connectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   env: z.enum(ENVS),

@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/select'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { connectionSchema, ENVS, KIND_META, KINDS, NO_TUNNEL, parseConnectionUrl, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { connectionSchema, ENVS, KIND_META, KINDS, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -99,10 +99,9 @@ function applyUrl() {
   importUrl.value = ''
 }
 
-// Only an untouched port follows the kind: a hand-set one stays.
 watch(() => values.value.kind, (next, previous) => {
-  if (previous && Number(values.value.port) === KIND_META[previous].defaultPort)
-    values.value.port = KIND_META[next].defaultPort
+  if (previous)
+    values.value.port = portForKindChange(values.value.port, previous, next)
 })
 
 function parse(): ConnectionInput | null {

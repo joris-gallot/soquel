@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { KeyEntry } from '@/lib/bindings'
+import { watchDebounced } from '@vueuse/core'
 import { onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -26,9 +27,11 @@ function toggleGlob() {
   scan(true)
 }
 
+// Latest-wins: a newer scan supersedes in-flight responses instead of blocking.
+let scanSeq = 0
+
 async function scan(reset: boolean) {
-  if (scanning.value)
-    return
+  const seq = ++scanSeq
   scanning.value = true
   try {
     const page = unwrap(await commands.scanKeys(
@@ -37,17 +40,23 @@ async function scan(reset: boolean) {
       reset ? null : cursor.value,
       SCAN_COUNT,
     ))
+    if (seq !== scanSeq)
+      return
     keys.value = reset ? page.keys : [...keys.value, ...page.keys]
     cursor.value = page.cursor
     scannedOnce.value = true
   }
   catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+    if (seq === scanSeq)
+      toast.error(error instanceof Error ? error.message : String(error))
   }
   finally {
-    scanning.value = false
+    if (seq === scanSeq)
+      scanning.value = false
   }
 }
+
+watchDebounced(pattern, () => scan(true), { debounce: 250 })
 
 /// Fresh scan with the current pattern; parents call this after writes.
 function refresh() {

@@ -1,6 +1,6 @@
 import type { ConnectionProfile } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { connectionSchema, groupConnections, parseConnectionUrl, portForKindChange, toConnectionInput } from './connections'
+import { connectionSchema, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, toConnectionInput } from './connections'
 import { zodFieldErrors } from './validation'
 
 function profile(name: string, group: string | null): ConnectionProfile {
@@ -100,6 +100,42 @@ describe('parseConnectionUrl', () => {
   it('carries sslrootcert through', () => {
     expect(parseConnectionUrl('postgres://u:p@h/db?sslmode=verify-full&sslrootcert=/etc/ca.pem'))
       .toMatchObject({ sslMode: 'verify-full', sslRootCert: '/etc/ca.pem' })
+  })
+})
+
+describe('formValuesFromProfile', () => {
+  it('roundtrips a fully loaded profile through the form without losing fields', () => {
+    const stored: ConnectionProfile = {
+      id: 'c-1',
+      name: 'prod replica',
+      env: 'prod',
+      group: 'clients',
+      params: {
+        kind: 'mysql',
+        host: 'db.internal',
+        port: 3307,
+        database: 'app',
+        user: 'reader',
+        sslMode: 'verify-full',
+        sslRootCert: '/etc/ca.pem',
+        tunnelId: 't-1',
+      },
+    }
+    // Edit dialog opens (profile -> form), user saves untouched (form -> input):
+    // every stored field must survive the trip.
+    const input = toConnectionInput(connectionSchema.parse(formValuesFromProfile(stored)))
+    expect(input.params).toEqual(stored.params)
+    expect(input.name).toBe(stored.name)
+    expect(input.env).toBe(stored.env)
+    expect(input.group).toBe(stored.group)
+    expect(input.password).toBeNull()
+  })
+
+  it('maps stored nulls onto the form sentinels', () => {
+    const values = formValuesFromProfile(profile('bare', null))
+    expect(values.tunnelId).toBe('none')
+    expect(values.sslRootCert).toBe('')
+    expect(values.group).toBe('')
   })
 })
 

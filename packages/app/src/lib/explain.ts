@@ -249,6 +249,18 @@ function mysqlChildren(raw: RawNode): PlanNode[] {
   const materialized = raw.materialized_from_subquery as RawNode | undefined
   if (materialized?.query_block && typeof materialized.query_block === 'object')
     children.push(mysqlQueryBlock(materialized.query_block as RawNode))
+  const union = raw.union_result as RawNode | undefined
+  if (union && typeof union === 'object') {
+    const branches = (Array.isArray(union.query_specifications) ? union.query_specifications as RawNode[] : [])
+      .map(entry => entry.query_block)
+      .filter((block): block is RawNode => typeof block === 'object' && block !== null)
+      .map(mysqlQueryBlock)
+    const result = mysqlNode('Union', union)
+    result.children = branches
+    result.inclusiveCost = branches.reduce((total, branch) => total + branch.inclusiveCost, 0)
+    result.totalCost = result.inclusiveCost
+    children.push(result)
+  }
   return children
 }
 

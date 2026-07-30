@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import costOnlyRaw from '@/lib/__fixtures__/explain-cost-only.json?raw'
 import joinSortRaw from '@/lib/__fixtures__/explain-join-sort.json?raw'
+import mysqlDerivedRaw from '@/lib/__fixtures__/explain-mysql-derived.json?raw'
 import mysqlJoinRaw from '@/lib/__fixtures__/explain-mysql-join.json?raw'
 import mysqlSubqueryRaw from '@/lib/__fixtures__/explain-mysql-subquery.json?raw'
+import mysqlUnionRaw from '@/lib/__fixtures__/explain-mysql-union.json?raw'
 import parallelRaw from '@/lib/__fixtures__/explain-parallel.json?raw'
 import subplanRaw from '@/lib/__fixtures__/explain-subplan.json?raw'
 import { explainSql, explainTreeText, flattenPlan, formatMs, hiddenByCollapse, parseExplain } from '@/lib/explain'
@@ -252,6 +254,26 @@ describe('parseExplain on real mysql output', () => {
     const nodes = flattenPlan(plans[0].root)
     expect(nodes.map(node => node.nodeType)).toContain('Subquery')
     expect(nodes.filter(node => node.nodeType === 'Query block').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('expands union branches as child query blocks', () => {
+    const plans = parseExplain(mysqlStatement(mysqlUnionRaw))!
+    const nodes = flattenPlan(plans[0].root)
+    const union = nodes.find(node => node.nodeType === 'Union')!
+    expect(union.children).toHaveLength(2)
+    expect(union.condition).toBe('using temporary')
+    // Both branches carry their own scans.
+    expect(nodes.filter(node => node.nodeType === 'Table scan').length).toBeGreaterThanOrEqual(2)
+    expect(union.inclusiveCost).toBeGreaterThan(0)
+  })
+
+  it('expands derived tables through materialized_from_subquery', () => {
+    const plans = parseExplain(mysqlStatement(mysqlDerivedRaw))!
+    const nodes = flattenPlan(plans[0].root)
+    // The derived table d wraps an inner query block over events.
+    expect(nodes.some(node => node.target === 'on d')).toBe(true)
+    expect(nodes.filter(node => node.nodeType === 'Query block').length).toBeGreaterThanOrEqual(2)
+    expect(nodes.some(node => node.target?.includes('on events'))).toBe(true)
   })
 
   it('detects the EXPLAIN ANALYZE tree text and rejects json for it', () => {

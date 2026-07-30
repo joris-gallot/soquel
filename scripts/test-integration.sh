@@ -21,3 +21,7 @@ SOQUEL_TEST_PG=postgres://soquel:soquel@localhost:5460/soquel_test \
 echo "==> mysql oldest supported"
 SOQUEL_TEST_MYSQL=localhost:5462 \
   cargo test --manifest-path "$manifest" integration_mysql_
+
+echo "==> mariadb (mysql kind)"
+SOQUEL_TEST_MYSQL=localhost:5463 \
+  cargo test --manifest-path "$manifest" integration_mysql_

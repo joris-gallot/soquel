@@ -20,7 +20,7 @@ import { useSchema } from '@/composables/useSchema'
 import { useSqlSessions } from '@/composables/useSqlSessions'
 import { useWorkspaceTabs } from '@/composables/useWorkspaceTabs'
 import { commands } from '@/lib/bindings'
-import { ENV_BADGE_CLASSES, KIND_META } from '@/lib/connections'
+import { ENV_BADGE_CLASSES, serverBadge } from '@/lib/connections'
 import { unwrap } from '@/lib/result'
 
 const route = useRoute()
@@ -34,8 +34,12 @@ const profile = computed(() => connections.value.find(p => p.id === id.value))
 const snapshot = computed(() => snapshots.value[id.value])
 const filter = ref('')
 const serverVersion = ref<string | null>(null)
-// "18.4 (Debian 18.4-1...)" -> "18.4"; the badge title keeps the full string.
-const shortVersion = computed(() => serverVersion.value?.split(' ')[0] ?? null)
+// "18.4 (Debian...)" -> "PG 18.4"; "11.4.7-MariaDB-log" -> "MariaDB 11.4.7".
+const versionBadge = computed(() => {
+  if (serverVersion.value === null || !profile.value)
+    return null
+  return serverBadge(profile.value.params.kind, serverVersion.value)
+})
 const tabs = useWorkspaceTabs(String(route.params.id))
 const activeTab = computed(() => tabs.state.value.tabs.find(tab => tab.id === tabs.state.value.activeId) ?? null)
 
@@ -165,13 +169,13 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
             {{ profile.env }}
           </Badge>
           <Badge
-            v-if="shortVersion && profile"
+            v-if="versionBadge"
             variant="outline"
             class="border-transparent bg-muted font-mono text-[10px] text-muted-foreground"
-            :title="`${KIND_META[profile.params.kind].label} ${serverVersion}`"
+            :title="`${versionBadge.engine} ${serverVersion}`"
             data-testid="server-version"
           >
-            {{ KIND_META[profile.params.kind].short }} {{ shortVersion }}
+            {{ versionBadge.engine }} {{ versionBadge.version }}
           </Badge>
           <Tooltip>
             <TooltipTrigger as-child>

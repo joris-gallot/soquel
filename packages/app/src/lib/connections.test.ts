@@ -1,6 +1,6 @@
 import type { ConnectionProfile } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { connectionSchema, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, toConnectionInput } from './connections'
+import { connectionSchema, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, serverBadge, toConnectionInput } from './connections'
 import { zodFieldErrors } from './validation'
 
 function profile(name: string, group: string | null): ConnectionProfile {
@@ -136,6 +136,16 @@ describe('formValuesFromProfile', () => {
     expect(values.tunnelId).toBe('none')
     expect(values.sslRootCert).toBe('')
     expect(values.group).toBe('')
+  })
+})
+
+describe('serverBadge', () => {
+  it('splits engines and cleans version strings per flavor', () => {
+    expect(serverBadge('postgres', '18.4 (Debian 18.4-1.pgdg120+1)'))
+      .toEqual({ engine: 'PG', version: '18.4' })
+    expect(serverBadge('mysql', '8.4.11')).toEqual({ engine: 'MySQL', version: '8.4.11' })
+    expect(serverBadge('mysql', '11.4.7-MariaDB-log'))
+      .toEqual({ engine: 'MariaDB', version: '11.4.7' })
   })
 })
 

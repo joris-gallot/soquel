@@ -34,6 +34,23 @@ fn profile_from_env() -> Option<ConnectionProfile> {
   profile_with_ssl(SslMode::Prefer)
 }
 
+/// KILL QUERY on a SLEEP: mysql returns 1, mariadb raises ER_QUERY_INTERRUPTED.
+fn assert_interrupted_sleep(outcome: Result<QueryResult, Error>) {
+  match outcome {
+    Ok(result) => assert_eq!(result.statements[0].rows[0][0].as_deref(), Some("1")),
+    Err(Error::Database { message }) => {
+      assert!(message.contains("interrupted"), "{message}")
+    }
+    Err(other) => panic!("unexpected error kind: {other:?}"),
+  }
+}
+
+fn is_mariadb(connection: &dyn Connection) -> bool {
+  connection
+    .server_version()
+    .is_some_and(|version| version.contains("MariaDB"))
+}
+
 async fn test_connection_from_env() -> Option<Box<dyn Connection>> {
   let profile = profile_from_env()?;
   Some(
@@ -89,13 +106,19 @@ async fn integration_mysql_values_render_as_text() {
     .unwrap();
   let statement = &result.statements[0];
   let kinds: Vec<ColumnKind> = statement.columns.iter().map(|c| c.kind).collect();
+  // mariadb has no real JSON type (LONGTEXT alias): the column reads as text.
+  let json_kind = if is_mariadb(connection.as_ref()) {
+    ColumnKind::Text
+  } else {
+    ColumnKind::Json
+  };
   assert_eq!(
     kinds,
     vec![
       ColumnKind::Number,
       ColumnKind::Text,
       ColumnKind::Text,
-      ColumnKind::Json,
+      json_kind,
       ColumnKind::Number,
       ColumnKind::Bytes,
       ColumnKind::DateTime,
@@ -160,14 +183,13 @@ async fn integration_mysql_connection_cancel_kills_pooled_query() {
 
   let started = Instant::now();
   connection.sql().unwrap().cancel().await.unwrap();
-  let outcome = query.await.unwrap().unwrap();
+  let outcome = query.await.unwrap();
   assert!(
     started.elapsed() < std::time::Duration::from_secs(5),
     "cancel took {:?}",
     started.elapsed()
   );
-  // KILL QUERY interrupts SLEEP, which then returns 1.
-  assert_eq!(outcome.statements[0].rows[0][0].as_deref(), Some("1"));
+  assert_interrupted_sleep(outcome);
   // The pool hands out a healthy connection afterwards.
   connection.health().await.unwrap();
 }
@@ -254,9 +276,7 @@ async fn integration_mysql_session_pins_state_and_cancel_kills_query() {
     "cancel took {:?}",
     started.elapsed()
   );
-  // SLEEP interrupted by KILL QUERY returns 1 (not an error) per mysql docs.
-  let interrupted = outcome.unwrap();
-  assert_eq!(interrupted.statements[0].rows[0][0].as_deref(), Some("1"));
+  assert_interrupted_sleep(outcome);
 
   // The session survives the cancel.
   session.run_query("SELECT 1").await.unwrap();
@@ -587,7 +607,8 @@ async fn integration_mysql_schema_snapshot() {
   assert_eq!(customers.kind, TableKind::Table);
   assert_eq!(customers.primary_key, vec!["id"]);
   let id = customers.columns.iter().find(|c| c.name == "id").unwrap();
-  assert_eq!(id.data_type, "int");
+  // mariadb keeps the display width mysql 8 dropped.
+  assert!(id.data_type.starts_with("int"), "{}", id.data_type);
   assert_eq!(id.default.as_deref(), Some("auto_increment"));
   let email = customers
     .columns

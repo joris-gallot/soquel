@@ -1,7 +1,8 @@
 # Test databases, one service per connector kind, seeded from scripts/test-seeds/.
 # Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459,
 # postgres-oldest 5460 (minimum supported major = oldest non-EOL; bump on postgres EOL dates),
-# sshd-reconnect 5461, mysql-oldest 5462 (8.0: upstream EOL but dominant via RDS/Aurora).
+# sshd-reconnect 5461, mysql-oldest 5462 (8.0: upstream EOL but dominant via RDS/Aurora),
+# mariadb 5463 (LTS, same seed; TLS via scripts/test-tls so the ssl suite runs unchanged).
 name: soquel-test
 
 services:
@@ -79,6 +80,32 @@ services:
       - /var/lib/mysql
     healthcheck:
       test: [CMD-SHELL, mysqladmin ping -h 127.0.0.1 -usoquel -psoquel]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+
+  # MariaDB rides the mysql kind: the integration_mysql_* suite runs against it too.
+  mariadb:
+    image: mariadb:11.4
+    ports:
+      - '5463:3306'
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: soquel_test
+      MARIADB_USER: soquel
+      MARIADB_PASSWORD: soquel
+    volumes:
+      - ./scripts/test-seeds/mysql.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+      - ./scripts/test-tls:/certs:ro
+    # The key must be readable by the mysql user only: copy it out of the
+    # read-only mount before handing off to the stock entrypoint.
+    entrypoint: >
+      sh -c "install -o mysql -g mysql -m 600 /certs/server.key /tmp/server.key
+      && exec docker-entrypoint.sh mariadbd --ssl-cert=/certs/server.crt --ssl-key=/tmp/server.key"
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: [CMD-SHELL, mariadb-admin ping -h 127.0.0.1 -usoquel -psoquel]
       interval: 2s
       timeout: 3s
       retries: 45

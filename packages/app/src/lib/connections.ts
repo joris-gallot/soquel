@@ -25,6 +25,14 @@ export const ENV_BADGE_CLASSES: Record<Env, string> = {
   prod: 'border-destructive/30 bg-destructive/10 text-destructive',
 }
 
+/// Workspace badge for a live server: MariaDB announces itself through the
+/// mysql kind's version string ("11.4.7-MariaDB-log").
+export function serverBadge(kind: ConnectorKind, version: string): { engine: string, version: string } {
+  if (kind === 'mysql' && version.includes('MariaDB'))
+    return { engine: 'MariaDB', version: version.split('-')[0] }
+  return { engine: KIND_META[kind].short, version: version.split(' ')[0] }
+}
+
 /// Follow the kind only when the port still sits on the previous kind's
 /// default; a hand-set port survives engine switches.
 export function portForKindChange(

@@ -32,6 +32,9 @@ describe('redis workspace', () => {
 
   it('seeds keys through the console and scans them', async () => {
     await $('[data-testid="kv-view-console"]').click()
+    // Self-clean: a previously aborted run leaves e2e:* keys behind.
+    await runConsole('DEL e2e:greeting e2e:list')
+    await waitForText('[data-testid="redis-console"]', '(integer)')
     await runConsole('SET e2e:greeting "hello soquel"')
     await waitForText('[data-testid="redis-console"]', 'OK')
     await runConsole('RPUSH e2e:list one two three')

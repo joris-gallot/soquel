@@ -58,7 +58,7 @@ defineExpose({ refresh: load })
     <SelectTrigger class="h-6! gap-1 border-none px-2 font-mono text-xs" data-testid="kv-db">
       <SelectValue>db {{ databases.current }}</SelectValue>
     </SelectTrigger>
-    <SelectContent align="end">
+    <SelectContent position="popper" align="end">
       <SelectItem
         v-for="index in databases.total"
         :key="index"

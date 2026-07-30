@@ -446,6 +446,8 @@ async fn scan_collection(
 }
 
 /// Would monopolize or re-mode the multiplexed connection.
+/// SELECT: the workspace db selector owns the index; a console SELECT would
+/// silently revert on reconnect.
 const BLOCKED_COMMANDS: &[&str] = &[
   "SUBSCRIBE",
   "PSUBSCRIBE",
@@ -461,6 +463,8 @@ const BLOCKED_COMMANDS: &[&str] = &[
   "BZMPOP",
   "XREAD",
   "WAIT",
+  "SELECT",
+  "RESET",
 ];
 
 /// redis-cli style tokenizer: whitespace-separated, quotes group words.

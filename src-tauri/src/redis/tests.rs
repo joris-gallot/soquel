@@ -421,6 +421,9 @@ async fn integration_redis_console_renders_and_blocks() {
   assert!(matches!(blocked, Err(Error::Unsupported { .. })));
   let blocked = kv.run_command("blpop mykey 0").await;
   assert!(matches!(blocked, Err(Error::Unsupported { .. })));
+  // The db selector owns the index: console SELECT would drift on reconnect.
+  let blocked = kv.run_command("select 1").await;
+  assert!(matches!(blocked, Err(Error::Unsupported { .. })));
 
   // Server errors surface with the server message.
   let err = kv.run_command("NOTACOMMAND x").await.unwrap_err();

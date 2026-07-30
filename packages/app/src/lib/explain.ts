@@ -123,6 +123,9 @@ const MYSQL_WRAPPERS: Record<string, string> = {
   duplicates_removal: 'Distinct',
   windowing: 'Windowing',
   buffer_result: 'Buffer',
+  // mariadb spells its wrappers differently.
+  filesort: 'Filesort',
+  temporary_table: 'Temporary table',
 }
 
 const MYSQL_ACCESS_TYPES: Record<string, string> = {
@@ -157,6 +160,10 @@ function parseMysqlExplain(
     return null
 
   const root = mysqlQueryBlock(block)
+  // An unrecognized shape parses to a bare childless block: the flat table
+  // is more honest than an empty tree.
+  if (root.children.length === 0)
+    return null
   finalizeMysqlPlan(root, '0', 0)
   const basis = root.inclusiveCost > 0 ? root.inclusiveCost : 1
   applyHeat(root, basis, false)
@@ -166,7 +173,7 @@ function parseMysqlExplain(
 
 function mysqlQueryBlock(block: RawNode): PlanNode {
   const node = mysqlNode('Query block', block)
-  node.inclusiveCost = mysqlCost(block, 'query_cost') ?? 0
+  node.inclusiveCost = mysqlCost(block, 'query_cost') ?? numberOrNull(block.cost) ?? 0
   node.totalCost = node.inclusiveCost
   return node
 }
@@ -177,7 +184,7 @@ function mysqlNode(nodeType: string, raw: RawNode): PlanNode {
     raw.using_filesort === true ? 'using filesort' : null,
     raw.using_temporary_table === true ? 'using temporary' : null,
   ].filter((flag): flag is string => flag !== null)
-  const cost = mysqlCost(raw, 'prefix_cost') ?? mysqlCost(raw, 'query_cost')
+  const cost = mysqlCost(raw, 'prefix_cost') ?? mysqlCost(raw, 'query_cost') ?? numberOrNull(raw.cost)
   const inclusiveCost
     = cost ?? children.reduce((total, child) => Math.max(total, child.inclusiveCost), 0)
   return {
@@ -188,11 +195,13 @@ function mysqlNode(nodeType: string, raw: RawNode): PlanNode {
     condition:
       typeof raw.attached_condition === 'string'
         ? `Filter: ${raw.attached_condition}`
-        : flags.length > 0
-          ? flags.join(', ')
-          : null,
+        : typeof raw.sort_key === 'string'
+          ? `Sort key: ${raw.sort_key}`
+          : flags.length > 0
+            ? flags.join(', ')
+            : null,
     totalCost: inclusiveCost,
-    planRows: numberOrNull(raw.rows_examined_per_scan) ?? 0,
+    planRows: numberOrNull(raw.rows_examined_per_scan) ?? numberOrNull(raw.rows) ?? 0,
     actualRows: null,
     actualLoops: null,
     inclusiveMs: null,
@@ -214,22 +223,31 @@ function mysqlChildren(raw: RawNode): PlanNode[] {
       children.push(mysqlNode(label, wrapped as RawNode))
   }
   if (Array.isArray(raw.nested_loop)) {
-    const tables = (raw.nested_loop as RawNode[])
+    const entries = (raw.nested_loop as RawNode[])
       .map(entry => entry.table)
       .filter((table): table is RawNode => typeof table === 'object' && table !== null)
-      .map(mysqlTable)
-    // prefix_cost is cumulative across join siblings: displayed cost keeps the
-    // prefix, but the heat math needs each table's own share (the delta).
-    let previousPrefix = 0
-    for (const table of tables) {
-      const prefix = table.inclusiveCost
-      table.inclusiveCost = Math.max(prefix - previousPrefix, 0)
-      previousPrefix = Math.max(prefix, previousPrefix)
+    const tables = entries.map(mysqlTable)
+    // mysql's prefix_cost is cumulative across join siblings: displayed cost
+    // keeps the prefix, the heat math needs each table's own share (the
+    // delta). mariadb reports plain per-table costs: sum them as-is.
+    const cumulative = entries.some(entry => mysqlCost(entry, 'prefix_cost') !== null)
+    let loopCost = 0
+    if (cumulative) {
+      let previousPrefix = 0
+      for (const table of tables) {
+        const prefix = table.inclusiveCost
+        table.inclusiveCost = Math.max(prefix - previousPrefix, 0)
+        previousPrefix = Math.max(prefix, previousPrefix)
+      }
+      loopCost = previousPrefix
+    }
+    else {
+      loopCost = tables.reduce((total, table) => total + table.inclusiveCost, 0)
     }
     const loop = mysqlNode('Nested loop', {})
     loop.children = tables
-    loop.inclusiveCost = previousPrefix
-    loop.totalCost = previousPrefix
+    loop.inclusiveCost = loopCost
+    loop.totalCost = loopCost
     children.push(loop)
   }
   if (raw.table && typeof raw.table === 'object')

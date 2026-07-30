@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import costOnlyRaw from '@/lib/__fixtures__/explain-cost-only.json?raw'
 import joinSortRaw from '@/lib/__fixtures__/explain-join-sort.json?raw'
+import mariadbJoinRaw from '@/lib/__fixtures__/explain-mariadb-join.json?raw'
 import mysqlDerivedRaw from '@/lib/__fixtures__/explain-mysql-derived.json?raw'
 import mysqlJoinRaw from '@/lib/__fixtures__/explain-mysql-join.json?raw'
 import mysqlSubqueryRaw from '@/lib/__fixtures__/explain-mysql-subquery.json?raw'
@@ -274,6 +275,35 @@ describe('parseExplain on real mysql output', () => {
     expect(nodes.some(node => node.target === 'on d')).toBe(true)
     expect(nodes.filter(node => node.nodeType === 'Query block').length).toBeGreaterThanOrEqual(2)
     expect(nodes.some(node => node.target?.includes('on events'))).toBe(true)
+  })
+
+  it('parses the mariadb flavor: bare costs, filesort/temporary wrappers', () => {
+    const plans = parseExplain(mysqlStatement(mariadbJoinRaw))!
+    expect(plans).not.toBeNull()
+    const { root } = plans[0]
+    expect(root.inclusiveCost).toBeCloseTo(0.0148, 3)
+
+    const nodes = flattenPlan(root)
+    const types = nodes.map(node => node.nodeType)
+    expect(types).toContain('Filesort')
+    expect(types).toContain('Temporary table')
+    expect(types).toContain('Nested loop')
+    const filesort = nodes.find(node => node.nodeType === 'Filesort')!
+    expect(filesort.condition).toContain('Sort key')
+    const lookup = nodes.find(node => node.nodeType === 'Unique lookup')!
+    expect(lookup.target).toBe('on c using PRIMARY')
+    // Per-table costs are NOT cumulative here: the loop sums them.
+    const loop = nodes.find(node => node.nodeType === 'Nested loop')!
+    expect(loop.inclusiveCost).toBeCloseTo(0.0113438 + 0.00350252, 5)
+    for (const node of nodes) {
+      expect(node.heat).toBeGreaterThanOrEqual(0)
+      expect(node.heat).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('degrades to null (flat table) on an unrecognized json shape', () => {
+    const alien = JSON.stringify({ query_block: { select_id: 1, something_new: { x: 1 } } })
+    expect(parseExplain(mysqlStatement(alien))).toBeNull()
   })
 
   it('detects the EXPLAIN ANALYZE tree text and rejects json for it', () => {

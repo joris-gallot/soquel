@@ -38,6 +38,21 @@ services:
       timeout: 3s
       retries: 45
 
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --requirepass, soquel, --appendonly, 'yes']
+    ports:
+      - '5472:6379'
+    volumes:
+      - redisdata:/data
+      - ./scripts/dev-seed:/seeds:ro
+    healthcheck:
+      test: [CMD-SHELL, redis-cli -a soquel ping | grep PONG]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
 volumes:
   pgdata:
   mysqldata:
+  redisdata:

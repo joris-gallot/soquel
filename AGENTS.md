@@ -50,10 +50,11 @@ pnpm db:test           # start the test databases (docker-compose.test.yml), see
 pnpm test:integration  # cargo integration_* tests against them
 pnpm db:test:down
 
-pnpm db:dev            # dev postgres on 5470 + mysql on 5471 (docker-compose.dev.yml), persistent volumes
+pnpm db:dev            # dev postgres on 5470 + mysql on 5471 + redis on 5472 (docker-compose.dev.yml), persistent volumes
                        # dev stays out of 5455-5462: that whole range belongs to docker-compose.test.yml
 pnpm db:dev:seed:pg    # (re)seed the dev postgres: ~1.5M rows across a SaaS-shaped app schema
 pnpm db:dev:seed:mysql # same shape for the dev mysql (soquel_dev)
+pnpm db:dev:seed:redis # SaaS-shaped keys for the key browser (~16k: sessions, cache, queues, stream)
 pnpm db:dev:down
 ```
 

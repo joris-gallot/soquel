@@ -55,6 +55,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::connect,
       commands::disconnect,
       commands::active_connections,
+      commands::server_version,
       commands::run_query,
       commands::cancel_query,
       commands::table_rows,

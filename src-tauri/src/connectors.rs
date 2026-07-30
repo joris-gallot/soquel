@@ -284,6 +284,10 @@ pub trait Introspect: Send + Sync {
 pub trait Connection: Send + Sync {
   async fn health(&self) -> Result<(), Error>;
   async fn close(&self) -> Result<(), Error>;
+  /// Human-readable server version, captured at connect when available.
+  fn server_version(&self) -> Option<String> {
+    None
+  }
   fn sql(&self) -> Option<&dyn SqlQuery> {
     None
   }

@@ -88,6 +88,7 @@ pub async fn test_connection(
     database: input.database.clone(),
     user: input.user.clone(),
     ssl_mode: input.ssl_mode,
+    ssl_root_cert: input.ssl_root_cert.clone(),
     tunnel_id: input.tunnel_id.clone(),
     group: input.group.clone(),
   };
@@ -211,6 +212,15 @@ async fn session(state: &State<'_, AppState>, id: &str) -> Result<Arc<dyn SqlSes
 #[specta::specta]
 pub async fn active_connections(state: State<'_, AppState>) -> Result<Vec<String>, Error> {
   Ok(state.connections.lock().await.keys().cloned().collect())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn server_version(
+  state: State<'_, AppState>,
+  id: String,
+) -> Result<Option<String>, Error> {
+  Ok(active(&state, &id).await?.server_version())
 }
 
 #[tauri::command]

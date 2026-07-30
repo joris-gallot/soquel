@@ -535,6 +535,7 @@ mod tests {
           database: "soquel_test".to_string(),
           user: "soquel".to_string(),
           ssl_mode: SslMode::Require,
+          ssl_root_cert: None,
           tunnel_id: None,
           group: None,
         },
@@ -547,6 +548,79 @@ mod tests {
       .unwrap();
     connection.health().await.unwrap();
     connection.close().await.unwrap();
+  }
+
+  /// End-to-end optimistic proof of the SNI/hostname override: verify-full
+  /// through the tunnel validates the profile's logical host, not 127.0.0.1.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_ssh_verify_full_through_tunnel_checks_logical_host() {
+    use crate::connectors::{Connector, LocalForward};
+    use crate::postgres::tests::TEST_ROOT_CERT;
+    use crate::postgres::PostgresConnector;
+    use crate::profiles::{ConnectionProfile, ConnectorKind, Env, SslMode};
+
+    let Some(profile) = tunnel_from_env(TEST_KEY) else {
+      return;
+    };
+    if std::env::var("SOQUEL_TEST_PG_TLS").is_err() {
+      return;
+    }
+    let key = host_key(&profile).await;
+    let tunnel = SshTunnel::open(
+      &profile,
+      None,
+      Some(key),
+      TunnelTarget {
+        host: "postgres-tls".to_string(),
+        port: 5432,
+      },
+    )
+    .await
+    .unwrap();
+
+    let connection_profile = |host: &str| ConnectionProfile {
+      id: String::new(),
+      name: String::new(),
+      env: Env::Dev,
+      kind: ConnectorKind::Postgres,
+      host: host.to_string(),
+      port: 5432,
+      database: "soquel_test".to_string(),
+      user: "soquel".to_string(),
+      ssl_mode: SslMode::VerifyFull,
+      ssl_root_cert: Some(TEST_ROOT_CERT.to_string()),
+      tunnel_id: None,
+      group: None,
+    };
+    let forward = LocalForward {
+      port: tunnel.local_port,
+    };
+
+    // "localhost" is in the cert SAN: the handshake must pass through the tunnel.
+    let connection = PostgresConnector
+      .connect(
+        &connection_profile("localhost"),
+        Some("soquel"),
+        Some(forward),
+      )
+      .await
+      .unwrap();
+    connection.health().await.unwrap();
+    connection.close().await.unwrap();
+
+    // A logical host missing from the SAN must be rejected, proving the
+    // verification targets the profile host rather than the forward address.
+    let rejected = PostgresConnector
+      .connect(
+        &connection_profile("postgres-tls"),
+        Some("soquel"),
+        Some(forward),
+      )
+      .await;
+    let Err(Error::Database { message }) = rejected else {
+      panic!("expected a hostname mismatch");
+    };
+    assert!(!message.is_empty());
   }
 
   #[tokio::test(flavor = "multi_thread")]

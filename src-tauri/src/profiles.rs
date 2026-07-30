@@ -45,6 +45,9 @@ pub struct ConnectionProfile {
   pub user: String,
   #[serde(default)]
   pub ssl_mode: SslMode,
+  /// CA bundle path for verify-full (libpq sslrootcert); None = platform store.
+  #[serde(default)]
+  pub ssl_root_cert: Option<String>,
   #[serde(default)]
   pub tunnel_id: Option<String>,
   #[serde(default)]
@@ -64,6 +67,8 @@ pub struct ConnectionInput {
   pub user: String,
   #[serde(default)]
   pub ssl_mode: SslMode,
+  #[serde(default)]
+  pub ssl_root_cert: Option<String>,
   #[serde(default)]
   pub tunnel_id: Option<String>,
   #[serde(default)]
@@ -120,6 +125,7 @@ impl ProfileStore {
       database: input.database.clone(),
       user: input.user.clone(),
       ssl_mode: input.ssl_mode,
+      ssl_root_cert: input.ssl_root_cert.clone(),
       tunnel_id: input.tunnel_id.clone(),
       group: input.group.clone(),
     };
@@ -144,6 +150,7 @@ impl ProfileStore {
     profile.database = input.database.clone();
     profile.user = input.user.clone();
     profile.ssl_mode = input.ssl_mode;
+    profile.ssl_root_cert = input.ssl_root_cert.clone();
     profile.tunnel_id = input.tunnel_id.clone();
     profile.group = input.group.clone();
     let updated = profile.clone();
@@ -177,6 +184,7 @@ mod tests {
       database: "app".to_string(),
       user: "postgres".to_string(),
       ssl_mode: SslMode::Prefer,
+      ssl_root_cert: None,
       tunnel_id: None,
       group: None,
       password: None,
@@ -241,6 +249,7 @@ mod tests {
       "host":"localhost","port":5432,"database":"app","user":"postgres"}"#;
     let profile: ConnectionProfile = serde_json::from_str(raw).unwrap();
     assert_eq!(profile.ssl_mode, SslMode::Prefer);
+    assert_eq!(profile.ssl_root_cert, None);
     assert_eq!(profile.tunnel_id, None);
     assert_eq!(profile.group, None);
   }

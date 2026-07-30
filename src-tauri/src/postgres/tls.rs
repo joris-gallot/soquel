@@ -20,14 +20,18 @@ pub fn config_ssl_mode(mode: SslMode) -> tokio_postgres::config::SslMode {
   }
 }
 
-pub fn connector(mode: SslMode) -> Result<MakeRustlsConnect, Error> {
-  let config = match mode {
+pub fn connector(mode: SslMode, root_cert: Option<&str>) -> Result<MakeRustlsConnect, Error> {
+  let config = match (mode, root_cert) {
     // libpq parity: everything below verify-full encrypts without verifying.
-    SslMode::Disable | SslMode::Prefer | SslMode::Require => ClientConfig::builder()
+    (SslMode::Disable | SslMode::Prefer | SslMode::Require, _) => ClientConfig::builder()
       .dangerous()
       .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
       .with_no_client_auth(),
-    SslMode::VerifyFull => ClientConfig::builder()
+    // sslrootcert: trust exactly the given CA bundle instead of the platform store.
+    (SslMode::VerifyFull, Some(path)) => ClientConfig::builder()
+      .with_root_certificates(root_store(path)?)
+      .with_no_client_auth(),
+    (SslMode::VerifyFull, None) => ClientConfig::builder()
       .with_platform_verifier()
       .map_err(|err| Error::Database {
         message: format!("tls setup: {err}"),
@@ -35,6 +39,23 @@ pub fn connector(mode: SslMode) -> Result<MakeRustlsConnect, Error> {
       .with_no_client_auth(),
   };
   Ok(MakeRustlsConnect::new(config))
+}
+
+fn root_store(path: &str) -> Result<rustls::RootCertStore, Error> {
+  let tls_error = |detail: String| Error::Database {
+    message: format!("ssl root cert {path}: {detail}"),
+  };
+  let file = std::fs::File::open(path).map_err(|err| tls_error(err.to_string()))?;
+  let mut reader = std::io::BufReader::new(file);
+  let mut store = rustls::RootCertStore::empty();
+  for cert in rustls_pemfile::certs(&mut reader) {
+    let cert = cert.map_err(|err| tls_error(err.to_string()))?;
+    store.add(cert).map_err(|err| tls_error(err.to_string()))?;
+  }
+  if store.is_empty() {
+    return Err(tls_error("no certificates found".to_string()));
+  }
+  Ok(store)
 }
 
 #[derive(Debug)]

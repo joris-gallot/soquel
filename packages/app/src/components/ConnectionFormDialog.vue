@@ -51,7 +51,7 @@ function groupValue(): string {
 }
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', tunnelId: NO_TUNNEL, group: '', password: '' }
+  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -81,6 +81,7 @@ watch(open, (isOpen) => {
         database: props.profile.database,
         user: props.profile.user,
         sslMode: props.profile.sslMode ?? 'prefer',
+        sslRootCert: props.profile.sslRootCert ?? '',
         tunnelId: props.profile.tunnelId ?? NO_TUNNEL,
         group: props.profile.group ?? '',
         password: '',
@@ -239,6 +240,17 @@ async function save() {
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        <div v-if="values.sslMode === 'verify-full'" class="space-y-1.5">
+          <Label for="conn-ssl-root-cert">CA certificate</Label>
+          <Input
+            id="conn-ssl-root-cert"
+            v-model="values.sslRootCert"
+            data-testid="field-ssl-root-cert"
+            class="font-mono text-xs"
+            placeholder="/path/to/ca.pem (empty = system trust store)"
+          />
         </div>
 
         <div class="grid grid-cols-2 gap-3">

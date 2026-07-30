@@ -19,7 +19,9 @@ import { useConnections } from '@/composables/useConnections'
 import { useSchema } from '@/composables/useSchema'
 import { useSqlSessions } from '@/composables/useSqlSessions'
 import { useWorkspaceTabs } from '@/composables/useWorkspaceTabs'
+import { commands } from '@/lib/bindings'
 import { ENV_BADGE_CLASSES } from '@/lib/connections'
+import { unwrap } from '@/lib/result'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,6 +33,9 @@ const id = computed(() => String(route.params.id))
 const profile = computed(() => connections.value.find(p => p.id === id.value))
 const snapshot = computed(() => snapshots.value[id.value])
 const filter = ref('')
+const serverVersion = ref<string | null>(null)
+// "18.4 (Debian 18.4-1...)" -> "18.4"; the badge title keeps the full string.
+const shortVersion = computed(() => serverVersion.value?.split(' ')[0] ?? null)
 const tabs = useWorkspaceTabs(String(route.params.id))
 const activeTab = computed(() => tabs.state.value.tabs.find(tab => tab.id === tabs.state.value.activeId) ?? null)
 
@@ -88,6 +93,7 @@ onMounted(async () => {
   try {
     if (!activeIds.value.has(id.value))
       await connect(id.value)
+    serverVersion.value = unwrap(await commands.serverVersion(id.value))
     await load(id.value)
   }
   catch (error) {
@@ -157,6 +163,15 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
             :class="ENV_BADGE_CLASSES[profile.env]"
           >
             {{ profile.env }}
+          </Badge>
+          <Badge
+            v-if="shortVersion"
+            variant="outline"
+            class="border-transparent bg-muted font-mono text-[10px] text-muted-foreground"
+            :title="`PostgreSQL ${serverVersion}`"
+            data-testid="server-version"
+          >
+            PG {{ shortVersion }}
           </Badge>
           <Tooltip>
             <TooltipTrigger as-child>

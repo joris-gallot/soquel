@@ -16,6 +16,7 @@ export const commands = {
 	connect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("connect", { id })),
 	disconnect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("disconnect", { id })),
 	activeConnections: () => typedError<string[], Error>(__TAURI_INVOKE("active_connections")),
+	serverVersion: (id: string) => typedError<string | null, Error>(__TAURI_INVOKE("server_version", { id })),
 	runQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_query", { id, sql })),
 	cancelQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_query", { id })),
 	tableRows: (id: string, request: TableRowsRequest) => typedError<QueryResult, Error>(__TAURI_INVOKE("table_rows", { id, request })),
@@ -93,6 +94,7 @@ export type ConnectionInput = {
 	database: string,
 	user: string,
 	sslMode?: SslMode,
+	sslRootCert?: string | null,
 	tunnelId?: string | null,
 	group?: string | null,
 	password: string | null,
@@ -108,6 +110,8 @@ export type ConnectionProfile = {
 	database: string,
 	user: string,
 	sslMode?: SslMode,
+	/**  CA bundle path for verify-full (libpq sslrootcert); None = platform store. */
+	sslRootCert?: string | null,
 	tunnelId?: string | null,
 	group?: string | null,
 };

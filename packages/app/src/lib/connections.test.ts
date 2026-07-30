@@ -14,6 +14,7 @@ function profile(name: string, group: string | null): ConnectionProfile {
     database: 'db',
     user: 'u',
     sslMode: 'prefer',
+    sslRootCert: null,
     tunnelId: null,
     group,
   }
@@ -81,6 +82,11 @@ describe('parsePostgresUrl', () => {
     expect(parsePostgresUrl('postgres://u:p@h/db')).not.toHaveProperty('sslMode')
     expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=nonsense')).not.toHaveProperty('sslMode')
   })
+
+  it('carries sslrootcert through', () => {
+    expect(parsePostgresUrl('postgres://u:p@h/db?sslmode=verify-full&sslrootcert=/etc/ca.pem'))
+      .toMatchObject({ sslMode: 'verify-full', sslRootCert: '/etc/ca.pem' })
+  })
 })
 
 describe('connectionSchema', () => {
@@ -93,6 +99,7 @@ describe('connectionSchema', () => {
     database: 'app',
     user: 'postgres',
     sslMode: 'prefer',
+    sslRootCert: '',
     tunnelId: '',
     group: '',
     password: '',
@@ -129,6 +136,15 @@ describe('connectionSchema', () => {
   it('trims the group and turns blank into null', () => {
     expect(toConnectionInput(connectionSchema.parse(valid)).group).toBeNull()
     expect(toConnectionInput(connectionSchema.parse({ ...valid, group: '  clients ' })).group).toBe('clients')
+  })
+
+  it('keeps the ca path only for verify-full', () => {
+    const verifyFull = { ...valid, sslMode: 'verify-full', sslRootCert: ' /etc/ca.pem ' }
+    expect(toConnectionInput(connectionSchema.parse(verifyFull)).sslRootCert).toBe('/etc/ca.pem')
+    // Any other mode drops the stale path instead of persisting it.
+    const require = { ...valid, sslMode: 'require', sslRootCert: '/etc/ca.pem' }
+    expect(toConnectionInput(connectionSchema.parse(require)).sslRootCert).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse(valid)).sslRootCert).toBeNull()
   })
 
   it('turns the no-tunnel sentinel into null for the command input', () => {

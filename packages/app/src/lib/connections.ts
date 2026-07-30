@@ -22,6 +22,7 @@ export const connectionSchema = z.object({
   database: z.string().min(1, 'Database is required'),
   user: z.string().min(1, 'User is required'),
   sslMode: z.enum(SSL_MODES),
+  sslRootCert: z.string(),
   // Reka Select reserves '' for clearing, so "no tunnel" is a sentinel value.
   tunnelId: z.string().catch(NO_TUNNEL),
   group: z.string(),
@@ -38,6 +39,7 @@ export interface ConnectionFormValues {
   database: string
   user: string
   sslMode: SslMode
+  sslRootCert: string
   tunnelId: string
   group: string
   password: string
@@ -46,6 +48,10 @@ export interface ConnectionFormValues {
 export function toConnectionInput(values: z.output<typeof connectionSchema>): ConnectionInput {
   return {
     ...values,
+    // The CA only applies to verify-full: don't persist a stale path for other modes.
+    sslRootCert: values.sslMode === 'verify-full' && values.sslRootCert.trim() !== ''
+      ? values.sslRootCert.trim()
+      : null,
     tunnelId: values.tunnelId === NO_TUNNEL || values.tunnelId === '' ? null : values.tunnelId,
     group: values.group.trim() === '' ? null : values.group.trim(),
     password: values.password === '' ? null : values.password,
@@ -85,6 +91,9 @@ export function parsePostgresUrl(raw: string): Partial<ConnectionFormValues> | n
   const sslmode = url.searchParams.get('sslmode')
   if (sslmode && sslmode in URL_SSL_MODES)
     parsed.sslMode = URL_SSL_MODES[sslmode as LibpqSslMode]
+  const sslrootcert = url.searchParams.get('sslrootcert')
+  if (sslrootcert)
+    parsed.sslRootCert = sslrootcert
   return parsed
 }
 

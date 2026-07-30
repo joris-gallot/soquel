@@ -38,7 +38,8 @@ impl Connector for PostgresConnector {
     if let Some(secret) = secret {
       config.password(secret);
     }
-    let connection = PostgresConnection::new(config, profile.ssl_mode)?;
+    let connection =
+      PostgresConnection::new(config, profile.ssl_mode, profile.ssl_root_cert.clone())?;
     // Surface auth/reachability/TLS errors now, not on the first query.
     drop(connection.checkout().await?);
     Ok(Box::new(connection))
@@ -72,16 +73,24 @@ fn build_config(profile: &ConnectionProfile, forward: Option<LocalForward>) -> C
 pub(super) struct PooledPg {
   pub(super) client: Client,
   notices: Arc<Mutex<Vec<ServerNotice>>>,
+  server_version: Option<String>,
 }
 
 pub(super) struct PgManager {
   config: Config,
   ssl_mode: SslMode,
+  ssl_root_cert: Option<String>,
+  server_version: Arc<std::sync::OnceLock<String>>,
 }
 
-async fn connect_pg(config: &Config, ssl_mode: SslMode) -> Result<PooledPg, Error> {
-  let tls = tls::connector(ssl_mode)?;
+async fn connect_pg(
+  config: &Config,
+  ssl_mode: SslMode,
+  ssl_root_cert: Option<&str>,
+) -> Result<PooledPg, Error> {
+  let tls = tls::connector(ssl_mode, ssl_root_cert)?;
   let (client, mut connection) = config.connect(tls).await?;
+  let server_version = connection.parameter("server_version").map(str::to_string);
   let notices: Arc<Mutex<Vec<ServerNotice>>> = Arc::default();
   let sink = notices.clone();
   tauri::async_runtime::spawn(async move {
@@ -99,7 +108,11 @@ async fn connect_pg(config: &Config, ssl_mode: SslMode) -> Result<PooledPg, Erro
       }
     }
   });
-  Ok(PooledPg { client, notices })
+  Ok(PooledPg {
+    client,
+    notices,
+    server_version,
+  })
 }
 
 /// Prepare-for-types, run over the simple protocol, drain this client's notices.
@@ -133,7 +146,11 @@ impl managed::Manager for PgManager {
   type Error = Error;
 
   async fn create(&self) -> Result<PooledPg, Error> {
-    connect_pg(&self.config, self.ssl_mode).await
+    let pg = connect_pg(&self.config, self.ssl_mode, self.ssl_root_cert.as_deref()).await?;
+    if let Some(version) = &pg.server_version {
+      let _ = self.server_version.set(version.clone());
+    }
+    Ok(pg)
   }
 
   async fn recycle(&self, pg: &mut PooledPg, _: &Metrics) -> RecycleResult<Error> {
@@ -147,21 +164,31 @@ impl managed::Manager for PgManager {
 pub struct PostgresConnection {
   pool: Pool<PgManager>,
   ssl_mode: SslMode,
+  ssl_root_cert: Option<String>,
+  server_version: Arc<std::sync::OnceLock<String>>,
   cancels: Mutex<HashMap<u64, CancelToken>>,
   next_cancel_id: AtomicU64,
 }
 
 impl PostgresConnection {
-  fn new(config: Config, ssl_mode: SslMode) -> Result<Self, Error> {
-    let pool = Pool::builder(PgManager { config, ssl_mode })
-      .max_size(POOL_MAX_SIZE)
-      .build()
-      .map_err(|err| Error::Database {
-        message: format!("connection pool: {err}"),
-      })?;
+  fn new(config: Config, ssl_mode: SslMode, ssl_root_cert: Option<String>) -> Result<Self, Error> {
+    let server_version = Arc::new(std::sync::OnceLock::new());
+    let pool = Pool::builder(PgManager {
+      config,
+      ssl_mode,
+      ssl_root_cert: ssl_root_cert.clone(),
+      server_version: server_version.clone(),
+    })
+    .max_size(POOL_MAX_SIZE)
+    .build()
+    .map_err(|err| Error::Database {
+      message: format!("connection pool: {err}"),
+    })?;
     Ok(Self {
       pool,
       ssl_mode,
+      ssl_root_cert,
+      server_version,
       cancels: Mutex::new(HashMap::new()),
       next_cancel_id: AtomicU64::new(0),
     })
@@ -195,6 +222,7 @@ impl PostgresConnection {
 pub struct PostgresSession {
   pg: PooledPg,
   ssl_mode: SslMode,
+  ssl_root_cert: Option<String>,
   cancel: CancelToken,
 }
 
@@ -208,7 +236,10 @@ impl SqlSession for PostgresSession {
     self
       .cancel
       .clone()
-      .cancel_query(tls::connector(self.ssl_mode)?)
+      .cancel_query(tls::connector(
+        self.ssl_mode,
+        self.ssl_root_cert.as_deref(),
+      )?)
       .await?;
     Ok(())
   }
@@ -243,6 +274,10 @@ impl Connection for PostgresConnection {
     Ok(())
   }
 
+  fn server_version(&self) -> Option<String> {
+    self.server_version.get().cloned()
+  }
+
   fn sql(&self) -> Option<&dyn SqlQuery> {
     Some(self)
   }
@@ -261,7 +296,12 @@ impl SqlQuery for PostgresConnection {
   async fn cancel(&self) -> Result<(), Error> {
     let tokens: Vec<CancelToken> = self.cancels.lock().unwrap().values().cloned().collect();
     for token in tokens {
-      token.cancel_query(tls::connector(self.ssl_mode)?).await?;
+      token
+        .cancel_query(tls::connector(
+          self.ssl_mode,
+          self.ssl_root_cert.as_deref(),
+        )?)
+        .await?;
     }
     Ok(())
   }
@@ -382,10 +422,16 @@ impl SqlQuery for PostgresConnection {
 
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error> {
     let manager = self.pool.manager();
-    let pg = connect_pg(&manager.config, manager.ssl_mode).await?;
+    let pg = connect_pg(
+      &manager.config,
+      manager.ssl_mode,
+      manager.ssl_root_cert.as_deref(),
+    )
+    .await?;
     Ok(Box::new(PostgresSession {
       cancel: pg.client.cancel_token(),
       ssl_mode: manager.ssl_mode,
+      ssl_root_cert: manager.ssl_root_cert.clone(),
       pg,
     }))
   }
@@ -1167,6 +1213,7 @@ pub mod tests {
       database: "app".to_string(),
       user: "u".to_string(),
       ssl_mode: SslMode::VerifyFull,
+      ssl_root_cert: None,
       tunnel_id: None,
       group: None,
     };
@@ -1188,7 +1235,7 @@ pub mod tests {
   fn connection_from_url(url: &str, ssl_mode: SslMode) -> PostgresConnection {
     let mut config: Config = url.parse().unwrap();
     config.ssl_mode(tls::config_ssl_mode(ssl_mode));
-    PostgresConnection::new(config, ssl_mode).unwrap()
+    PostgresConnection::new(config, ssl_mode, None).unwrap()
   }
 
   pub async fn test_connection_from_env() -> Option<PostgresConnection> {
@@ -1385,6 +1432,43 @@ pub mod tests {
       panic!("expected verify-full to reject an untrusted certificate");
     };
     assert!(!message.is_empty());
+  }
+
+  // Throwaway CA that signed the server cert (SAN localhost/127.0.0.1).
+  pub(crate) const TEST_ROOT_CERT: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/test-tls/ca.crt");
+
+  #[tokio::test]
+  async fn integration_postgres_tls_verify_full_passes_with_root_cert() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG_TLS") else {
+      return;
+    };
+    let mut config: Config = url.parse().unwrap();
+    config.ssl_mode(tls::config_ssl_mode(SslMode::VerifyFull));
+    // The compose URL points at localhost, which the cert SAN carries.
+    let pg = PostgresConnection::new(
+      config,
+      SslMode::VerifyFull,
+      Some(TEST_ROOT_CERT.to_string()),
+    )
+    .unwrap();
+    pg.health().await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_server_version_is_captured() {
+    use crate::connectors::Connection;
+
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    // Captured lazily with the first pooled connection.
+    pg.health().await.unwrap();
+    let version = pg.server_version().expect("version after first checkout");
+    assert!(
+      version.starts_with(|c: char| c.is_ascii_digit()),
+      "{version}"
+    );
   }
 
   #[tokio::test]
@@ -2143,6 +2227,7 @@ pub mod tests {
       database: config.get_dbname().unwrap().to_string(),
       user: config.get_user().unwrap().to_string(),
       ssl_mode: SslMode::Prefer,
+      ssl_root_cert: None,
       tunnel_id: None,
       group: None,
     }

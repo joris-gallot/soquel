@@ -104,7 +104,11 @@ impl<W: Write> ExportWriter<W> {
           })
           .collect::<Vec<_>>()
           .join(", ");
-        writeln!(self.out, "INSERT INTO {} ({names}) VALUES ({values});", self.table)?;
+        writeln!(
+          self.out,
+          "INSERT INTO {} ({names}) VALUES ({values});",
+          self.table
+        )?;
       }
       ExportFormat::Markdown => {
         let line = row
@@ -162,7 +166,12 @@ impl<W: Write> ChunkSink<W> {
   fn try_push(&mut self, chunk: RowsChunk) -> std::io::Result<()> {
     if let Some(columns) = chunk.columns {
       let out = self.out.take().expect("columns arrive only once");
-      self.writer = Some(ExportWriter::new(out, self.format, columns, self.table.clone())?);
+      self.writer = Some(ExportWriter::new(
+        out,
+        self.format,
+        columns,
+        self.table.clone(),
+      )?);
     }
     let writer = self.writer.as_mut().expect("first chunk carries columns");
     for row in &chunk.rows {
@@ -267,8 +276,13 @@ mod tests {
     rows: &[Vec<Option<String>>],
   ) -> String {
     let mut out = Vec::new();
-    let mut writer =
-      ExportWriter::new(&mut out, format, columns, "\"public\".\"users\"".to_string()).unwrap();
+    let mut writer = ExportWriter::new(
+      &mut out,
+      format,
+      columns,
+      "\"public\".\"users\"".to_string(),
+    )
+    .unwrap();
     for row in rows {
       writer.row(row).unwrap();
     }
@@ -284,7 +298,10 @@ mod tests {
   fn csv_escapes_and_renders_null_as_empty() {
     let out = render(
       ExportFormat::Csv,
-      vec![column("id", ColumnKind::Number), column("name,x", ColumnKind::Text)],
+      vec![
+        column("id", ColumnKind::Number),
+        column("name,x", ColumnKind::Text),
+      ],
       &[
         vec![cell("1"), cell("plain")],
         vec![cell("2"), cell("has \"quotes\", commas\nand newlines")],
@@ -308,7 +325,12 @@ mod tests {
         column("note", ColumnKind::Text),
       ],
       &[
-        vec![cell("-1.5e3"), cell("t"), cell("{\"a\":1}"), cell("line\n\"two\"")],
+        vec![
+          cell("-1.5e3"),
+          cell("t"),
+          cell("{\"a\":1}"),
+          cell("line\n\"two\""),
+        ],
         vec![cell("NaN"), cell("f"), None, None],
       ],
     );
@@ -322,7 +344,10 @@ mod tests {
   fn sql_inserts_quote_idents_and_literals() {
     let out = render(
       ExportFormat::Sql,
-      vec![column("id", ColumnKind::Number), column("na\"me", ColumnKind::Text)],
+      vec![
+        column("id", ColumnKind::Number),
+        column("na\"me", ColumnKind::Text),
+      ],
       &[vec![cell("1"), cell("it's")], vec![cell("2"), None]],
     );
     assert_eq!(
@@ -335,7 +360,10 @@ mod tests {
   fn markdown_escapes_pipes_and_newlines() {
     let out = render(
       ExportFormat::Markdown,
-      vec![column("a|b", ColumnKind::Text), column("c", ColumnKind::Text)],
+      vec![
+        column("a|b", ColumnKind::Text),
+        column("c", ColumnKind::Text),
+      ],
       &[vec![cell("x|y"), cell("l1\r\nl2")], vec![None, cell("z")]],
     );
     assert_eq!(
@@ -349,7 +377,9 @@ mod tests {
     for valid in ["0", "-1", "1.5", "-1.5e3", "2E+10", "42e-1"] {
       assert!(is_json_number(valid), "{valid}");
     }
-    for invalid in ["", "-", "1.", ".5", "1e", "1e+", "NaN", "Infinity", "1a", "--1"] {
+    for invalid in [
+      "", "-", "1.", ".5", "1e", "1e+", "NaN", "Infinity", "1a", "--1",
+    ] {
       assert!(!is_json_number(invalid), "{invalid}");
     }
   }

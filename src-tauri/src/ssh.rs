@@ -359,7 +359,10 @@ mod tests {
   const TEST_USER: &str = "tunnel";
   // The DB target as seen from the sshd container's network.
   const TEST_TARGET: (&str, u16) = ("postgres", 5432);
-  const TEST_KEY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/test-ssh/id_ed25519");
+  const TEST_KEY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../scripts/test-ssh/id_ed25519"
+  );
   const TEST_KEY_PP: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../scripts/test-ssh/id_ed25519_pp"

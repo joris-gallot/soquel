@@ -457,11 +457,14 @@ async fn plan_select(pg: &PooledPg, request: &TableRowsRequest) -> Result<Select
     })
     .collect();
   if request.include_ctid {
-    result_columns.insert(0, QueryColumn {
-      name: "ctid".to_string(),
-      data_type: Some("tid".to_string()),
-      kind: ColumnKind::Other,
-    });
+    result_columns.insert(
+      0,
+      QueryColumn {
+        name: "ctid".to_string(),
+        data_type: Some("tid".to_string()),
+        kind: ColumnKind::Other,
+      },
+    );
   }
   Ok(SelectPlan {
     sql,
@@ -474,7 +477,12 @@ async fn plan_select(pg: &PooledPg, request: &TableRowsRequest) -> Result<Select
 fn bind_text(params: &[String]) -> Vec<(&(dyn tokio_postgres::types::ToSql + Sync), PgType)> {
   params
     .iter()
-    .map(|value| (value as &(dyn tokio_postgres::types::ToSql + Sync), PgType::TEXT))
+    .map(|value| {
+      (
+        value as &(dyn tokio_postgres::types::ToSql + Sync),
+        PgType::TEXT,
+      )
+    })
     .collect()
 }
 
@@ -546,8 +554,7 @@ fn build_change_statements(
     let mut params = Vec::new();
     let statement = if insert.values.is_empty() {
       format!("INSERT INTO {target} DEFAULT VALUES")
-    }
-    else {
+    } else {
       let mut names = Vec::new();
       let mut values = Vec::new();
       for cell in &insert.values {
@@ -614,10 +621,7 @@ async fn run_change_statements(
 
   let (mut updated, mut inserted, mut deleted) = (0u32, 0u32, 0u32);
   for statement in statements {
-    let params = statement
-      .params
-      .iter()
-      .map(|value| (value, PgType::TEXT));
+    let params = statement.params.iter().map(|value| (value, PgType::TEXT));
     let stream = pg.client.query_typed_raw(&statement.sql, params).await?;
     futures_util::pin_mut!(stream);
     while stream.try_next().await?.is_some() {}
@@ -628,14 +632,17 @@ async fn run_change_statements(
           return Err(Error::Database {
             message: format!(
               "a {} matched {affected} rows instead of exactly 1; nothing was applied",
-              if statement.kind == ChangeKind::Update { "row update" } else { "row delete" }
+              if statement.kind == ChangeKind::Update {
+                "row update"
+              } else {
+                "row delete"
+              }
             ),
           });
         }
         if statement.kind == ChangeKind::Update {
           updated += 1;
-        }
-        else {
+        } else {
           deleted += 1;
         }
       }
@@ -853,12 +860,42 @@ pub mod tests {
   fn build_where_covers_every_operator() {
     let columns = text_columns(&["name", "amount"]);
     let cases: [(FilterOp, Option<&str>, &str, Option<&str>); 10] = [
-      (FilterOp::Eq, Some("x"), r#" WHERE "name" = $1::text"#, Some("x")),
-      (FilterOp::Neq, Some("x"), r#" WHERE "name" <> $1::text"#, Some("x")),
-      (FilterOp::Lt, Some("5"), r#" WHERE "name" < $1::text"#, Some("5")),
-      (FilterOp::Lte, Some("5"), r#" WHERE "name" <= $1::text"#, Some("5")),
-      (FilterOp::Gt, Some("5"), r#" WHERE "name" > $1::text"#, Some("5")),
-      (FilterOp::Gte, Some("5"), r#" WHERE "name" >= $1::text"#, Some("5")),
+      (
+        FilterOp::Eq,
+        Some("x"),
+        r#" WHERE "name" = $1::text"#,
+        Some("x"),
+      ),
+      (
+        FilterOp::Neq,
+        Some("x"),
+        r#" WHERE "name" <> $1::text"#,
+        Some("x"),
+      ),
+      (
+        FilterOp::Lt,
+        Some("5"),
+        r#" WHERE "name" < $1::text"#,
+        Some("5"),
+      ),
+      (
+        FilterOp::Lte,
+        Some("5"),
+        r#" WHERE "name" <= $1::text"#,
+        Some("5"),
+      ),
+      (
+        FilterOp::Gt,
+        Some("5"),
+        r#" WHERE "name" > $1::text"#,
+        Some("5"),
+      ),
+      (
+        FilterOp::Gte,
+        Some("5"),
+        r#" WHERE "name" >= $1::text"#,
+        Some("5"),
+      ),
       (
         FilterOp::Contains,
         Some("ada"),
@@ -882,7 +919,10 @@ pub mod tests {
     for (op, value, clause, param) in cases {
       let (built, params) = build_where(&columns, &[filter("name", op, value)]).unwrap();
       assert_eq!(built, clause, "{op:?}");
-      assert_eq!(params, param.map(str::to_string).into_iter().collect::<Vec<_>>());
+      assert_eq!(
+        params,
+        param.map(str::to_string).into_iter().collect::<Vec<_>>()
+      );
     }
   }
 
@@ -1267,7 +1307,10 @@ pub mod tests {
       .await
       .unwrap();
     assert_eq!(next.statements[0].rows.len(), 1);
-    assert_eq!(next.statements[0].rows[0][1], Some("Ada Lovelace".to_string()));
+    assert_eq!(
+      next.statements[0].rows[0][1],
+      Some("Ada Lovelace".to_string())
+    );
   }
 
   async fn filtered_rows(
@@ -1602,7 +1645,12 @@ pub mod tests {
     };
     assert!(message.contains("matched 0 rows"), "{message}");
 
-    let rows = filtered_rows(&pg, "customers", vec![filter("id", FilterOp::Eq, Some("1"))]).await;
+    let rows = filtered_rows(
+      &pg,
+      "customers",
+      vec![filter("id", FilterOp::Eq, Some("1"))],
+    )
+    .await;
     assert_eq!(rows.rows[0][1].as_deref(), Some("Ada Lovelace"));
     // The pooled client came back clean (no open transaction).
     pg.run_query("SELECT 1").await.unwrap();

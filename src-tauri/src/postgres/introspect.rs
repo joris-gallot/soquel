@@ -182,7 +182,11 @@ impl Introspect for PostgresConnection {
         .query_one("SELECT pg_get_viewdef($1::oid, true)", &[&oid])
         .await?
         .get(0);
-      let keyword = if relkind == "m" { "MATERIALIZED VIEW" } else { "VIEW" };
+      let keyword = if relkind == "m" {
+        "MATERIALIZED VIEW"
+      } else {
+        "VIEW"
+      };
       return Ok(format!("CREATE {keyword} {target} AS\n{definition}"));
     }
 
@@ -333,7 +337,11 @@ mod tests {
     assert_eq!(view.kind, TableKind::View);
     assert!(!view.columns.is_empty());
 
-    let matview = app.tables.iter().find(|t| t.name == "order_totals").unwrap();
+    let matview = app
+      .tables
+      .iter()
+      .find(|t| t.name == "order_totals")
+      .unwrap();
     assert_eq!(matview.kind, TableKind::MaterializedView);
   }
 
@@ -368,12 +376,17 @@ mod tests {
       "{ddl}"
     );
     assert!(
-      ddl.contains(r#"COMMENT ON COLUMN "app"."orders"."receipt" IS 'Raw PDF bytes, NULL until issued.';"#),
+      ddl.contains(
+        r#"COMMENT ON COLUMN "app"."orders"."receipt" IS 'Raw PDF bytes, NULL until issued.';"#
+      ),
       "{ddl}"
     );
 
     let view = pg.table_ddl("app", "recent_orders").await.unwrap();
-    assert!(view.starts_with(r#"CREATE VIEW "app"."recent_orders" AS"#), "{view}");
+    assert!(
+      view.starts_with(r#"CREATE VIEW "app"."recent_orders" AS"#),
+      "{view}"
+    );
     assert!(view.contains("JOIN app.customers c"), "{view}");
 
     let matview = pg.table_ddl("app", "order_totals").await.unwrap();

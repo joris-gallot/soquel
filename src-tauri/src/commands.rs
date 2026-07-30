@@ -451,7 +451,10 @@ pub fn get_tunnel(state: State<'_, AppState>, id: String) -> Result<TunnelProfil
 
 #[tauri::command]
 #[specta::specta]
-pub fn create_tunnel(state: State<'_, AppState>, input: TunnelInput) -> Result<TunnelProfile, Error> {
+pub fn create_tunnel(
+  state: State<'_, AppState>,
+  input: TunnelInput,
+) -> Result<TunnelProfile, Error> {
   let tunnel = state.tunnels.lock().unwrap().create(&input)?;
   if let Some(secret) = &input.secret {
     // No orphan tunnel when the keychain is unavailable.

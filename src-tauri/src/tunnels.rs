@@ -14,7 +14,9 @@ use crate::error::Error;
 )]
 pub enum SshAuth {
   Agent,
-  KeyFile { path: String },
+  KeyFile {
+    path: String,
+  },
   Password,
   /// No credential: the server authorizes the connection on its own.
   None,

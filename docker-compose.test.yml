@@ -1,5 +1,5 @@
 # Test databases, one service per connector kind, seeded from scripts/test-seeds/.
-# Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458.
+# Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459.
 name: soquel-test
 
 services:
@@ -14,6 +14,30 @@ services:
     volumes:
       - ./scripts/test-seeds/postgres.sql:/docker-entrypoint-initdb.d/seed.sql:ro
     # Throwaway data: fresh seed on every up.
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U soquel -d soquel_test]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # TLS-only handshake target (throwaway self-signed cert from scripts/test-tls/); no seed.
+  postgres-tls:
+    image: postgres:18.4-alpine
+    ports:
+      - '5459:5432'
+    environment:
+      POSTGRES_USER: soquel
+      POSTGRES_PASSWORD: soquel
+      POSTGRES_DB: soquel_test
+    volumes:
+      - ./scripts/test-tls:/certs:ro
+    # Postgres refuses a key it does not own or that is world-readable: copy it out of the
+    # read-only mount with 0600 before handing off to the stock entrypoint.
+    entrypoint: >
+      sh -c "install -o postgres -g postgres -m 600 /certs/server.key /tmp/server.key
+      && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/tmp/server.key"
     tmpfs:
       - /var/lib/postgresql
     healthcheck:

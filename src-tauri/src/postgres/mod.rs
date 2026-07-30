@@ -1265,6 +1265,66 @@ pub mod tests {
   }
 
   #[tokio::test]
+  async fn integration_postgres_tls_require_accepts_self_signed() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG_TLS") else {
+      return;
+    };
+    // require encrypts without verifying: the throwaway cert must pass.
+    let pg = connection_from_url(&url, SslMode::Require);
+    let result = pg
+      .run_query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+      .await
+      .unwrap();
+    assert_eq!(
+      result.statements[0].rows[0][0].as_deref(),
+      Some("t"),
+      "session must actually be TLS"
+    );
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_tls_verify_full_rejects_self_signed() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG_TLS") else {
+      return;
+    };
+    let pg = connection_from_url(&url, SslMode::VerifyFull);
+    let Err(Error::Database { message }) = pg.health().await else {
+      panic!("expected verify-full to reject an untrusted certificate");
+    };
+    assert!(!message.is_empty());
+  }
+
+  #[tokio::test]
+  async fn integration_postgres_pool_recycles_terminated_connection() {
+    let Some(pg) = test_connection_from_env().await else {
+      return;
+    };
+    let result = pg.run_query("SELECT pg_backend_pid()").await.unwrap();
+    let pid = result.statements[0].rows[0][0].clone().unwrap();
+
+    // Kill the idle pooled backend from a second, out-of-pool connection.
+    let killer = test_connection_from_env().await.unwrap();
+    let killed = killer
+      .run_query(&format!("SELECT pg_terminate_backend({pid})"))
+      .await
+      .unwrap();
+    assert_eq!(killed.statements[0].rows[0][0].as_deref(), Some("t"));
+
+    // The client task needs a moment to observe the EOF before is_closed
+    // trips; recycle must then cull the dead object and hand out a fresh one.
+    let mut fresh_pid = None;
+    for _ in 0..50 {
+      tokio::time::sleep(Duration::from_millis(100)).await;
+      if let Ok(result) = pg.run_query("SELECT pg_backend_pid()").await {
+        fresh_pid = Some(result.statements[0].rows[0][0].clone().unwrap());
+        break;
+      }
+    }
+    let fresh_pid = fresh_pid.expect("pool never recovered from a terminated backend");
+    assert_ne!(fresh_pid, pid);
+  }
+
+  #[tokio::test]
   async fn integration_postgres_table_rows_sorts_and_paginates() {
     let Some(pg) = test_connection_from_env().await else {
       return;

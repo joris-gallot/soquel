@@ -39,7 +39,8 @@ futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1", features = [
   "sync",
   "net",
-  "io-util"
+  "io-util",
+  "rt"
 ] }
 russh = { version = "0.61", default-features = false, features = [ "ring" ] }
 deadpool = "0.13"
@@ -53,6 +54,10 @@ tokio-postgres-rustls = "0.14"
 rustls-platform-verifier = "0.7"
 rustls-pemfile = "2"
 tauri-plugin-dialog = "2"
+rusqlite = { version = "0.40.1", features = [
+  "bundled",
+  "column_decltype"
+] }
 
 [dev-dependencies]
 tempfile = "3"

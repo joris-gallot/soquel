@@ -27,6 +27,18 @@ export async function createPostgresConnection(name: string) {
   await createConnection(name, 'postgres')
 }
 
+export async function createSqliteConnection(name: string, path: string) {
+  await $('[data-testid="new-connection"]').click()
+  await $('[data-testid="field-name"]').setValue(name)
+  await $('[data-testid="field-kind"]').click()
+  await $('[role="option"]*=SQLite').click()
+  await $('[data-testid="field-path"]').setValue(path)
+  await $('[data-testid="save-connection"]').click()
+  await $('[data-testid="connection-row"]').waitForExist()
+  // The dialog overlay swallows clicks while its close animation runs.
+  await $('[data-testid="field-name"]').waitForExist({ reverse: true })
+}
+
 export async function deleteFirstConnection() {
   await $('[data-testid="row-menu"]').click()
   await $('[data-testid="row-delete"]').click()

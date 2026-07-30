@@ -34,7 +34,12 @@ impl Connector for PostgresConnector {
     secret: Option<&str>,
     forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
-    let params = profile.params.sql_server();
+    let params = profile
+      .params
+      .sql_server()
+      .ok_or_else(|| Error::Unsupported {
+        message: "this connector needs a TCP SQL server profile".to_string(),
+      })?;
     let mut config = build_config(params, forward);
     if let Some(secret) = secret {
       config.password(secret);

@@ -263,7 +263,9 @@ impl<W: Write> ChunkSink<W> {
 
 pub fn quote_ident(kind: ConnectorKind, ident: &str) -> String {
   match kind {
-    ConnectorKind::Postgres => format!("\"{}\"", ident.replace('"', "\"\"")),
+    ConnectorKind::Postgres | ConnectorKind::Sqlite => {
+      format!("\"{}\"", ident.replace('"', "\"\""))
+    }
     ConnectorKind::Mysql => format!("`{}`", ident.replace('`', "``")),
   }
 }
@@ -278,8 +280,8 @@ fn csv_field(value: &str) -> String {
 
 fn sql_literal(kind: ConnectorKind, value: &str) -> String {
   match kind {
-    // standard_conforming_strings: backslashes are literal in postgres.
-    ConnectorKind::Postgres => format!("'{}'", value.replace('\'', "''")),
+    // standard_conforming_strings: backslashes are literal in postgres and sqlite.
+    ConnectorKind::Postgres | ConnectorKind::Sqlite => format!("'{}'", value.replace('\'', "''")),
     // mysql treats backslash as an escape character inside strings.
     ConnectorKind::Mysql => {
       format!("'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
@@ -465,6 +467,22 @@ mod tests {
     assert_eq!(
       out,
       "INSERT INTO `app`.`users` (`na``me`, `note`) VALUES ('it''s', 'C:\\\\path');\n"
+    );
+  }
+
+  #[test]
+  fn sql_inserts_follow_the_sqlite_dialect() {
+    let out = render_as(
+      ConnectorKind::Sqlite,
+      "\"main\".\"users\"",
+      ExportFormat::Sql,
+      vec![column("note", ColumnKind::Text)],
+      &[vec![cell("C:\\path it's")]],
+    );
+    // Double-quoted idents, doubled quotes, literal backslashes.
+    assert_eq!(
+      out,
+      "INSERT INTO \"main\".\"users\" (\"note\") VALUES ('C:\\path it''s');\n"
     );
   }
 

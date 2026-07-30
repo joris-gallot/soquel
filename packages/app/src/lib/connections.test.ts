@@ -1,6 +1,6 @@
 import type { ConnectionProfile } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { connectionSchema, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, serverBadge, toConnectionInput } from './connections'
+import { connectionDsn, connectionSchema, connectionTarget, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, serverBadge, toConnectionInput } from './connections'
 import { zodFieldErrors } from './validation'
 
 function profile(name: string, group: string | null): ConnectionProfile {
@@ -177,6 +177,7 @@ describe('connectionSchema', () => {
     tunnelId: '',
     group: '',
     password: '',
+    path: '',
   }
 
   it('coerces the port from a text input', () => {
@@ -214,19 +215,73 @@ describe('connectionSchema', () => {
 
   it('keeps the ca path only for verify-full', () => {
     const verifyFull = { ...valid, sslMode: 'verify-full', sslRootCert: ' /etc/ca.pem ' }
-    expect(toConnectionInput(connectionSchema.parse(verifyFull)).params.sslRootCert).toBe('/etc/ca.pem')
+    expect(toConnectionInput(connectionSchema.parse(verifyFull)).params).toMatchObject({ sslRootCert: '/etc/ca.pem' })
     // Any other mode drops the stale path instead of persisting it.
     const require = { ...valid, sslMode: 'require', sslRootCert: '/etc/ca.pem' }
-    expect(toConnectionInput(connectionSchema.parse(require)).params.sslRootCert).toBeNull()
-    expect(toConnectionInput(connectionSchema.parse(valid)).params.sslRootCert).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse(require)).params).toMatchObject({ sslRootCert: null })
+    expect(toConnectionInput(connectionSchema.parse(valid)).params).toMatchObject({ sslRootCert: null })
   })
 
   it('turns the no-tunnel sentinel into null for the command input', () => {
-    expect(toConnectionInput(connectionSchema.parse(valid)).params.tunnelId).toBeNull()
-    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: 'none' })).params.tunnelId).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse(valid)).params).toMatchObject({ tunnelId: null })
+    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: 'none' })).params).toMatchObject({ tunnelId: null })
     // Reka Select can clear the model to undefined; the schema falls back to no tunnel.
-    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: undefined })).params.tunnelId).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: undefined })).params).toMatchObject({ tunnelId: null })
     const withTunnel = toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: 't-1' }))
-    expect(withTunnel.params.tunnelId).toBe('t-1')
+    expect(withTunnel.params).toMatchObject({ tunnelId: 't-1' })
+  })
+
+  it('validates sqlite on the path alone, ignoring server fields', () => {
+    const sqlite = { ...valid, kind: 'sqlite', host: '', port: '', database: '', user: '', path: '/data/app.db' }
+    const input = toConnectionInput(connectionSchema.parse(sqlite))
+    expect(input.params).toEqual({ kind: 'sqlite', path: '/data/app.db' })
+    expect(input.password).toBeNull()
+
+    const missing = connectionSchema.safeParse({ ...sqlite, path: '  ' })
+    expect(missing.success).toBe(false)
+    if (!missing.success)
+      expect(zodFieldErrors(missing.error).path).toBe('Database file is required')
+  })
+
+  it('trims the sqlite path', () => {
+    const sqlite = { ...valid, kind: 'sqlite', path: ' /data/app.db ' }
+    expect(toConnectionInput(connectionSchema.parse(sqlite)).params).toMatchObject({ path: '/data/app.db' })
+  })
+})
+
+describe('sqlite profiles', () => {
+  const stored: ConnectionProfile = {
+    id: 'c-2',
+    name: 'local file',
+    env: 'dev',
+    group: null,
+    params: { kind: 'sqlite', path: '/data/app.db' },
+  }
+
+  it('roundtrips a sqlite profile through the form', () => {
+    const values = formValuesFromProfile(stored)
+    expect(values.kind).toBe('sqlite')
+    expect(values.path).toBe('/data/app.db')
+    const input = toConnectionInput(connectionSchema.parse(values))
+    expect(input.params).toEqual(stored.params)
+  })
+
+  it('renders file-based identity lines', () => {
+    expect(connectionTarget(stored.params)).toBe('/data/app.db')
+    expect(connectionDsn(stored.params)).toBe('sqlite:///data/app.db')
+    expect(connectionTarget(profile('p', null).params)).toBe('h:5432/db')
+    expect(connectionDsn(profile('p', null).params)).toBe('postgres://u@h:5432/db')
+  })
+
+  it('badges the embedded engine version', () => {
+    expect(serverBadge('sqlite', '3.50.1')).toEqual({ engine: 'SQLite', version: '3.50.1' })
+  })
+
+  it('restores the next default port when leaving sqlite', () => {
+    // Into sqlite: the (hidden) port keeps its value.
+    expect(portForKindChange(5432, 'postgres', 'sqlite')).toBe(5432)
+    // Out of sqlite: whatever was left behind never counts as hand-set.
+    expect(portForKindChange(0, 'sqlite', 'mysql')).toBe(3306)
+    expect(portForKindChange(5432, 'sqlite', 'postgres')).toBe(5432)
   })
 })

@@ -1,4 +1,4 @@
-use super::browse::{build_where, MAX_FETCH_ROWS};
+use super::browse::build_where;
 use super::*;
 use crate::connectors::{CellValue, ColumnFilter, FilterOp, SortDirection};
 

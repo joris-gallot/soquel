@@ -23,7 +23,9 @@ async fn open_tunnel(
   state: &State<'_, AppState>,
   profile: &ConnectionProfile,
 ) -> Result<Option<(SshTunnel, LocalForward)>, Error> {
-  let sql = profile.params.sql_server();
+  let Some(sql) = profile.params.sql_server() else {
+    return Ok(None);
+  };
   let Some(tunnel_id) = &sql.tunnel_id else {
     return Ok(None);
   };
@@ -497,7 +499,12 @@ pub fn delete_tunnel(state: State<'_, AppState>, id: String) -> Result<(), Error
     .unwrap()
     .list()
     .into_iter()
-    .filter(|p| p.params.sql_server().tunnel_id.as_deref() == Some(id.as_str()))
+    .filter(|p| {
+      p.params
+        .sql_server()
+        .and_then(|sql| sql.tunnel_id.as_deref())
+        == Some(id.as_str())
+    })
     .map(|p| p.name)
     .collect();
   if !used_by.is_empty() {

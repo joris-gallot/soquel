@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/command'
 import { useConnections } from '@/composables/useConnections'
 import { useTheme } from '@/composables/useTheme'
-import { groupConnections } from '@/lib/connections'
+import { connectionTarget, groupConnections } from '@/lib/connections'
 
 const router = useRouter()
 const { connections, connect, activeIds } = useConnections()
@@ -77,13 +77,13 @@ defineExpose({ open })
         <CommandItem
           v-for="profile in section.profiles"
           :key="profile.id"
-          :value="`connect ${section.group ?? ''} ${profile.name} ${profile.params.host} ${profile.params.database}`"
+          :value="`connect ${section.group ?? ''} ${profile.name} ${connectionTarget(profile.params)}`"
           @select="quickConnect(profile.id)"
         >
           <Plug />
           <span>{{ profile.name }}</span>
           <span class="ml-auto font-mono text-xs text-muted-foreground">
-            {{ profile.params.host }}:{{ profile.params.port }}/{{ profile.params.database }}
+            {{ connectionTarget(profile.params) }}
           </span>
         </CommandItem>
       </CommandGroup>

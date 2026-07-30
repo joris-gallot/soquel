@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ConnectionInput, ConnectionProfile } from '@/lib/bindings'
 import type { ConnectionFormValues, EngineChoice } from '@/lib/connections'
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import HostKeyTrustPanel from '@/components/HostKeyTrustPanel.vue'
@@ -51,7 +52,7 @@ function groupValue(): string {
 }
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '' }
+  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', path: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -64,6 +65,19 @@ watch(engineChoice, (id) => {
   values.value.kind = choice.kind
   values.value.port = portForKindChange(values.value.port, previous, choice.kind)
 })
+
+const isSqlite = computed(() => values.value.kind === 'sqlite')
+
+async function browsePath() {
+  const selected = await openFileDialog({
+    filters: [
+      { name: 'SQLite database', extensions: ['db', 'sqlite', 'sqlite3', 'db3'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  })
+  if (typeof selected === 'string')
+    values.value.path = selected
+}
 
 const errors = ref<Record<string, string>>({})
 const importUrl = ref('')
@@ -215,7 +229,26 @@ async function save() {
           </Select>
         </div>
 
-        <div class="grid grid-cols-[1fr_8rem] gap-3">
+        <div v-if="isSqlite" class="space-y-1.5">
+          <Label for="conn-path">Database file</Label>
+          <div class="flex gap-2">
+            <Input
+              id="conn-path"
+              v-model="values.path"
+              data-testid="field-path"
+              class="font-mono text-xs"
+              placeholder="/path/to/app.db"
+            />
+            <Button type="button" variant="secondary" @click="browsePath">
+              Browse
+            </Button>
+          </div>
+          <p v-if="errors.path" class="text-xs text-destructive">
+            {{ errors.path }}
+          </p>
+        </div>
+
+        <div v-if="!isSqlite" class="grid grid-cols-[1fr_8rem] gap-3">
           <div class="space-y-1.5">
             <Label for="conn-host">Host</Label>
             <Input id="conn-host" v-model="values.host" data-testid="field-host" class="font-mono" />
@@ -232,7 +265,7 @@ async function save() {
           </div>
         </div>
 
-        <div class="grid grid-cols-[1fr_8rem] gap-3">
+        <div v-if="!isSqlite" class="grid grid-cols-[1fr_8rem] gap-3">
           <div class="space-y-1.5">
             <Label for="conn-database">Database</Label>
             <Input id="conn-database" v-model="values.database" data-testid="field-database" class="font-mono" />
@@ -266,7 +299,7 @@ async function save() {
           />
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
+        <div v-if="!isSqlite" class="grid grid-cols-2 gap-3">
           <div class="space-y-1.5">
             <Label for="conn-user">User</Label>
             <Input id="conn-user" v-model="values.user" data-testid="field-user" class="font-mono" />
@@ -312,7 +345,7 @@ async function save() {
               placeholder="group name"
             />
           </div>
-          <div class="space-y-1.5">
+          <div v-if="!isSqlite" class="space-y-1.5">
             <Label>SSH tunnel</Label>
             <Select v-model="values.tunnelId">
               <SelectTrigger data-testid="field-tunnel" class="w-full">

@@ -1,9 +1,9 @@
-import type { ConnectionInput, ConnectionProfile, ConnectorKind, Env, SslMode } from '@/lib/bindings'
+import type { ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams, Env, SslMode } from '@/lib/bindings'
 import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
 
-export const KINDS = ['postgres', 'mysql'] as const satisfies readonly ConnectorKind[]
+export const KINDS = ['postgres', 'mysql', 'sqlite'] as const satisfies readonly ConnectorKind[]
 
 export const KIND_META: Record<ConnectorKind, {
   label: string
@@ -13,6 +13,7 @@ export const KIND_META: Record<ConnectorKind, {
 }> = {
   postgres: { label: 'PostgreSQL', short: 'PG', defaultPort: 5432, protocols: ['postgres:', 'postgresql:'] },
   mysql: { label: 'MySQL', short: 'MySQL', defaultPort: 3306, protocols: ['mysql:'] },
+  sqlite: { label: 'SQLite', short: 'SQLite', defaultPort: 0, protocols: [] },
 }
 
 /// What the form's engine select shows: MariaDB is a display entry riding the
@@ -21,6 +22,7 @@ export const ENGINE_CHOICES = [
   { id: 'postgres', label: 'PostgreSQL', kind: 'postgres' },
   { id: 'mysql', label: 'MySQL', kind: 'mysql' },
   { id: 'mariadb', label: 'MariaDB', kind: 'mysql' },
+  { id: 'sqlite', label: 'SQLite', kind: 'sqlite' },
 ] as const satisfies readonly { id: string, label: string, kind: ConnectorKind }[]
 
 export type EngineChoice = (typeof ENGINE_CHOICES)[number]['id']
@@ -44,31 +46,64 @@ export function serverBadge(kind: ConnectorKind, version: string): { engine: str
 }
 
 /// Follow the kind only when the port still sits on the previous kind's
-/// default; a hand-set port survives engine switches.
+/// default; a hand-set port survives engine switches. SQLite has no port:
+/// switching away always lands on the next kind's default.
 export function portForKindChange(
   port: number | string,
   previousKind: ConnectorKind,
   nextKind: ConnectorKind,
 ): number | string {
-  return Number(port) === KIND_META[previousKind].defaultPort
+  if (nextKind === 'sqlite')
+    return port
+  return previousKind === 'sqlite' || Number(port) === KIND_META[previousKind].defaultPort
     ? KIND_META[nextKind].defaultPort
     : port
+}
+
+/// One-line identity for lists and the palette: DSN-ish for servers, the file
+/// path for sqlite.
+export function connectionTarget(params: ConnectorParams): string {
+  if (params.kind === 'sqlite')
+    return params.path
+  return `${params.host}:${params.port}/${params.database}`
+}
+
+export function connectionDsn(params: ConnectorParams): string {
+  if (params.kind === 'sqlite')
+    return `sqlite://${params.path}`
+  return `${params.kind}://${params.user}@${params.host}:${params.port}/${params.database}`
 }
 
 export const connectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   env: z.enum(ENVS),
   kind: z.enum(KINDS),
-  host: z.string().min(1, 'Host is required'),
-  port: z.coerce.number().int('Port must be a whole number').min(1, 'Port is required').max(65535, 'Port must be below 65536'),
-  database: z.string().min(1, 'Database is required'),
-  user: z.string().min(1, 'User is required'),
+  host: z.string(),
+  port: z.coerce.number().int('Port must be a whole number').min(0).max(65535, 'Port must be below 65536'),
+  database: z.string(),
+  user: z.string(),
   sslMode: z.enum(SSL_MODES),
   sslRootCert: z.string(),
   // Reka Select reserves '' for clearing, so "no tunnel" is a sentinel value.
   tunnelId: z.string().catch(NO_TUNNEL),
   group: z.string(),
   password: z.string(),
+  path: z.string(),
+}).superRefine((values, ctx) => {
+  // Server fields only apply to TCP kinds; sqlite needs the file path.
+  if (values.kind === 'sqlite') {
+    if (values.path.trim() === '')
+      ctx.addIssue({ code: 'custom', path: ['path'], message: 'Database file is required' })
+    return
+  }
+  if (values.host === '')
+    ctx.addIssue({ code: 'custom', path: ['host'], message: 'Host is required' })
+  if (values.port < 1)
+    ctx.addIssue({ code: 'custom', path: ['port'], message: 'Port is required' })
+  if (values.database === '')
+    ctx.addIssue({ code: 'custom', path: ['database'], message: 'Database is required' })
+  if (values.user === '')
+    ctx.addIssue({ code: 'custom', path: ['user'], message: 'User is required' })
 })
 
 export interface ConnectionFormValues {
@@ -85,9 +120,19 @@ export interface ConnectionFormValues {
   tunnelId: string
   group: string
   password: string
+  path: string
 }
 
 export function toConnectionInput(values: z.output<typeof connectionSchema>): ConnectionInput {
+  if (values.kind === 'sqlite') {
+    return {
+      name: values.name,
+      env: values.env,
+      group: values.group.trim() === '' ? null : values.group.trim(),
+      password: null,
+      params: { kind: 'sqlite', path: values.path.trim() },
+    }
+  }
   const shared = {
     host: values.host,
     port: values.port,
@@ -114,10 +159,28 @@ export function toConnectionInput(values: z.output<typeof connectionSchema>): Co
 /// Flatten a stored profile back into the form's editable shape.
 export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFormValues {
   const params = profile.params
-  return {
+  const base = {
     name: profile.name,
     env: profile.env,
     kind: params.kind,
+    group: profile.group ?? '',
+    password: '',
+  }
+  if (params.kind === 'sqlite') {
+    return {
+      ...base,
+      host: 'localhost',
+      port: 0,
+      database: '',
+      user: '',
+      sslMode: 'prefer',
+      sslRootCert: '',
+      tunnelId: NO_TUNNEL,
+      path: params.path,
+    }
+  }
+  return {
+    ...base,
     host: params.host,
     port: params.port,
     database: params.database,
@@ -125,8 +188,7 @@ export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFor
     sslMode: params.sslMode ?? 'prefer',
     sslRootCert: params.sslRootCert ?? '',
     tunnelId: params.tunnelId ?? NO_TUNNEL,
-    group: profile.group ?? '',
-    password: '',
+    path: '',
   }
 }
 

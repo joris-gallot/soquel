@@ -252,6 +252,7 @@ function loadFromHistory(entry: HistoryEntry) {
             Explain
           </DropdownMenuItem>
           <DropdownMenuItem
+            v-if="kind !== 'sqlite'"
             class="flex-col items-start gap-0.5 text-xs"
             data-testid="explain-analyze"
             @click="runExplain(true)"

@@ -63,6 +63,14 @@ impl From<mysql_async::Error> for Error {
   }
 }
 
+impl From<rusqlite::Error> for Error {
+  fn from(err: rusqlite::Error) -> Self {
+    Error::Database {
+      message: err.to_string(),
+    }
+  }
+}
+
 impl From<std::io::Error> for Error {
   fn from(err: std::io::Error) -> Self {
     Error::Storage {

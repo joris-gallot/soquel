@@ -41,9 +41,10 @@ function heatClass(node: PlanNode): string {
   return 'bg-muted-foreground/40'
 }
 
+// sqlite's EXPLAIN QUERY PLAN carries no numbers at all: show nothing.
 function timing(plan: ExplainPlan, node: PlanNode): string {
   if (!plan.analyzed)
-    return `cost ${node.totalCost.toFixed(node.totalCost >= 100 ? 0 : 2)}`
+    return node.totalCost > 0 ? `cost ${node.totalCost.toFixed(node.totalCost >= 100 ? 0 : 2)}` : ''
   return node.inclusiveMs === null ? '' : formatMs(node.inclusiveMs)
 }
 </script>
@@ -56,7 +57,7 @@ function timing(plan: ExplainPlan, node: PlanNode): string {
         <span v-if="plan.executionMs !== null" data-testid="explain-execution">
           execution {{ formatMs(plan.executionMs) }}
         </span>
-        <span v-if="!plan.analyzed" class="italic">estimated costs only</span>
+        <span v-if="!plan.analyzed" class="italic">{{ plan.root.totalCost > 0 ? 'estimated costs only' : 'query structure only' }}</span>
       </template>
       <span class="flex-1" />
       <button
@@ -117,6 +118,7 @@ function timing(plan: ExplainPlan, node: PlanNode): string {
             <span v-if="node.neverExecuted" class="text-muted-foreground/60 italic">never executed</span>
             <template v-else>
               <span
+                v-if="node.planRows > 0 || node.actualRows !== null"
                 :class="node.estimateOff ? 'text-amber-500' : 'text-muted-foreground'"
                 :title="node.estimateOff ? 'planner estimate off by 10x or more' : 'estimated -> actual rows'"
               >

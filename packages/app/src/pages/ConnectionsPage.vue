@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { ENV_BADGE_CLASSES, groupConnections } from '@/lib/connections'
+import { connectionDsn, ENV_BADGE_CLASSES, groupConnections } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { SSH_AUTH_LABELS } from '@/lib/tunnels'
 
@@ -187,7 +187,7 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
                   </Badge>
                 </div>
                 <p class="truncate font-mono text-xs text-muted-foreground">
-                  {{ profile.params.kind }}://{{ profile.params.user }}@{{ profile.params.host }}:{{ profile.params.port }}/{{ profile.params.database }}
+                  {{ connectionDsn(profile.params) }}
                 </p>
               </button>
               <Button

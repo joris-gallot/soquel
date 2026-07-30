@@ -51,8 +51,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{ hop: [schema: string, table: string, filters: ColumnFilter[]] }>()
 
-// ctid rescue and the xmin guard are postgres system columns.
-const isPostgres = computed(() => props.kind === 'postgres')
+// Row-identity extras per kind: the hidden rescue key rides the ctid slot
+// (pg ctid, sqlite rowid); xmin is pg's optimistic-lock guard.
+const KIND_ROW_IDENTITY: Record<ConnectorKind, { rescue: string | null, xmin: boolean }> = {
+  postgres: { rescue: 'ctid', xmin: true },
+  mysql: { rescue: null, xmin: false },
+  sqlite: { rescue: 'rowid', xmin: false },
+}
+const rowIdentity = computed(() => KIND_ROW_IDENTITY[props.kind])
 
 const sort = ref<SortSpec | null>(null)
 const filters = ref<ColumnFilter[]>([])
@@ -92,7 +98,7 @@ const { columns, rows, durationMs, loading, fetchedAll, fetchRows: fetchWindow }
     sort: sort.value,
     filters: filters.value,
     includeCtid: ctidMode.value,
-    includeXmin: canEverEdit.value && isPostgres.value,
+    includeXmin: canEverEdit.value && rowIdentity.value.xmin,
   }),
 )
 
@@ -523,14 +529,14 @@ useEventListener('keydown', (event) => {
       >
         no primary key - editing disabled
         <Button
-          v-if="isPostgres"
+          v-if="rowIdentity.rescue"
           size="sm"
           variant="secondary"
           class="h-6 text-[11px]"
           data-testid="enable-ctid"
           @click="enableCtidEditing"
         >
-          edit via ctid
+          edit via {{ rowIdentity.rescue }}
         </Button>
       </div>
 

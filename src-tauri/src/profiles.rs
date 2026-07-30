@@ -19,6 +19,7 @@ pub enum Env {
 pub enum ConnectorKind {
   Postgres,
   Mysql,
+  Sqlite,
 }
 
 /// libpq semantics: `require` encrypts without verifying the certificate,
@@ -57,6 +58,10 @@ pub struct SqlServerParams {
 pub enum ConnectorParams {
   Postgres(SqlServerParams),
   Mysql(SqlServerParams),
+  #[serde(rename_all = "camelCase")]
+  Sqlite {
+    path: String,
+  },
 }
 
 impl ConnectorParams {
@@ -64,13 +69,15 @@ impl ConnectorParams {
     match self {
       Self::Postgres(_) => ConnectorKind::Postgres,
       Self::Mysql(_) => ConnectorKind::Mysql,
+      Self::Sqlite { .. } => ConnectorKind::Sqlite,
     }
   }
 
-  /// Every current kind is a TCP SQL server; revisit when sqlite/redis land.
-  pub fn sql_server(&self) -> &SqlServerParams {
+  /// TCP SQL server shape; None for file-backed kinds (sqlite).
+  pub fn sql_server(&self) -> Option<&SqlServerParams> {
     match self {
-      Self::Postgres(params) | Self::Mysql(params) => params,
+      Self::Postgres(params) | Self::Mysql(params) => Some(params),
+      Self::Sqlite { .. } => None,
     }
   }
 }
@@ -241,7 +248,12 @@ mod tests {
     assert_eq!(profile.name, "renamed");
     assert_eq!(profile.params.kind(), ConnectorKind::Mysql);
     assert_eq!(
-      profile.params.sql_server().ssl_root_cert.as_deref(),
+      profile
+        .params
+        .sql_server()
+        .unwrap()
+        .ssl_root_cert
+        .as_deref(),
       Some("/etc/ca.pem")
     );
 

@@ -19,6 +19,7 @@ mod mysql;
 mod postgres;
 mod profiles;
 mod secrets;
+mod sqlite;
 mod ssh;
 mod tunnels;
 

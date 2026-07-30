@@ -5,6 +5,7 @@ use crate::error::Error;
 use crate::mysql::MysqlConnector;
 use crate::postgres::PostgresConnector;
 use crate::profiles::{ConnectionProfile, ConnectorKind};
+use crate::sqlite::SqliteConnector;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "kebab-case")]
@@ -384,6 +385,7 @@ pub fn connector_for(kind: ConnectorKind) -> &'static dyn Connector {
   match kind {
     ConnectorKind::Postgres => &PostgresConnector,
     ConnectorKind::Mysql => &MysqlConnector,
+    ConnectorKind::Sqlite => &SqliteConnector,
   }
 }
 

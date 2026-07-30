@@ -105,7 +105,7 @@ export type ConnectionProfile = {
 	params: ConnectorParams,
 };
 
-export type ConnectorKind = "postgres" | "mysql";
+export type ConnectorKind = "postgres" | "mysql" | "sqlite";
 
 /**
  *  Per-kind connection parameters; future kinds bring their own shapes
@@ -115,7 +115,7 @@ export type ConnectorParams = {
 	kind: "postgres",
 } & SqlServerParams | {
 	kind: "mysql",
-} & SqlServerParams;
+} & SqlServerParams | { kind: "sqlite"; path: string };
 
 export type Env = "dev" | "staging" | "prod";
 

@@ -324,6 +324,71 @@ describe('explainSql', () => {
     expect(explainSql('postgres', true, 'select 1')).toBe('EXPLAIN (ANALYZE, FORMAT JSON) select 1')
     expect(explainSql('mysql', false, 'select 1')).toBe('EXPLAIN FORMAT=JSON select 1')
     expect(explainSql('mysql', true, 'select 1')).toBe('EXPLAIN ANALYZE select 1')
+    // sqlite has no analyze variant: both spellings collapse to EQP.
+    expect(explainSql('sqlite', false, 'select 1')).toBe('EXPLAIN QUERY PLAN select 1')
+    expect(explainSql('sqlite', true, 'select 1')).toBe('EXPLAIN QUERY PLAN select 1')
+  })
+})
+
+describe('parseExplain on sqlite EXPLAIN QUERY PLAN output', () => {
+  const EQP_COLUMNS = [
+    { name: 'id', dataType: 'integer', kind: 'number' as const },
+    { name: 'parent', dataType: 'integer', kind: 'number' as const },
+    { name: 'notused', dataType: 'integer', kind: 'number' as const },
+    { name: 'detail', dataType: 'text', kind: 'text' as const },
+  ]
+
+  it('builds the tree from parent links and splits scan details', () => {
+    // sqlite3 eqp output for a join with a subquery.
+    const plans = parseExplain({
+      columns: EQP_COLUMNS,
+      rows: [
+        ['4', '0', '0', 'SCAN o'],
+        ['11', '0', '0', 'SEARCH c USING INTEGER PRIMARY KEY (rowid=?)'],
+        ['20', '0', '0', 'USE TEMP B-TREE FOR ORDER BY'],
+      ],
+    })
+    expect(plans).not.toBeNull()
+    const root = plans![0].root
+    expect(plans![0].analyzed).toBe(false)
+    expect(root.nodeType).toBe('Query plan')
+    expect(root.children).toHaveLength(3)
+    expect(root.children[0]).toMatchObject({ nodeType: 'Table scan', target: 'on o' })
+    expect(root.children[1]).toMatchObject({
+      nodeType: 'Index search',
+      target: 'on c using integer primary key',
+      condition: 'rowid=?',
+    })
+    expect(root.children[2].nodeType).toBe('USE TEMP B-TREE FOR ORDER BY')
+    expect(root.children[1].id).toBe('0.1')
+  })
+
+  it('nests children under their parent id', () => {
+    const plans = parseExplain({
+      columns: EQP_COLUMNS,
+      rows: [
+        ['1', '0', '0', 'COMPOUND QUERY'],
+        ['2', '1', '0', 'LEFT-MOST SUBQUERY'],
+        ['5', '2', '0', 'SCAN customers'],
+        ['8', '1', '0', 'UNION ALL'],
+        ['10', '8', '0', 'SCAN orders'],
+      ],
+    })
+    const compound = plans![0].root.children[0]
+    expect(compound.nodeType).toBe('COMPOUND QUERY')
+    expect(compound.children).toHaveLength(2)
+    expect(compound.children[1].children[0]).toMatchObject({ nodeType: 'Table scan', target: 'on orders' })
+    expect(compound.children[1].children[0].depth).toBe(3)
+  })
+
+  it('returns null on an empty plan and ignores lookalike shapes', () => {
+    expect(parseExplain({ columns: EQP_COLUMNS, rows: [] })).toBeNull()
+    expect(
+      parseExplain({
+        columns: [{ name: 'id', dataType: 'int4', kind: 'number' as const }],
+        rows: [['1']],
+      }),
+    ).toBeNull()
   })
 })
 

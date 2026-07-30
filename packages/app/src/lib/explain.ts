@@ -47,7 +47,10 @@ const CONDITION_KEYS = [
 type RawNode = Record<string, unknown>
 
 /// The dialect-specific SQL that produces a tree-renderable plan.
+/// sqlite has no ANALYZE variant: EXPLAIN QUERY PLAN is the only tree form.
 export function explainSql(kind: ConnectorKind, analyze: boolean, sql: string): string {
+  if (kind === 'sqlite')
+    return `EXPLAIN QUERY PLAN ${sql}`
   if (kind === 'mysql')
     return analyze ? `EXPLAIN ANALYZE ${sql}` : `EXPLAIN FORMAT=JSON ${sql}`
   return `EXPLAIN (${analyze ? 'ANALYZE, FORMAT JSON' : 'FORMAT JSON'}) ${sql}`
@@ -63,10 +66,12 @@ export function explainTreeText(
   return text.startsWith('->') ? text : null
 }
 
-/// Null unless the statement is a json plan result set (pg or mysql).
+/// Null unless the statement is a plan result set (pg/mysql json, sqlite EQP).
 export function parseExplain(
   statement: Pick<StatementResult, 'columns' | 'rows'>,
 ): ExplainPlan[] | null {
+  if (isSqliteQueryPlan(statement))
+    return parseSqliteExplain(statement)
   if (statement.columns.length !== 1)
     return null
   if (statement.columns[0].name === 'EXPLAIN')
@@ -311,6 +316,89 @@ function finalizeMysqlPlan(node: PlanNode, id: string, depth: number) {
   const childrenCost = node.children.reduce((total, child) => total + child.inclusiveCost, 0)
   node.exclusiveCost = Math.max(node.inclusiveCost - childrenCost, 0)
   node.children.forEach((child, index) => finalizeMysqlPlan(child, `${id}.${index}`, depth + 1))
+}
+
+// -------- sqlite: EXPLAIN QUERY PLAN (id, parent, notused, detail) --------
+
+function isSqliteQueryPlan(statement: Pick<StatementResult, 'columns'>): boolean {
+  const names = statement.columns.map(column => column.name)
+  return names.length === 4 && names[0] === 'id' && names[1] === 'parent' && names[3] === 'detail'
+}
+
+function parseSqliteExplain(
+  statement: Pick<StatementResult, 'columns' | 'rows'>,
+): ExplainPlan[] | null {
+  const root = emptyPlanNode('Query plan')
+  // parent references node ids; top-level rows point at 0, which never exists.
+  const byId = new Map<number, PlanNode>([[0, root]])
+  for (const row of statement.rows) {
+    const id = Number(row[0])
+    const parent = Number(row[1])
+    const detail = row[3] ?? ''
+    if (!Number.isFinite(id) || !Number.isFinite(parent))
+      return null
+    const node = sqliteNode(detail)
+    byId.set(id, node)
+    ;(byId.get(parent) ?? root).children.push(node)
+  }
+  if (root.children.length === 0)
+    return null
+  finalizeSqlitePlan(root, '0', 0)
+  // EQP carries no costs or rows: structure only.
+  return [{ root, planningMs: null, executionMs: null, analyzed: false }]
+}
+
+/// "SEARCH orders USING INDEX orders_pkey (id=?)" -> type/target/condition.
+function sqliteNode(detail: string): PlanNode {
+  let body = detail.trim()
+  let condition: string | null = null
+  if (body.endsWith(')')) {
+    const open = body.lastIndexOf('(')
+    if (open > 0) {
+      condition = body.slice(open + 1, -1)
+      body = body.slice(0, open).trim()
+    }
+  }
+  const node = emptyPlanNode(body || 'Step')
+  const scan = body.startsWith('SCAN ') ? 'SCAN' : body.startsWith('SEARCH ') ? 'SEARCH' : null
+  if (scan) {
+    const rest = body.slice(scan.length + 1)
+    const usingAt = rest.indexOf(' USING ')
+    node.nodeType = scan === 'SCAN' ? 'Table scan' : 'Index search'
+    node.target = usingAt === -1
+      ? `on ${rest}`
+      : `on ${rest.slice(0, usingAt)} using ${rest.slice(usingAt + ' USING '.length).toLowerCase()}`
+  }
+  node.condition = condition
+  return node
+}
+
+function emptyPlanNode(nodeType: string): PlanNode {
+  return {
+    id: '',
+    depth: 0,
+    nodeType,
+    target: null,
+    condition: null,
+    totalCost: 0,
+    planRows: 0,
+    actualRows: null,
+    actualLoops: null,
+    inclusiveMs: null,
+    exclusiveMs: null,
+    inclusiveCost: 0,
+    exclusiveCost: 0,
+    heat: 0,
+    estimateOff: false,
+    neverExecuted: false,
+    children: [],
+  }
+}
+
+function finalizeSqlitePlan(node: PlanNode, id: string, depth: number) {
+  node.id = id
+  node.depth = depth
+  node.children.forEach((child, index) => finalizeSqlitePlan(child, `${id}.${index}`, depth + 1))
 }
 
 /// Pre-order flatten for flat rendering with indent guides.

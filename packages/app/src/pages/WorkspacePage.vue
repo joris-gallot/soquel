@@ -40,6 +40,13 @@ const versionBadge = computed(() => {
     return null
   return serverBadge(profile.value.params.kind, serverVersion.value)
 })
+// sqlite's schema namespace is always "main"; servers use the profile database.
+const database = computed(() => {
+  const params = profile.value?.params
+  if (!params)
+    return ''
+  return params.kind === 'sqlite' ? 'main' : params.database
+})
 const tabs = useWorkspaceTabs(String(route.params.id))
 const activeTab = computed(() => tabs.state.value.tabs.find(tab => tab.id === tabs.state.value.activeId) ?? null)
 
@@ -291,7 +298,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           class="min-h-0 flex-1"
           :connection-id="id"
           :kind="profile?.params.kind ?? 'postgres'"
-          :database="profile?.params.database ?? ''"
+          :database="database"
           :tab-id="tab.id"
           :snapshot="snapshot"
         />

@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/select'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { connectionSchema, ENVS, KIND_META, KINDS, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { connectionSchema, ENVS, formValuesFromProfile, KIND_META, KINDS, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -71,22 +71,7 @@ watch(open, (isOpen) => {
   const group = props.profile?.group ?? null
   groupChoice.value = group === null ? NO_GROUP : group
   newGroup.value = ''
-  values.value = props.profile
-    ? {
-        name: props.profile.name,
-        env: props.profile.env,
-        kind: props.profile.kind,
-        host: props.profile.host,
-        port: props.profile.port,
-        database: props.profile.database,
-        user: props.profile.user,
-        sslMode: props.profile.sslMode ?? 'prefer',
-        sslRootCert: props.profile.sslRootCert ?? '',
-        tunnelId: props.profile.tunnelId ?? NO_TUNNEL,
-        group: props.profile.group ?? '',
-        password: '',
-      }
-    : emptyValues()
+  values.value = props.profile ? formValuesFromProfile(props.profile) : emptyValues()
 })
 
 function applyUrl() {

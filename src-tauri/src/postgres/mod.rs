@@ -13,7 +13,7 @@ use crate::connectors::{
   SqlQuery, SqlSession, StatementResult, StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
-use crate::profiles::{ConnectionProfile, SslMode};
+use crate::profiles::{ConnectionProfile, SqlServerParams, SslMode};
 
 mod introspect;
 mod tls;
@@ -34,12 +34,13 @@ impl Connector for PostgresConnector {
     secret: Option<&str>,
     forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
-    let mut config = build_config(profile, forward);
+    let params = profile.params.sql_server();
+    let mut config = build_config(params, forward);
     if let Some(secret) = secret {
       config.password(secret);
     }
     let connection =
-      PostgresConnection::new(config, profile.ssl_mode, profile.ssl_root_cert.clone())?;
+      PostgresConnection::new(config, params.ssl_mode, params.ssl_root_cert.clone())?;
     // Surface auth/reachability/TLS errors now, not on the first query.
     drop(connection.checkout().await?);
     Ok(Box::new(connection))
@@ -49,23 +50,23 @@ impl Connector for PostgresConnector {
 /// Through a tunnel, TCP dials the local forward (`hostaddr`) while `host`
 /// stays the logical hostname: TLS SNI and verify-full target the real server,
 /// not 127.0.0.1.
-fn build_config(profile: &ConnectionProfile, forward: Option<LocalForward>) -> Config {
+fn build_config(params: &SqlServerParams, forward: Option<LocalForward>) -> Config {
   let mut config = Config::new();
-  config.host(&profile.host);
+  config.host(&params.host);
   match forward {
     Some(forward) => {
       config.hostaddr(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
       config.port(forward.port);
     }
     None => {
-      config.port(profile.port);
+      config.port(params.port);
     }
   }
   config
-    .dbname(&profile.database)
-    .user(&profile.user)
+    .dbname(&params.database)
+    .user(&params.user)
     .application_name("soquel")
-    .ssl_mode(tls::config_ssl_mode(profile.ssl_mode))
+    .ssl_mode(tls::config_ssl_mode(params.ssl_mode))
     .connect_timeout(Duration::from_secs(10));
   config
 }
@@ -916,7 +917,6 @@ fn column_kind(ty: &PgType) -> ColumnKind {
 #[cfg(test)]
 pub mod tests {
   use super::*;
-  use crate::profiles::ConnectorKind;
 
   // Convention: integration_* tests run via `pnpm test:integration` (needs `pnpm db:test`),
   // each gated by its connector's env var, and skip silently otherwise.
@@ -1200,14 +1200,9 @@ pub mod tests {
 
   #[test]
   fn build_config_keeps_logical_host_behind_a_forward() {
-    use crate::profiles::{ConnectorKind, Env};
     use tokio_postgres::config::Host;
 
-    let profile = ConnectionProfile {
-      id: String::new(),
-      name: String::new(),
-      env: Env::Dev,
-      kind: ConnectorKind::Postgres,
+    let params = SqlServerParams {
       host: "db.internal".to_string(),
       port: 5432,
       database: "app".to_string(),
@@ -1215,11 +1210,10 @@ pub mod tests {
       ssl_mode: SslMode::VerifyFull,
       ssl_root_cert: None,
       tunnel_id: None,
-      group: None,
     };
 
     // Tunneled: TCP goes to the forward, TLS still targets db.internal.
-    let config = build_config(&profile, Some(LocalForward { port: 6000 }));
+    let config = build_config(&params, Some(LocalForward { port: 6000 }));
     assert_eq!(config.get_hosts(), &[Host::Tcp("db.internal".to_string())]);
     assert_eq!(
       config.get_hostaddrs(),
@@ -1227,7 +1221,7 @@ pub mod tests {
     );
     assert_eq!(config.get_ports(), &[6000]);
 
-    let direct = build_config(&profile, None);
+    let direct = build_config(&params, None);
     assert!(direct.get_hostaddrs().is_empty());
     assert_eq!(direct.get_ports(), &[5432]);
   }
@@ -2221,15 +2215,16 @@ pub mod tests {
       id: String::new(),
       name: "test".to_string(),
       env: crate::profiles::Env::Dev,
-      kind: ConnectorKind::Postgres,
-      host: host.clone(),
-      port: config.get_ports()[0],
-      database: config.get_dbname().unwrap().to_string(),
-      user: config.get_user().unwrap().to_string(),
-      ssl_mode: SslMode::Prefer,
-      ssl_root_cert: None,
-      tunnel_id: None,
       group: None,
+      params: crate::profiles::ConnectorParams::Postgres(SqlServerParams {
+        host: host.clone(),
+        port: config.get_ports()[0],
+        database: config.get_dbname().unwrap().to_string(),
+        user: config.get_user().unwrap().to_string(),
+        ssl_mode: SslMode::Prefer,
+        ssl_root_cert: None,
+        tunnel_id: None,
+      }),
     }
   }
 
@@ -2257,7 +2252,10 @@ pub mod tests {
       return;
     };
     let mut profile = profile_from_env_url(&url);
-    profile.port = 59999;
+    match &mut profile.params {
+      crate::profiles::ConnectorParams::Postgres(params) => params.port = 59999,
+      _ => unreachable!(),
+    }
     let result = PostgresConnector.connect(&profile, None, None).await;
     let Err(Error::Database { message }) = result.map(|_| ()) else {
       panic!("expected a database error");

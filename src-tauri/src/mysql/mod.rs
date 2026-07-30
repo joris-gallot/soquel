@@ -17,7 +17,7 @@ use crate::connectors::{
   TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
-use crate::profiles::{ConnectionProfile, SslMode};
+use crate::profiles::{ConnectionProfile, SqlServerParams, SslMode};
 
 mod browse;
 mod introspect;
@@ -46,12 +46,13 @@ impl Connector for MysqlConnector {
     secret: Option<&str>,
     forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
-    let opts = build_opts(profile, secret, forward, ssl_opts(profile, forward));
+    let params = profile.params.sql_server();
+    let opts = build_opts(params, secret, forward, ssl_opts(params, forward));
     let connection = match MysqlConnection::open(opts).await {
       Ok(connection) => connection,
       // libpq-style prefer: retry in plaintext when the TLS attempt fails.
-      Err(_) if profile.ssl_mode == SslMode::Prefer => {
-        let opts = build_opts(profile, secret, forward, None);
+      Err(_) if params.ssl_mode == SslMode::Prefer => {
+        let opts = build_opts(params, secret, forward, None);
         MysqlConnection::open(opts).await?
       }
       Err(err) => return Err(err),
@@ -61,20 +62,20 @@ impl Connector for MysqlConnector {
 }
 
 fn build_opts(
-  profile: &ConnectionProfile,
+  params: &SqlServerParams,
   secret: Option<&str>,
   forward: Option<LocalForward>,
   ssl: Option<SslOpts>,
 ) -> Opts {
   let (host, port) = match forward {
     Some(forward) => ("127.0.0.1".to_string(), forward.port),
-    None => (profile.host.clone(), profile.port),
+    None => (params.host.clone(), params.port),
   };
   OptsBuilder::default()
     .ip_or_hostname(host)
     .tcp_port(port)
-    .db_name(Some(profile.database.clone()))
-    .user(Some(profile.user.clone()))
+    .db_name(Some(params.database.clone()))
+    .user(Some(params.user.clone()))
     .pass(secret.map(str::to_string))
     .ssl_opts(ssl)
     .pool_opts(
@@ -86,8 +87,8 @@ fn build_opts(
 
 /// mysql_async has no host/hostaddr split: through a tunnel, verify-full
 /// degrades to verify-ca (chain checked, hostname not).
-fn ssl_opts(profile: &ConnectionProfile, forward: Option<LocalForward>) -> Option<SslOpts> {
-  match profile.ssl_mode {
+fn ssl_opts(params: &SqlServerParams, forward: Option<LocalForward>) -> Option<SslOpts> {
+  match params.ssl_mode {
     SslMode::Disable => None,
     // Encrypt without verifying, like the postgres AcceptAll verifier.
     SslMode::Prefer | SslMode::Require => Some(
@@ -97,7 +98,7 @@ fn ssl_opts(profile: &ConnectionProfile, forward: Option<LocalForward>) -> Optio
     ),
     SslMode::VerifyFull => {
       let mut ssl = SslOpts::default();
-      if let Some(path) = &profile.ssl_root_cert {
+      if let Some(path) = &params.ssl_root_cert {
         ssl = ssl.with_root_certs(vec![std::path::PathBuf::from(path).into()]);
       }
       if forward.is_some() {
@@ -591,7 +592,7 @@ fn column_kind(column: &Column) -> ColumnKind {
 mod tests {
   use super::*;
   use crate::connectors::{Connector, TableKind};
-  use crate::profiles::{ConnectorKind, Env};
+  use crate::profiles::{ConnectorParams, Env};
 
   #[test]
   fn quote_ident_doubles_backticks() {
@@ -599,7 +600,7 @@ mod tests {
     assert_eq!(quote_ident("weird`name"), "`weird``name`");
   }
 
-  fn profile_from_env() -> Option<ConnectionProfile> {
+  fn profile_with_ssl(ssl_mode: SslMode) -> Option<ConnectionProfile> {
     let addr = std::env::var("SOQUEL_TEST_MYSQL").ok()?;
     let (host, port) = addr
       .split_once(':')
@@ -608,16 +609,21 @@ mod tests {
       id: String::new(),
       name: "test".to_string(),
       env: Env::Dev,
-      kind: ConnectorKind::Mysql,
-      host: host.to_string(),
-      port: port.parse().unwrap(),
-      database: "soquel_test".to_string(),
-      user: "soquel".to_string(),
-      ssl_mode: SslMode::Prefer,
-      ssl_root_cert: None,
-      tunnel_id: None,
       group: None,
+      params: ConnectorParams::Mysql(SqlServerParams {
+        host: host.to_string(),
+        port: port.parse().unwrap(),
+        database: "soquel_test".to_string(),
+        user: "soquel".to_string(),
+        ssl_mode,
+        ssl_root_cert: None,
+        tunnel_id: None,
+      }),
     })
+  }
+
+  fn profile_from_env() -> Option<ConnectionProfile> {
+    profile_with_ssl(SslMode::Prefer)
   }
 
   async fn test_connection_from_env() -> Option<Box<dyn Connection>> {
@@ -760,15 +766,14 @@ mod tests {
 
   #[tokio::test]
   async fn integration_mysql_ssl_mode_controls_encryption() {
-    let Some(mut profile) = profile_from_env() else {
+    let Some(require) = profile_with_ssl(SslMode::Require) else {
       return;
     };
     let cipher = |result: QueryResult| result.statements[0].rows[0][1].clone();
 
     // mysql 8 auto-generates certs: require must yield an encrypted session.
-    profile.ssl_mode = SslMode::Require;
     let encrypted = MysqlConnector
-      .connect(&profile, Some("soquel"), None)
+      .connect(&require, Some("soquel"), None)
       .await
       .unwrap();
     let status = encrypted
@@ -782,9 +787,9 @@ mod tests {
       "require must encrypt"
     );
 
-    profile.ssl_mode = SslMode::Disable;
+    let disable = profile_with_ssl(SslMode::Disable).unwrap();
     let plaintext = MysqlConnector
-      .connect(&profile, Some("soquel"), None)
+      .connect(&disable, Some("soquel"), None)
       .await
       .unwrap();
     let status = plaintext

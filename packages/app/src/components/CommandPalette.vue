@@ -77,13 +77,13 @@ defineExpose({ open })
         <CommandItem
           v-for="profile in section.profiles"
           :key="profile.id"
-          :value="`connect ${section.group ?? ''} ${profile.name} ${profile.host} ${profile.database}`"
+          :value="`connect ${section.group ?? ''} ${profile.name} ${profile.params.host} ${profile.params.database}`"
           @select="quickConnect(profile.id)"
         >
           <Plug />
           <span>{{ profile.name }}</span>
           <span class="ml-auto font-mono text-xs text-muted-foreground">
-            {{ profile.host }}:{{ profile.port }}/{{ profile.database }}
+            {{ profile.params.host }}:{{ profile.params.port }}/{{ profile.params.database }}
           </span>
         </CommandItem>
       </CommandGroup>

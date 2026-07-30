@@ -187,7 +187,7 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
                   </Badge>
                 </div>
                 <p class="truncate font-mono text-xs text-muted-foreground">
-                  {{ profile.kind }}://{{ profile.user }}@{{ profile.host }}:{{ profile.port }}/{{ profile.database }}
+                  {{ profile.params.kind }}://{{ profile.params.user }}@{{ profile.params.host }}:{{ profile.params.port }}/{{ profile.params.database }}
                 </p>
               </button>
               <Button

@@ -168,10 +168,10 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
             v-if="shortVersion && profile"
             variant="outline"
             class="border-transparent bg-muted font-mono text-[10px] text-muted-foreground"
-            :title="`${KIND_META[profile.kind].label} ${serverVersion}`"
+            :title="`${KIND_META[profile.params.kind].label} ${serverVersion}`"
             data-testid="server-version"
           >
-            {{ KIND_META[profile.kind].short }} {{ shortVersion }}
+            {{ KIND_META[profile.params.kind].short }} {{ shortVersion }}
           </Badge>
           <Tooltip>
             <TooltipTrigger as-child>
@@ -265,7 +265,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           v-show="tab.id === tabs.state.value.activeId"
           class="min-h-0 flex-1"
           :connection-id="id"
-          :kind="profile?.kind ?? 'postgres'"
+          :kind="profile?.params.kind ?? 'postgres'"
           :schema="tab.schema"
           :table="tableInfo(tab)!"
           :initial-filters="tab.initialFilters"
@@ -286,7 +286,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           v-show="tab.id === tabs.state.value.activeId"
           class="min-h-0 flex-1"
           :connection-id="id"
-          :kind="profile?.kind ?? 'postgres'"
+          :kind="profile?.params.kind ?? 'postgres'"
           :tab-id="tab.id"
           :snapshot="snapshot"
         />

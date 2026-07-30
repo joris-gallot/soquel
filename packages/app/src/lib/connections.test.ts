@@ -8,15 +8,17 @@ function profile(name: string, group: string | null): ConnectionProfile {
     id: name,
     name,
     env: 'dev',
-    kind: 'postgres',
-    host: 'h',
-    port: 5432,
-    database: 'db',
-    user: 'u',
-    sslMode: 'prefer',
-    sslRootCert: null,
-    tunnelId: null,
     group,
+    params: {
+      kind: 'postgres',
+      host: 'h',
+      port: 5432,
+      database: 'db',
+      user: 'u',
+      sslMode: 'prefer',
+      sslRootCert: null,
+      tunnelId: null,
+    },
   }
 }
 
@@ -166,19 +168,19 @@ describe('connectionSchema', () => {
 
   it('keeps the ca path only for verify-full', () => {
     const verifyFull = { ...valid, sslMode: 'verify-full', sslRootCert: ' /etc/ca.pem ' }
-    expect(toConnectionInput(connectionSchema.parse(verifyFull)).sslRootCert).toBe('/etc/ca.pem')
+    expect(toConnectionInput(connectionSchema.parse(verifyFull)).params.sslRootCert).toBe('/etc/ca.pem')
     // Any other mode drops the stale path instead of persisting it.
     const require = { ...valid, sslMode: 'require', sslRootCert: '/etc/ca.pem' }
-    expect(toConnectionInput(connectionSchema.parse(require)).sslRootCert).toBeNull()
-    expect(toConnectionInput(connectionSchema.parse(valid)).sslRootCert).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse(require)).params.sslRootCert).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse(valid)).params.sslRootCert).toBeNull()
   })
 
   it('turns the no-tunnel sentinel into null for the command input', () => {
-    expect(toConnectionInput(connectionSchema.parse(valid)).tunnelId).toBeNull()
-    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: 'none' })).tunnelId).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse(valid)).params.tunnelId).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: 'none' })).params.tunnelId).toBeNull()
     // Reka Select can clear the model to undefined; the schema falls back to no tunnel.
-    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: undefined })).tunnelId).toBeNull()
+    expect(toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: undefined })).params.tunnelId).toBeNull()
     const withTunnel = toConnectionInput(connectionSchema.parse({ ...valid, tunnelId: 't-1' }))
-    expect(withTunnel.tunnelId).toBe('t-1')
+    expect(withTunnel.params.tunnelId).toBe('t-1')
   })
 })

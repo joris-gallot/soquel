@@ -70,15 +70,45 @@ export interface ConnectionFormValues {
 }
 
 export function toConnectionInput(values: z.output<typeof connectionSchema>): ConnectionInput {
-  return {
-    ...values,
+  const shared = {
+    host: values.host,
+    port: values.port,
+    database: values.database,
+    user: values.user,
+    sslMode: values.sslMode,
     // The CA only applies to verify-full: don't persist a stale path for other modes.
     sslRootCert: values.sslMode === 'verify-full' && values.sslRootCert.trim() !== ''
       ? values.sslRootCert.trim()
       : null,
     tunnelId: values.tunnelId === NO_TUNNEL || values.tunnelId === '' ? null : values.tunnelId,
+  }
+  return {
+    name: values.name,
+    env: values.env,
     group: values.group.trim() === '' ? null : values.group.trim(),
     password: values.password === '' ? null : values.password,
+    params: values.kind === 'postgres'
+      ? { kind: 'postgres', ...shared }
+      : { kind: 'mysql', ...shared },
+  }
+}
+
+/// Flatten a stored profile back into the form's editable shape.
+export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFormValues {
+  const params = profile.params
+  return {
+    name: profile.name,
+    env: profile.env,
+    kind: params.kind,
+    host: params.host,
+    port: params.port,
+    database: params.database,
+    user: params.user,
+    sslMode: params.sslMode ?? 'prefer',
+    sslRootCert: params.sslRootCert ?? '',
+    tunnelId: params.tunnelId ?? NO_TUNNEL,
+    group: profile.group ?? '',
+    password: '',
   }
 }
 

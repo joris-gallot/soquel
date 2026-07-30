@@ -88,15 +88,8 @@ export type ColumnKind = "bool" | "number" | "text" | "json" | "bytes" | "date-t
 export type ConnectionInput = {
 	name: string,
 	env: Env,
-	kind: ConnectorKind,
-	host: string,
-	port: number,
-	database: string,
-	user: string,
-	sslMode?: SslMode,
-	sslRootCert?: string | null,
-	tunnelId?: string | null,
 	group?: string | null,
+	params: ConnectorParams,
 	password: string | null,
 };
 
@@ -104,19 +97,21 @@ export type ConnectionProfile = {
 	id: string,
 	name: string,
 	env: Env,
-	kind: ConnectorKind,
-	host: string,
-	port: number,
-	database: string,
-	user: string,
-	sslMode?: SslMode,
-	/**  CA bundle path for verify-full (libpq sslrootcert); None = platform store. */
-	sslRootCert?: string | null,
-	tunnelId?: string | null,
 	group?: string | null,
+	params: ConnectorParams,
 };
 
 export type ConnectorKind = "postgres" | "mysql";
+
+/**
+ *  Per-kind connection parameters; future kinds bring their own shapes
+ *  (sqlite: a file path, redis: host + db index).
+ */
+export type ConnectorParams = {
+	kind: "postgres",
+} & SqlServerParams | {
+	kind: "mysql",
+} & SqlServerParams;
 
 export type Env = "dev" | "staging" | "prod";
 
@@ -193,6 +188,18 @@ export type SortDirection = "asc" | "desc";
 export type SortSpec = {
 	column: string,
 	direction: SortDirection,
+};
+
+/**  Shared shape for TCP SQL servers (postgres, mysql). */
+export type SqlServerParams = {
+	host: string,
+	port: number,
+	database: string,
+	user: string,
+	sslMode?: SslMode,
+	/**  CA bundle path for verify-full (libpq sslrootcert); None = platform store. */
+	sslRootCert?: string | null,
+	tunnelId?: string | null,
 };
 
 export type SshAuth = { method: "agent" } | { method: "key-file"; path: string } | { method: "password" } | 

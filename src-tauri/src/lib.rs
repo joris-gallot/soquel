@@ -110,9 +110,12 @@ pub fn run() {
             .build(),
         )?;
       }
-      // SOQUEL_DATA_DIR isolates e2e runs from the real app data.
+      // SOQUEL_DATA_DIR isolates e2e runs from the real app data; debug builds
+      // get their own subtree so `tauri dev` never touches an installed
+      // release's connections.
       let data_dir = match std::env::var("SOQUEL_DATA_DIR") {
         Ok(dir) => std::path::PathBuf::from(dir),
+        Err(_) if cfg!(debug_assertions) => app.path().app_data_dir()?.join("dev"),
         Err(_) => app.path().app_data_dir()?,
       };
       let store = ProfileStore::load(data_dir.join("connections.json"))?;

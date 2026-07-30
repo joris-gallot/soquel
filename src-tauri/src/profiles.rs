@@ -33,13 +33,10 @@ pub enum SslMode {
   VerifyFull,
 }
 
+/// Shared shape for TCP SQL servers (postgres, mysql).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectionProfile {
-  pub id: String,
-  pub name: String,
-  pub env: Env,
-  pub kind: ConnectorKind,
+pub struct SqlServerParams {
   pub host: String,
   pub port: u16,
   pub database: String,
@@ -51,8 +48,42 @@ pub struct ConnectionProfile {
   pub ssl_root_cert: Option<String>,
   #[serde(default)]
   pub tunnel_id: Option<String>,
+}
+
+/// Per-kind connection parameters; future kinds bring their own shapes
+/// (sqlite: a file path, redis: host + db index).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ConnectorParams {
+  Postgres(SqlServerParams),
+  Mysql(SqlServerParams),
+}
+
+impl ConnectorParams {
+  pub fn kind(&self) -> ConnectorKind {
+    match self {
+      Self::Postgres(_) => ConnectorKind::Postgres,
+      Self::Mysql(_) => ConnectorKind::Mysql,
+    }
+  }
+
+  /// Every current kind is a TCP SQL server; revisit when sqlite/redis land.
+  pub fn sql_server(&self) -> &SqlServerParams {
+    match self {
+      Self::Postgres(params) | Self::Mysql(params) => params,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionProfile {
+  pub id: String,
+  pub name: String,
+  pub env: Env,
   #[serde(default)]
   pub group: Option<String>,
+  pub params: ConnectorParams,
 }
 
 /// Secrets ride in on the input but are stored in the OS keychain, never in the profile.
@@ -61,19 +92,9 @@ pub struct ConnectionProfile {
 pub struct ConnectionInput {
   pub name: String,
   pub env: Env,
-  pub kind: ConnectorKind,
-  pub host: String,
-  pub port: u16,
-  pub database: String,
-  pub user: String,
-  #[serde(default)]
-  pub ssl_mode: SslMode,
-  #[serde(default)]
-  pub ssl_root_cert: Option<String>,
-  #[serde(default)]
-  pub tunnel_id: Option<String>,
   #[serde(default)]
   pub group: Option<String>,
+  pub params: ConnectorParams,
   pub password: Option<String>,
 }
 
@@ -85,7 +106,16 @@ pub struct ProfileStore {
 impl ProfileStore {
   pub fn load(path: PathBuf) -> Result<Self, Error> {
     let profiles = match fs::read_to_string(&path) {
-      Ok(raw) => serde_json::from_str(&raw)?,
+      // A pre-params-redesign (or corrupted) file must not block startup:
+      // move it aside and start fresh.
+      Ok(raw) => match serde_json::from_str(&raw) {
+        Ok(profiles) => profiles,
+        Err(err) => {
+          log::warn!("connections.json unreadable ({err}); moving it to connections.json.bak");
+          let _ = fs::rename(&path, path.with_extension("json.bak"));
+          Vec::new()
+        }
+      },
       Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
       Err(err) => return Err(err.into()),
     };
@@ -120,15 +150,8 @@ impl ProfileStore {
       id: uuid::Uuid::new_v4().to_string(),
       name: input.name.clone(),
       env: input.env,
-      kind: input.kind,
-      host: input.host.clone(),
-      port: input.port,
-      database: input.database.clone(),
-      user: input.user.clone(),
-      ssl_mode: input.ssl_mode,
-      ssl_root_cert: input.ssl_root_cert.clone(),
-      tunnel_id: input.tunnel_id.clone(),
       group: input.group.clone(),
+      params: input.params.clone(),
     };
     self.profiles.push(profile.clone());
     self.save()?;
@@ -145,15 +168,8 @@ impl ProfileStore {
       })?;
     profile.name = input.name.clone();
     profile.env = input.env;
-    profile.kind = input.kind;
-    profile.host = input.host.clone();
-    profile.port = input.port;
-    profile.database = input.database.clone();
-    profile.user = input.user.clone();
-    profile.ssl_mode = input.ssl_mode;
-    profile.ssl_root_cert = input.ssl_root_cert.clone();
-    profile.tunnel_id = input.tunnel_id.clone();
     profile.group = input.group.clone();
+    profile.params = input.params.clone();
     let updated = profile.clone();
     self.save()?;
     Ok(updated)
@@ -179,15 +195,16 @@ mod tests {
     ConnectionInput {
       name: name.to_string(),
       env: Env::Dev,
-      kind: ConnectorKind::Postgres,
-      host: "localhost".to_string(),
-      port: 5432,
-      database: "app".to_string(),
-      user: "postgres".to_string(),
-      ssl_mode: SslMode::Prefer,
-      ssl_root_cert: None,
-      tunnel_id: None,
       group: None,
+      params: ConnectorParams::Postgres(SqlServerParams {
+        host: "localhost".to_string(),
+        port: 5432,
+        database: "app".to_string(),
+        user: "postgres".to_string(),
+        ssl_mode: SslMode::Prefer,
+        ssl_root_cert: None,
+        tunnel_id: None,
+      }),
       password: None,
     }
   }
@@ -205,17 +222,26 @@ mod tests {
     assert_eq!(store.list().len(), 1);
 
     let mut changed = input("renamed");
-    changed.port = 5433;
-    changed.ssl_root_cert = Some("/etc/ca.pem".to_string());
+    changed.params = ConnectorParams::Mysql(SqlServerParams {
+      host: "db.internal".to_string(),
+      port: 3306,
+      database: "app".to_string(),
+      user: "soquel".to_string(),
+      ssl_mode: SslMode::VerifyFull,
+      ssl_root_cert: Some("/etc/ca.pem".to_string()),
+      tunnel_id: None,
+    });
     let updated = store.update(&created.id, &changed).unwrap();
     assert_eq!(updated.name, "renamed");
-    assert_eq!(updated.port, 5433);
+    assert_eq!(updated.params.kind(), ConnectorKind::Mysql);
 
-    // Reload from disk: state survives.
+    // Reload from disk: the tagged params survive, kind included.
     let reloaded = ProfileStore::load(dir.path().join("connections.json")).unwrap();
-    assert_eq!(reloaded.get(&created.id).unwrap().name, "renamed");
+    let profile = reloaded.get(&created.id).unwrap();
+    assert_eq!(profile.name, "renamed");
+    assert_eq!(profile.params.kind(), ConnectorKind::Mysql);
     assert_eq!(
-      reloaded.get(&created.id).unwrap().ssl_root_cert.as_deref(),
+      profile.params.sql_server().ssl_root_cert.as_deref(),
       Some("/etc/ca.pem")
     );
 
@@ -250,14 +276,30 @@ mod tests {
   }
 
   #[test]
-  fn profiles_without_ssl_mode_default_to_prefer() {
-    let raw = r#"{"id":"1","name":"old","env":"dev","kind":"postgres",
-      "host":"localhost","port":5432,"database":"app","user":"postgres"}"#;
-    let profile: ConnectionProfile = serde_json::from_str(raw).unwrap();
-    assert_eq!(profile.ssl_mode, SslMode::Prefer);
-    assert_eq!(profile.ssl_root_cert, None);
-    assert_eq!(profile.tunnel_id, None);
-    assert_eq!(profile.group, None);
+  fn params_serialize_with_an_inline_kind_tag() {
+    let (_dir, mut store) = store();
+    store.create(&input("local")).unwrap();
+    let raw = fs::read_to_string(store.path.clone()).unwrap();
+    // The tag lives inside params: the discriminated union the frontend sees.
+    assert!(raw.contains(r#""kind": "postgres""#), "{raw}");
+    assert!(!raw.contains(r#""params": null"#), "{raw}");
+  }
+
+  #[test]
+  fn unreadable_store_is_moved_aside_not_fatal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("connections.json");
+    // The pre-redesign flat shape: no params object.
+    fs::write(
+      &path,
+      r#"[{"id":"1","name":"old","env":"dev","kind":"postgres","host":"h","port":5432,"database":"db","user":"u"}]"#,
+    )
+    .unwrap();
+
+    let store = ProfileStore::load(path.clone()).unwrap();
+    assert!(store.list().is_empty());
+    assert!(!path.exists());
+    assert!(path.with_extension("json.bak").exists());
   }
 
   #[test]

@@ -69,6 +69,7 @@ Weight: Rust integration against real databases is the core; unit tests for pure
 ## Tauri specifics
 
 - Linux dev needs the Tauri v2 system prerequisites (webkit2gtk-4.1 etc.); `tauri dev` under WSL runs the Linux build via WSLg, not representative of Windows/macOS.
+- Debug builds are isolated from releases: data dir gets a `/dev` subtree and the keychain service a `.dev` suffix, so `tauri dev` never touches an installed app's connections or secrets (`SOQUEL_DATA_DIR` still overrides everything for e2e).
 - `tauri.conf.json`: dev server is vite on 5173 (strictPort); `beforeDevCommand`/`beforeBuildCommand` drive the app package through pnpm filters.
 - Add Tauri plugins with `pnpm tauri add <name>`; their permissions go in `src-tauri/capabilities/default.json`.
 - No remote assets in the webview (fonts, scripts): the app must work offline and keep a strict CSP. Bundle everything.

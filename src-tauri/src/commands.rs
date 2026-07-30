@@ -23,7 +23,8 @@ async fn open_tunnel(
   state: &State<'_, AppState>,
   profile: &ConnectionProfile,
 ) -> Result<Option<(SshTunnel, LocalForward)>, Error> {
-  let Some(tunnel_id) = &profile.tunnel_id else {
+  let sql = profile.params.sql_server();
+  let Some(tunnel_id) = &sql.tunnel_id else {
     return Ok(None);
   };
   let tunnel = state.tunnels.lock().unwrap().get(tunnel_id)?;
@@ -40,8 +41,8 @@ async fn open_tunnel(
     secret.as_deref(),
     known_key,
     TunnelTarget {
-      host: profile.host.clone(),
-      port: profile.port,
+      host: sql.host.clone(),
+      port: sql.port,
     },
   )
   .await?;
@@ -82,18 +83,11 @@ pub async fn test_connection(
     id: String::new(),
     name: input.name.clone(),
     env: input.env,
-    kind: input.kind,
-    host: input.host.clone(),
-    port: input.port,
-    database: input.database.clone(),
-    user: input.user.clone(),
-    ssl_mode: input.ssl_mode,
-    ssl_root_cert: input.ssl_root_cert.clone(),
-    tunnel_id: input.tunnel_id.clone(),
     group: input.group.clone(),
+    params: input.params.clone(),
   };
   let opened = open_tunnel(&state, &profile).await?;
-  let connection = connector_for(input.kind)
+  let connection = connector_for(profile.params.kind())
     .connect(
       &profile,
       secret.as_deref(),
@@ -111,7 +105,7 @@ pub async fn connect(state: State<'_, AppState>, id: String) -> Result<(), Error
   let secret = state.secrets.get(&id)?;
   let opened = open_tunnel(&state, &profile).await?;
   let forward = opened.as_ref().map(|(_, f)| *f);
-  let connection = connector_for(profile.kind)
+  let connection = connector_for(profile.params.kind())
     .connect(&profile, secret.as_deref(), forward)
     .await?;
   state.connections.lock().await.insert(
@@ -504,7 +498,7 @@ pub fn delete_tunnel(state: State<'_, AppState>, id: String) -> Result<(), Error
     .unwrap()
     .list()
     .into_iter()
-    .filter(|p| p.tunnel_id.as_deref() == Some(id.as_str()))
+    .filter(|p| p.params.sql_server().tunnel_id.as_deref() == Some(id.as_str()))
     .map(|p| p.name)
     .collect();
   if !used_by.is_empty() {

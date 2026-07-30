@@ -1,5 +1,10 @@
 use crate::error::Error;
 
+// Debug builds keep their own keychain scope: dev must never touch the
+// secrets of an installed release.
+#[cfg(debug_assertions)]
+const SERVICE: &str = "dev.soquel.app.dev";
+#[cfg(not(debug_assertions))]
 const SERVICE: &str = "dev.soquel.app";
 
 pub trait SecretStore: Send + Sync {

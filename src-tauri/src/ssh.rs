@@ -505,7 +505,7 @@ mod tests {
   async fn integration_ssh_tls_require_through_tunnel() {
     use crate::connectors::{Connector, LocalForward};
     use crate::postgres::PostgresConnector;
-    use crate::profiles::{ConnectionProfile, ConnectorKind, Env, SslMode};
+    use crate::profiles::{ConnectionProfile, ConnectorParams, Env, SqlServerParams, SslMode};
 
     let Some(profile) = tunnel_from_env(TEST_KEY) else {
       return;
@@ -529,15 +529,16 @@ mod tests {
           id: String::new(),
           name: String::new(),
           env: Env::Dev,
-          kind: ConnectorKind::Postgres,
-          host: "postgres-tls".to_string(),
-          port: 5432,
-          database: "soquel_test".to_string(),
-          user: "soquel".to_string(),
-          ssl_mode: SslMode::Require,
-          ssl_root_cert: None,
-          tunnel_id: None,
           group: None,
+          params: ConnectorParams::Postgres(SqlServerParams {
+            host: "postgres-tls".to_string(),
+            port: 5432,
+            database: "soquel_test".to_string(),
+            user: "soquel".to_string(),
+            ssl_mode: SslMode::Require,
+            ssl_root_cert: None,
+            tunnel_id: None,
+          }),
         },
         Some("soquel"),
         Some(LocalForward {
@@ -557,7 +558,7 @@ mod tests {
     use crate::connectors::{Connector, LocalForward};
     use crate::postgres::tests::TEST_ROOT_CERT;
     use crate::postgres::PostgresConnector;
-    use crate::profiles::{ConnectionProfile, ConnectorKind, Env, SslMode};
+    use crate::profiles::{ConnectionProfile, ConnectorParams, Env, SqlServerParams, SslMode};
 
     let Some(profile) = tunnel_from_env(TEST_KEY) else {
       return;
@@ -582,15 +583,16 @@ mod tests {
       id: String::new(),
       name: String::new(),
       env: Env::Dev,
-      kind: ConnectorKind::Postgres,
-      host: host.to_string(),
-      port: 5432,
-      database: "soquel_test".to_string(),
-      user: "soquel".to_string(),
-      ssl_mode: SslMode::VerifyFull,
-      ssl_root_cert: Some(TEST_ROOT_CERT.to_string()),
-      tunnel_id: None,
       group: None,
+      params: ConnectorParams::Postgres(SqlServerParams {
+        host: host.to_string(),
+        port: 5432,
+        database: "soquel_test".to_string(),
+        user: "soquel".to_string(),
+        ssl_mode: SslMode::VerifyFull,
+        ssl_root_cert: Some(TEST_ROOT_CERT.to_string()),
+        tunnel_id: None,
+      }),
     };
     let forward = LocalForward {
       port: tunnel.local_port,

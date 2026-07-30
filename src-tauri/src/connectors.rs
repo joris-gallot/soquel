@@ -297,6 +297,68 @@ pub trait Connection: Send + Sync {
   }
 }
 
+/// Shared across SQL connectors.
+pub const POOL_MAX_SIZE: usize = 4;
+pub const CHUNK_ROWS: usize = 200;
+
+/// Update/delete guard shared by SQL connectors: exactly one row or the whole
+/// batch rolls back.
+pub fn verify_exactly_one(kind: &str, affected: u64) -> Result<(), Error> {
+  if affected == 1 {
+    return Ok(());
+  }
+  let hint = if affected == 0 {
+    "; the row may have been changed or deleted since it was loaded - refresh and retry"
+  } else {
+    ""
+  };
+  Err(Error::Database {
+    message: format!(
+      "a {kind} matched {affected} rows instead of exactly 1; nothing was applied{hint}"
+    ),
+  })
+}
+
+/// Tracks the cancel handles of in-flight queries; the guard unregisters on drop.
+pub struct CancelRegistry<T> {
+  entries: std::sync::Mutex<std::collections::HashMap<u64, T>>,
+  next_id: std::sync::atomic::AtomicU64,
+}
+
+impl<T: Clone> Default for CancelRegistry<T> {
+  fn default() -> Self {
+    Self {
+      entries: std::sync::Mutex::new(std::collections::HashMap::new()),
+      next_id: std::sync::atomic::AtomicU64::new(0),
+    }
+  }
+}
+
+impl<T: Clone> CancelRegistry<T> {
+  pub fn register(&self, token: T) -> CancelGuard<'_, T> {
+    let id = self
+      .next_id
+      .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    self.entries.lock().unwrap().insert(id, token);
+    CancelGuard { registry: self, id }
+  }
+
+  pub fn tokens(&self) -> Vec<T> {
+    self.entries.lock().unwrap().values().cloned().collect()
+  }
+}
+
+pub struct CancelGuard<'a, T> {
+  registry: &'a CancelRegistry<T>,
+  id: u64,
+}
+
+impl<T> Drop for CancelGuard<'_, T> {
+  fn drop(&mut self) {
+    self.registry.entries.lock().unwrap().remove(&self.id);
+  }
+}
+
 /// Local TCP endpoint of an SSH forward. TCP dials 127.0.0.1:{port} while the
 /// profile keeps the logical host, so TLS verification still targets it.
 #[derive(Debug, Clone, Copy)]

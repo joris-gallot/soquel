@@ -1,5 +1,5 @@
 //! MySQL connector: mysql_async pool, text values rendered to strings.
-//! Browse/edit surfaces land in a later round; only queries ship here.
+//! Browse/edit surfaces land in a later round.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,22 +13,28 @@ use mysql_async::{
 };
 
 use crate::connectors::{
-  ApplyResult, Capability, ColumnKind, Connection, Connector, LocalForward, QueryColumn,
-  QueryResult, RowsChunk, SqlQuery, SqlSession, StatementResult, StreamSummary, TableChanges,
-  TableRowsRequest,
+  ApplyResult, Capability, ColumnKind, Connection, Connector, Introspect, LocalForward,
+  QueryColumn, QueryResult, RowsChunk, SqlQuery, SqlSession, StatementResult, StreamSummary,
+  TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SslMode};
 
+mod introspect;
+
 const POOL_MAX_SIZE: usize = 4;
+
+// Identifiers come from the UI: backtick quoting is the injection boundary.
+pub(super) fn quote_ident(ident: &str) -> String {
+  format!("`{}`", ident.replace('`', "``"))
+}
 
 pub struct MysqlConnector;
 
 #[async_trait::async_trait]
 impl Connector for MysqlConnector {
   fn capabilities(&self) -> &'static [Capability] {
-    // Introspection follows in the next round.
-    &[Capability::SqlQuery]
+    &[Capability::SqlQuery, Capability::Introspection]
   }
 
   async fn connect(
@@ -100,7 +106,7 @@ fn ssl_opts(profile: &ConnectionProfile, forward: Option<LocalForward>) -> Optio
 }
 
 pub struct MysqlConnection {
-  pool: Pool,
+  pub(super) pool: Pool,
   /// Kept for sessions: dedicated conns live outside the pool.
   opts: Opts,
   server_version: OnceLock<String>,
@@ -173,6 +179,10 @@ impl Connection for MysqlConnection {
   }
 
   fn sql(&self) -> Option<&dyn SqlQuery> {
+    Some(self)
+  }
+
+  fn introspect(&self) -> Option<&dyn Introspect> {
     Some(self)
   }
 }
@@ -400,7 +410,7 @@ fn column_kind(column: &Column) -> ColumnKind {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::connectors::Connector;
+  use crate::connectors::{Connector, TableKind};
   use crate::profiles::{ConnectorKind, Env};
 
   fn profile_from_env() -> Option<ConnectionProfile> {
@@ -673,7 +683,92 @@ mod tests {
       connection.sql().unwrap().table_rows(&request).await,
       Err(Error::Unsupported { .. })
     ));
-    assert!(connection.introspect().is_none());
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_schema_snapshot() {
+    let Some(connection) = test_connection_from_env().await else {
+      return;
+    };
+    let snapshot = connection
+      .introspect()
+      .unwrap()
+      .schema_snapshot()
+      .await
+      .unwrap();
+    let schema = snapshot
+      .schemas
+      .iter()
+      .find(|s| s.name == "soquel_test")
+      .expect("seeded database present");
+
+    let customers = schema
+      .tables
+      .iter()
+      .find(|t| t.name == "customers")
+      .unwrap();
+    assert_eq!(customers.kind, TableKind::Table);
+    assert_eq!(customers.primary_key, vec!["id"]);
+    let id = customers.columns.iter().find(|c| c.name == "id").unwrap();
+    assert_eq!(id.data_type, "int");
+    assert_eq!(id.default.as_deref(), Some("auto_increment"));
+    let email = customers
+      .columns
+      .iter()
+      .find(|c| c.name == "email")
+      .unwrap();
+    assert!(email.nullable);
+    assert_eq!(email.data_type, "varchar(255)");
+    assert!(
+      customers
+        .indexes
+        .iter()
+        .any(|i| i.unique && i.definition.contains("email")),
+      "{:?}",
+      customers.indexes
+    );
+
+    let orders = schema.tables.iter().find(|t| t.name == "orders").unwrap();
+    let fk = &orders.foreign_keys[0];
+    assert_eq!(fk.columns, vec!["customer_id"]);
+    assert_eq!(fk.referenced_schema, "soquel_test");
+    assert_eq!(fk.referenced_table, "customers");
+    assert_eq!(fk.referenced_columns, vec!["id"]);
+
+    let view = schema
+      .tables
+      .iter()
+      .find(|t| t.name == "recent_orders")
+      .unwrap();
+    assert_eq!(view.kind, TableKind::View);
+    assert!(!view.columns.is_empty());
+  }
+
+  #[tokio::test]
+  async fn integration_mysql_table_ddl_via_show_create() {
+    let Some(connection) = test_connection_from_env().await else {
+      return;
+    };
+    let introspect = connection.introspect().unwrap();
+
+    let ddl = introspect.table_ddl("soquel_test", "orders").await.unwrap();
+    assert!(ddl.contains("CREATE TABLE `orders`"), "{ddl}");
+    assert!(ddl.contains("PRIMARY KEY (`id`)"), "{ddl}");
+    assert!(
+      ddl.contains("FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`)"),
+      "{ddl}"
+    );
+
+    let view = introspect
+      .table_ddl("soquel_test", "recent_orders")
+      .await
+      .unwrap();
+    assert!(view.contains("VIEW `recent_orders`"), "{view}");
+
+    assert!(matches!(
+      introspect.table_ddl("soquel_test", "nope").await,
+      Err(Error::NotFound { .. })
+    ));
   }
 }
 

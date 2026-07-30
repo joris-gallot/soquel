@@ -29,6 +29,12 @@ INSERT INTO orders (customer_id, amount, note, receipt) VALUES
   (1, 49.00, NULL, NULL),
   (2, 999.99, 'wire transfer', NULL);
 
+CREATE VIEW recent_orders AS
+SELECT o.id, c.name AS customer, o.amount, o.placed_at
+FROM orders o
+JOIN customers c ON c.id = o.customer_id
+ORDER BY o.placed_at DESC;
+
 -- Bulk table for streaming tests in the browse round.
 CREATE TABLE events (
   id INT AUTO_INCREMENT PRIMARY KEY,

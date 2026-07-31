@@ -606,6 +606,120 @@ mod tests {
     connection.close().await.unwrap();
   }
 
+  /// The command-layer db switch: a second dial through the already-open
+  /// forward, swapping the entry's connection without disturbing the tunnel.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_ssh_redis_select_db_through_tunnel() {
+    use std::collections::HashMap;
+
+    use crate::connectors::{Connection, Connector, LocalForward};
+    use crate::known_hosts::KnownHostsStore;
+    use crate::profiles::{ConnectionInput, ConnectorParams, Env, ProfileStore, RedisParams};
+    use crate::redis::RedisConnector;
+    use crate::secrets::{InMemoryStore, SecretStore};
+    use crate::tunnels::TunnelStore;
+    use crate::{ActiveConnection, AppState};
+
+    let Some(tunnel_profile) = tunnel_from_env(TEST_KEY) else {
+      return;
+    };
+    if std::env::var("SOQUEL_TEST_REDIS").is_err() {
+      return;
+    }
+    let key = host_key(&tunnel_profile).await;
+    let tunnel = SshTunnel::open(
+      &tunnel_profile,
+      None,
+      Some(key),
+      TunnelTarget {
+        host: "redis".to_string(),
+        port: 6379,
+      },
+    )
+    .await
+    .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut profiles = ProfileStore::load(dir.path().join("connections.json")).unwrap();
+    let profile = profiles
+      .create(&ConnectionInput {
+        name: "kv-swap".to_string(),
+        env: Env::Dev,
+        group: None,
+        params: ConnectorParams::Redis(RedisParams {
+          host: "redis".to_string(),
+          port: 6379,
+          db: 0,
+          username: None,
+          tls: false,
+          tunnel_id: None,
+        }),
+        password: None,
+      })
+      .unwrap();
+    let id = profile.id.clone();
+
+    let connection = RedisConnector
+      .connect(
+        &profile,
+        Some("soquel"),
+        Some(LocalForward {
+          port: tunnel.local_port,
+        }),
+      )
+      .await
+      .unwrap();
+    const SEEDED: &str = "soquel_test:kvswap:key";
+    connection
+      .kv()
+      .unwrap()
+      .set_string(SEEDED, "db0")
+      .await
+      .unwrap();
+
+    let secrets = InMemoryStore::default();
+    secrets.set(&id, "soquel").unwrap();
+    let state = AppState {
+      profiles: std::sync::Mutex::new(profiles),
+      tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
+      known_hosts: std::sync::Mutex::new(
+        KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
+      ),
+      secrets: Box::new(secrets),
+      connections: tokio::sync::Mutex::new(HashMap::from([(
+        id.clone(),
+        ActiveConnection {
+          connection: connection.into(),
+          _tunnel: Some(tunnel),
+        },
+      )])),
+      sessions: tokio::sync::Mutex::new(HashMap::new()),
+    };
+    let active =
+      |connections: &HashMap<String, ActiveConnection>| -> std::sync::Arc<dyn Connection> {
+        connections.get(&id).unwrap().connection.clone()
+      };
+
+    state.select_kv_db(&id, 1).await.unwrap();
+    let swapped = active(&*state.connections.lock().await);
+    let kv = swapped.kv().unwrap();
+    assert_eq!(kv.databases().await.unwrap().current, 1);
+    let miss = kv.key_detail(SEEDED).await;
+    assert!(
+      matches!(miss, Err(Error::NotFound { .. })),
+      "seeded key must not exist in db 1, got {miss:?}"
+    );
+
+    state.select_kv_db(&id, 0).await.unwrap();
+    let back = active(&*state.connections.lock().await);
+    let kv = back.kv().unwrap();
+    assert_eq!(kv.databases().await.unwrap().current, 0);
+    assert_eq!(kv.key_detail(SEEDED).await.unwrap().key, SEEDED);
+
+    kv.delete_key(SEEDED).await.unwrap();
+    back.close().await.unwrap();
+  }
+
   /// End-to-end optimistic proof of the SNI/hostname override: verify-full
   /// through the tunnel validates the profile's logical host, not 127.0.0.1.
   #[tokio::test(flavor = "multi_thread")]

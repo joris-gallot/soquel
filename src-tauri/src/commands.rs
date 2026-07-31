@@ -483,41 +483,47 @@ pub async fn kv_databases(state: State<'_, AppState>, id: String) -> Result<KvDa
   kv_surface(&connection)?.databases().await
 }
 
-/// Reconnect on the target db and swap the active connection: a SELECT on the
-/// multiplexed socket would silently revert on reconnect.
+impl AppState {
+  /// Reconnect on the target db and swap the active connection: a SELECT on the
+  /// multiplexed socket would silently revert on reconnect.
+  pub async fn select_kv_db(&self, id: &str, db: u32) -> Result<(), Error> {
+    let mut profile = self.profiles.lock().unwrap().get(id)?;
+    let ConnectorParams::Redis(params) = &mut profile.params else {
+      return Err(Error::Unsupported {
+        message: "database selection is a redis feature".to_string(),
+      });
+    };
+    params.db = db;
+    let secret = self.secrets.get(id)?;
+    let forward = {
+      let connections = self.connections.lock().await;
+      let entry = connections.get(id).ok_or_else(|| Error::NotFound {
+        message: format!("connection {id} is not active"),
+      })?;
+      entry._tunnel.as_ref().map(|tunnel| LocalForward {
+        port: tunnel.local_port,
+      })
+    };
+    let connection = connector_for(profile.params.kind())
+      .connect(&profile, secret.as_deref(), forward)
+      .await?;
+    let mut connections = self.connections.lock().await;
+    let Some(entry) = connections.get_mut(id) else {
+      let _ = connection.close().await;
+      return Err(Error::NotFound {
+        message: format!("connection {id} is not active"),
+      });
+    };
+    let old = std::mem::replace(&mut entry.connection, Arc::from(connection));
+    drop(connections);
+    old.close().await
+  }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn kv_select_db(state: State<'_, AppState>, id: String, db: u32) -> Result<(), Error> {
-  let mut profile = state.profiles.lock().unwrap().get(&id)?;
-  let ConnectorParams::Redis(params) = &mut profile.params else {
-    return Err(Error::Unsupported {
-      message: "database selection is a redis feature".to_string(),
-    });
-  };
-  params.db = db;
-  let secret = state.secrets.get(&id)?;
-  let forward = {
-    let connections = state.connections.lock().await;
-    let entry = connections.get(&id).ok_or_else(|| Error::NotFound {
-      message: format!("connection {id} is not active"),
-    })?;
-    entry._tunnel.as_ref().map(|tunnel| LocalForward {
-      port: tunnel.local_port,
-    })
-  };
-  let connection = connector_for(profile.params.kind())
-    .connect(&profile, secret.as_deref(), forward)
-    .await?;
-  let mut connections = state.connections.lock().await;
-  let Some(entry) = connections.get_mut(&id) else {
-    let _ = connection.close().await;
-    return Err(Error::NotFound {
-      message: format!("connection {id} is not active"),
-    });
-  };
-  let old = std::mem::replace(&mut entry.connection, Arc::from(connection));
-  drop(connections);
-  old.close().await
+  state.select_kv_db(&id, db).await
 }
 
 #[tauri::command]

@@ -43,6 +43,36 @@ describe('connection manager', () => {
     await $('[data-testid="status-disconnected"]').waitForExist()
   })
 
+  // A form field pushing the dialog past the viewport puts the select popovers
+  // out of reach, so the window has to be shorter than any real one here.
+  it('keeps the whole form inside a short window', async () => {
+    const restore = await browser.getWindowSize()
+    try {
+      await browser.setWindowSize(1280, 600)
+      await $('[data-testid="row-menu"]').click()
+      await $('[data-testid="row-edit"]').click()
+      await $('[data-testid="field-name"]').waitForExist()
+
+      const box = await browser.execute(() => {
+        const dialog = document.querySelector('[role="dialog"]')!.getBoundingClientRect()
+        return { top: dialog.top, bottom: dialog.bottom, viewport: window.innerHeight }
+      })
+      expect(box.top).toBeGreaterThanOrEqual(0)
+      expect(box.bottom).toBeLessThanOrEqual(box.viewport)
+
+      await $('[data-testid="field-group"]').click()
+      await $('[data-testid="new-group-option"]').click()
+      await $('[data-testid="field-new-group"]').waitForDisplayed()
+
+      await browser.keys(['Escape'])
+      await $('[data-testid="field-name"]').waitForExist({ reverse: true })
+    }
+    finally {
+      // A failed assertion must not leave the next test in a short window.
+      await browser.setWindowSize(restore.width, restore.height)
+    }
+  })
+
   it('groups connections into collapsible sections', async () => {
     await $('[data-testid="row-menu"]').click()
     await $('[data-testid="row-edit"]').click()

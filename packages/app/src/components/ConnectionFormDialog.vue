@@ -184,257 +184,261 @@ async function save() {
         </DialogDescription>
       </DialogHeader>
 
-      <form class="space-y-4" @submit.prevent="save">
-        <div v-if="!profile" class="flex gap-2">
-          <Input
-            v-model="importUrl"
-            data-testid="import-url"
-            placeholder="paste a postgres://, mysql://, redis:// or mongodb:// url to prefill"
-            class="font-mono text-xs"
-          />
-          <Button type="button" variant="secondary" :disabled="!importUrl" @click="applyUrl">
-            Fill
-          </Button>
-        </div>
-
-        <div class="grid grid-cols-[1fr_8rem] gap-3">
-          <div class="space-y-1.5">
-            <Label for="conn-name">Name</Label>
-            <Input id="conn-name" v-model="values.name" data-testid="field-name" placeholder="local dev" />
-            <p v-if="errors.name" class="text-xs text-destructive">
-              {{ errors.name }}
-            </p>
-          </div>
-          <div class="space-y-1.5">
-            <Label>Environment</Label>
-            <Select v-model="values.env">
-              <SelectTrigger data-testid="field-env" class="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="env in ENVS" :key="env" :value="env">
-                  {{ env }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div class="space-y-1.5">
-          <Label>Database engine</Label>
-          <Select v-model="engineChoice">
-            <SelectTrigger data-testid="field-kind" class="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="choice in ENGINE_CHOICES" :key="choice.id" :value="choice.id">
-                {{ choice.label }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div v-if="isSqlite" class="space-y-1.5">
-          <Label for="conn-path">Database file</Label>
-          <div class="flex gap-2">
+      <form @submit.prevent="save">
+        <!-- Conditional fields outgrow short windows: scrolling the fields keeps
+             every popover reachable and leaves the footer in place. -->
+        <div class="-mx-4 -mt-1 max-h-[65dvh] space-y-4 overflow-y-auto px-4 py-1">
+          <div v-if="!profile" class="flex gap-2">
             <Input
-              id="conn-path"
-              v-model="values.path"
-              data-testid="field-path"
+              v-model="importUrl"
+              data-testid="import-url"
+              placeholder="paste a postgres://, mysql://, redis:// or mongodb:// url to prefill"
               class="font-mono text-xs"
-              placeholder="/path/to/app.db"
             />
-            <Button type="button" variant="secondary" @click="browsePath">
-              Browse
+            <Button type="button" variant="secondary" :disabled="!importUrl" @click="applyUrl">
+              Fill
             </Button>
           </div>
-          <p v-if="errors.path" class="text-xs text-destructive">
-            {{ errors.path }}
-          </p>
-        </div>
 
-        <div v-if="!isSqlite" class="grid grid-cols-[1fr_8rem] gap-3">
-          <div class="space-y-1.5">
-            <Label for="conn-host">Host</Label>
-            <Input id="conn-host" v-model="values.host" data-testid="field-host" class="font-mono" />
-            <p v-if="errors.host" class="text-xs text-destructive">
-              {{ errors.host }}
-            </p>
+          <div class="grid grid-cols-[1fr_8rem] gap-3">
+            <div class="space-y-1.5">
+              <Label for="conn-name">Name</Label>
+              <Input id="conn-name" v-model="values.name" data-testid="field-name" placeholder="local dev" />
+              <p v-if="errors.name" class="text-xs text-destructive">
+                {{ errors.name }}
+              </p>
+            </div>
+            <div class="space-y-1.5">
+              <Label>Environment</Label>
+              <Select v-model="values.env">
+                <SelectTrigger data-testid="field-env" class="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="env in ENVS" :key="env" :value="env">
+                    {{ env }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <div class="space-y-1.5">
-            <Label for="conn-port">Port</Label>
-            <Input id="conn-port" v-model="values.port" data-testid="field-port" type="number" class="font-mono" />
-            <p v-if="errors.port" class="text-xs text-destructive">
-              {{ errors.port }}
-            </p>
-          </div>
-        </div>
 
-        <div v-if="isSqlServer" class="grid grid-cols-[1fr_8rem] gap-3">
           <div class="space-y-1.5">
-            <Label for="conn-database">Database</Label>
-            <Input id="conn-database" v-model="values.database" data-testid="field-database" class="font-mono" />
-            <p v-if="errors.database" class="text-xs text-destructive">
-              {{ errors.database }}
-            </p>
-          </div>
-          <div class="space-y-1.5">
-            <Label>SSL mode</Label>
-            <Select v-model="values.sslMode">
-              <SelectTrigger data-testid="field-ssl-mode" class="w-full">
+            <Label>Database engine</Label>
+            <Select v-model="engineChoice">
+              <SelectTrigger data-testid="field-kind" class="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem v-for="mode in SSL_MODES" :key="mode" :value="mode">
-                  {{ mode }}
+                <SelectItem v-for="choice in ENGINE_CHOICES" :key="choice.id" :value="choice.id">
+                  {{ choice.label }}
                 </SelectItem>
               </SelectContent>
             </Select>
           </div>
-        </div>
 
-        <div v-if="isMongo" class="grid grid-cols-2 gap-3">
-          <div class="space-y-1.5">
-            <Label for="conn-database">Database</Label>
+          <div v-if="isSqlite" class="space-y-1.5">
+            <Label for="conn-path">Database file</Label>
+            <div class="flex gap-2">
+              <Input
+                id="conn-path"
+                v-model="values.path"
+                data-testid="field-path"
+                class="font-mono text-xs"
+                placeholder="/path/to/app.db"
+              />
+              <Button type="button" variant="secondary" @click="browsePath">
+                Browse
+              </Button>
+            </div>
+            <p v-if="errors.path" class="text-xs text-destructive">
+              {{ errors.path }}
+            </p>
+          </div>
+
+          <div v-if="!isSqlite" class="grid grid-cols-[1fr_8rem] gap-3">
+            <div class="space-y-1.5">
+              <Label for="conn-host">Host</Label>
+              <Input id="conn-host" v-model="values.host" data-testid="field-host" class="font-mono" />
+              <p v-if="errors.host" class="text-xs text-destructive">
+                {{ errors.host }}
+              </p>
+            </div>
+            <div class="space-y-1.5">
+              <Label for="conn-port">Port</Label>
+              <Input id="conn-port" v-model="values.port" data-testid="field-port" type="number" class="font-mono" />
+              <p v-if="errors.port" class="text-xs text-destructive">
+                {{ errors.port }}
+              </p>
+            </div>
+          </div>
+
+          <div v-if="isSqlServer" class="grid grid-cols-[1fr_8rem] gap-3">
+            <div class="space-y-1.5">
+              <Label for="conn-database">Database</Label>
+              <Input id="conn-database" v-model="values.database" data-testid="field-database" class="font-mono" />
+              <p v-if="errors.database" class="text-xs text-destructive">
+                {{ errors.database }}
+              </p>
+            </div>
+            <div class="space-y-1.5">
+              <Label>SSL mode</Label>
+              <Select v-model="values.sslMode">
+                <SelectTrigger data-testid="field-ssl-mode" class="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="mode in SSL_MODES" :key="mode" :value="mode">
+                    {{ mode }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div v-if="isMongo" class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label for="conn-database">Database</Label>
+              <Input
+                id="conn-database"
+                v-model="values.database"
+                data-testid="field-database"
+                class="font-mono"
+                placeholder="optional"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <Label for="conn-auth-source">Auth source</Label>
+              <Input
+                id="conn-auth-source"
+                v-model="values.authSource"
+                data-testid="field-auth-source"
+                class="font-mono"
+                placeholder="admin"
+              />
+            </div>
+          </div>
+
+          <!-- The redis db lives in the workspace selector; a url prefill still carries it. -->
+          <div v-if="isRedis || isMongo" class="flex items-center gap-2">
+            <Switch id="conn-tls" v-model="values.tls" data-testid="field-tls" />
+            <Label for="conn-tls" class="cursor-pointer">{{ isRedis ? 'TLS (rediss)' : 'TLS' }}</Label>
+          </div>
+
+          <div v-if="values.sslMode === 'verify-full'" class="space-y-1.5">
+            <Label for="conn-ssl-root-cert">CA certificate</Label>
             <Input
-              id="conn-database"
-              v-model="values.database"
-              data-testid="field-database"
-              class="font-mono"
-              placeholder="optional"
+              id="conn-ssl-root-cert"
+              v-model="values.sslRootCert"
+              data-testid="field-ssl-root-cert"
+              class="font-mono text-xs"
+              placeholder="/path/to/ca.pem (empty = system trust store)"
             />
           </div>
-          <div class="space-y-1.5">
-            <Label for="conn-auth-source">Auth source</Label>
-            <Input
-              id="conn-auth-source"
-              v-model="values.authSource"
-              data-testid="field-auth-source"
-              class="font-mono"
-              placeholder="admin"
-            />
+
+          <div v-if="!isSqlite" class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label for="conn-user">User</Label>
+              <Input
+                id="conn-user"
+                v-model="values.user"
+                data-testid="field-user"
+                class="font-mono"
+                :placeholder="isRedis ? 'default (ACL user, optional)' : isMongo ? 'optional' : ''"
+              />
+              <p v-if="errors.user" class="text-xs text-destructive">
+                {{ errors.user }}
+              </p>
+            </div>
+            <div class="space-y-1.5">
+              <Label for="conn-password">Password</Label>
+              <Input
+                id="conn-password"
+                v-model="values.password"
+                data-testid="field-password"
+                type="password"
+                :placeholder="profile ? 'unchanged' : ''"
+              />
+            </div>
           </div>
-        </div>
 
-        <!-- The redis db lives in the workspace selector; a url prefill still carries it. -->
-        <div v-if="isRedis || isMongo" class="flex items-center gap-2">
-          <Switch id="conn-tls" v-model="values.tls" data-testid="field-tls" />
-          <Label for="conn-tls" class="cursor-pointer">{{ isRedis ? 'TLS (rediss)' : 'TLS' }}</Label>
-        </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label>Group</Label>
+              <Select v-model="groupChoice">
+                <SelectTrigger data-testid="field-group" class="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem :value="NO_GROUP">
+                    none
+                  </SelectItem>
+                  <SelectItem v-for="group in knownGroups" :key="group" :value="group">
+                    {{ group }}
+                  </SelectItem>
+                  <SelectItem :value="NEW_GROUP" data-testid="new-group-option">
+                    + new group
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                v-if="groupChoice === NEW_GROUP"
+                v-model="newGroup"
+                data-testid="field-new-group"
+                placeholder="group name"
+              />
+            </div>
+            <div v-if="!isSqlite" class="space-y-1.5">
+              <Label>SSH tunnel</Label>
+              <Select v-model="values.tunnelId">
+                <SelectTrigger data-testid="field-tunnel" class="w-full">
+                  <SelectValue placeholder="none" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem :value="NO_TUNNEL">
+                    none
+                  </SelectItem>
+                  <SelectItem v-for="tunnel in tunnels" :key="tunnel.id" :value="tunnel.id">
+                    {{ tunnel.name }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-        <div v-if="values.sslMode === 'verify-full'" class="space-y-1.5">
-          <Label for="conn-ssl-root-cert">CA certificate</Label>
-          <Input
-            id="conn-ssl-root-cert"
-            v-model="values.sslRootCert"
-            data-testid="field-ssl-root-cert"
+          <div class="space-y-1.5">
+            <Label>Agent access</Label>
+            <Select v-model="values.agentAccess">
+              <SelectTrigger data-testid="field-agent-access" class="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="access in AGENT_ACCESS_CHOICES"
+                  :key="access"
+                  :value="access"
+                  :data-testid="`agent-access-${access}`"
+                >
+                  {{ AGENT_ACCESS_LABELS[access] }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p class="text-xs text-muted-foreground">
+              What the MCP server may let agents do here. Off keeps this connection invisible to them.
+            </p>
+          </div>
+
+          <HostKeyTrustPanel />
+
+          <p
+            v-if="testResult"
+            data-testid="test-result"
             class="font-mono text-xs"
-            placeholder="/path/to/ca.pem (empty = system trust store)"
-          />
-        </div>
-
-        <div v-if="!isSqlite" class="grid grid-cols-2 gap-3">
-          <div class="space-y-1.5">
-            <Label for="conn-user">User</Label>
-            <Input
-              id="conn-user"
-              v-model="values.user"
-              data-testid="field-user"
-              class="font-mono"
-              :placeholder="isRedis ? 'default (ACL user, optional)' : isMongo ? 'optional' : ''"
-            />
-            <p v-if="errors.user" class="text-xs text-destructive">
-              {{ errors.user }}
-            </p>
-          </div>
-          <div class="space-y-1.5">
-            <Label for="conn-password">Password</Label>
-            <Input
-              id="conn-password"
-              v-model="values.password"
-              data-testid="field-password"
-              type="password"
-              :placeholder="profile ? 'unchanged' : ''"
-            />
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div class="space-y-1.5">
-            <Label>Group</Label>
-            <Select v-model="groupChoice">
-              <SelectTrigger data-testid="field-group" class="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem :value="NO_GROUP">
-                  none
-                </SelectItem>
-                <SelectItem v-for="group in knownGroups" :key="group" :value="group">
-                  {{ group }}
-                </SelectItem>
-                <SelectItem :value="NEW_GROUP" data-testid="new-group-option">
-                  + new group
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <Input
-              v-if="groupChoice === NEW_GROUP"
-              v-model="newGroup"
-              data-testid="field-new-group"
-              placeholder="group name"
-            />
-          </div>
-          <div v-if="!isSqlite" class="space-y-1.5">
-            <Label>SSH tunnel</Label>
-            <Select v-model="values.tunnelId">
-              <SelectTrigger data-testid="field-tunnel" class="w-full">
-                <SelectValue placeholder="none" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem :value="NO_TUNNEL">
-                  none
-                </SelectItem>
-                <SelectItem v-for="tunnel in tunnels" :key="tunnel.id" :value="tunnel.id">
-                  {{ tunnel.name }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div class="space-y-1.5">
-          <Label>Agent access</Label>
-          <Select v-model="values.agentAccess">
-            <SelectTrigger data-testid="field-agent-access" class="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem
-                v-for="access in AGENT_ACCESS_CHOICES"
-                :key="access"
-                :value="access"
-                :data-testid="`agent-access-${access}`"
-              >
-                {{ AGENT_ACCESS_LABELS[access] }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <p class="text-xs text-muted-foreground">
-            What the MCP server may let agents do here. Off keeps this connection invisible to them.
+            :class="testResult.ok ? 'text-emerald-500' : 'text-destructive'"
+          >
+            {{ testResult.message }}
           </p>
         </div>
-
-        <HostKeyTrustPanel />
-
-        <p
-          v-if="testResult"
-          data-testid="test-result"
-          class="font-mono text-xs"
-          :class="testResult.ok ? 'text-emerald-500' : 'text-destructive'"
-        >
-          {{ testResult.message }}
-        </p>
 
         <DialogFooter class="gap-2 sm:justify-between">
           <Button

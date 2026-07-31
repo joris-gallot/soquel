@@ -161,12 +161,26 @@ impl SqlQuery for SqliteConnection {
     let sql = sql.to_string();
     // A separate handle opened SQLITE_OPEN_READ_ONLY: file-level enforcement
     // that no SQL (PRAGMA included) can undo.
-    tokio::task::spawn_blocking(move || {
-      let mut conn = open_file_read_only(&path)?;
+    let conn = tokio::task::spawn_blocking(move || open_file_read_only(&path))
+      .await
+      .map_err(join_error)??;
+    // No statement_timeout in sqlite: a timer interrupts this handle only.
+    let interrupt = conn.get_interrupt_handle();
+    let timer = tokio::spawn(async move {
+      tokio::time::sleep(std::time::Duration::from_millis(
+        crate::connectors::AGENT_STATEMENT_TIMEOUT_MS.into(),
+      ))
+      .await;
+      interrupt.interrupt();
+    });
+    let result = tokio::task::spawn_blocking(move || {
+      let mut conn = conn;
       run_script(&mut conn, &sql)
     })
     .await
-    .map_err(join_error)?
+    .map_err(join_error)?;
+    timer.abort();
+    result
   }
 
   async fn cancel(&self) -> Result<(), Error> {

@@ -571,6 +571,15 @@ async fn read_only_query_blocks_writes() {
   };
   assert!(message.contains("readonly"), "{message}");
 
+  // The interrupt timer must not fire on a query that finished in time.
+  for _ in 0..3 {
+    let ok = connection
+      .run_read_only_query("SELECT count(*) FROM customers")
+      .await
+      .unwrap();
+    assert_eq!(ok.statements[0].rows[0][0].as_deref(), Some("3"));
+  }
+
   // The shared read-write handle is untouched.
   connection
     .run_query("INSERT INTO logs (message, level) VALUES ('still-writable', 'info')")

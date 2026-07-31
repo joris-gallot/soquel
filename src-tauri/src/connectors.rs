@@ -549,6 +549,9 @@ pub trait Connection: Send + Sync {
 /// Shared across SQL connectors.
 pub const POOL_MAX_SIZE: usize = 4;
 pub const CHUNK_ROWS: usize = 200;
+/// Ceiling on agent queries, enforced by the engine: a runaway agent must not
+/// hold a pooled connection forever. The UI stays uncapped (users can cancel).
+pub const AGENT_STATEMENT_TIMEOUT_MS: u32 = 30_000;
 
 /// First keyword of a statement, past whitespace, comments and opening parens.
 pub fn statement_head(sql: &str) -> String {

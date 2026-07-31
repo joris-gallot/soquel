@@ -24,6 +24,12 @@ echo "==> mysql oldest supported"
 SOQUEL_TEST_MYSQL=localhost:5462 \
   cargo test --manifest-path "$manifest" integration_mysql_
 
+echo "==> mcp agent surface (needs pg + redis + mongo)"
+SOQUEL_TEST_PG=postgres://soquel:soquel@localhost:5455/soquel_test \
+SOQUEL_TEST_REDIS=localhost:5457 \
+SOQUEL_TEST_MONGO=localhost:5464 \
+  cargo test --manifest-path "$manifest" integration_mcp_
+
 echo "==> mariadb (mysql kind)"
 SOQUEL_TEST_MYSQL=localhost:5463 \
   cargo test --manifest-path "$manifest" integration_mysql_

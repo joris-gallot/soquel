@@ -1414,6 +1414,15 @@ async fn integration_postgres_read_only_query() {
   };
   assert!(message.contains("multiple commands"), "{message}");
 
+  // The agent cap is armed inside the transaction, and gone once it ends.
+  let armed = pg
+    .run_read_only_query("SHOW statement_timeout")
+    .await
+    .unwrap();
+  assert_eq!(armed.statements[0].rows[0][0].as_deref(), Some("30s"));
+  let after = pg.run_query("SHOW statement_timeout").await.unwrap();
+  assert_ne!(after.statements[0].rows[0][0].as_deref(), Some("30s"));
+
   // The pooled connection comes back clean and writable for the app itself.
   pg.run_query("SELECT 1").await.unwrap();
   pg.run_query("UPDATE app.customers SET name = name WHERE id = 1")

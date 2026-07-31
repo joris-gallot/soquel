@@ -295,6 +295,72 @@ struct SampleArgs {
   offset: Option<u32>,
 }
 
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct KeyScanArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  /// Glob pattern, default "*".
+  pattern: Option<String>,
+  /// Continuation cursor from a previous page.
+  cursor: Option<String>,
+  /// Keys per page (default 100, capped at 500).
+  count: Option<u32>,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct KeyArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  key: String,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct DatabaseArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  database: String,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct CollectionArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  database: String,
+  collection: String,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct DocFindArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  database: String,
+  collection: String,
+  /// Extended JSON filter object, e.g. {"status": "paid"}.
+  filter: Option<String>,
+  /// Extended JSON sort object, e.g. {"createdAt": -1}.
+  sort: Option<String>,
+  /// Documents per page (default 20, capped at 500).
+  limit: Option<u32>,
+  /// Continuation cursor from a previous page.
+  cursor: Option<String>,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct DocCountArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  database: String,
+  collection: String,
+  /// Extended JSON filter; omit for the fast collection estimate.
+  filter: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentConnection {
@@ -489,9 +555,7 @@ async fn get_schema_impl(
   state: &AppState,
   args: &ConnectionArgs,
 ) -> Result<serde_json::Value, Error> {
-  opted_in(state, &args.connection_id)?;
-  ensure_connected(state, &args.connection_id).await?;
-  let connection = commands::active(state, &args.connection_id).await?;
+  let connection = agent_connection(state, &args.connection_id).await?;
   let introspect = connection.introspect().ok_or_else(|| Error::Unsupported {
     message: "this connection does not support schema introspection".to_string(),
   })?;
@@ -502,9 +566,7 @@ async fn get_table_ddl_impl(
   state: &AppState,
   args: &TableArgs,
 ) -> Result<serde_json::Value, Error> {
-  opted_in(state, &args.connection_id)?;
-  ensure_connected(state, &args.connection_id).await?;
-  let connection = commands::active(state, &args.connection_id).await?;
+  let connection = agent_connection(state, &args.connection_id).await?;
   let introspect = connection.introspect().ok_or_else(|| Error::Unsupported {
     message: "this connection does not support schema introspection".to_string(),
   })?;
@@ -518,8 +580,7 @@ async fn run_query_impl(
   args: &QueryArgs,
 ) -> Result<serde_json::Value, Error> {
   let profile = opted_in(state, &args.connection_id)?;
-  ensure_connected(state, &args.connection_id).await?;
-  let connection = commands::active(state, &args.connection_id).await?;
+  let connection = agent_connection(state, &args.connection_id).await?;
   let sql = connection.sql().ok_or_else(|| Error::Unsupported {
     message: "this connection does not support SQL".to_string(),
   })?;
@@ -548,9 +609,7 @@ async fn run_query_impl(
 }
 
 async fn sample_rows_impl(state: &AppState, args: &SampleArgs) -> Result<serde_json::Value, Error> {
-  opted_in(state, &args.connection_id)?;
-  ensure_connected(state, &args.connection_id).await?;
-  let connection = commands::active(state, &args.connection_id).await?;
+  let connection = agent_connection(state, &args.connection_id).await?;
   let sql = connection.sql().ok_or_else(|| Error::Unsupported {
     message: "this connection does not support table browsing".to_string(),
   })?;
@@ -565,6 +624,115 @@ async fn sample_rows_impl(state: &AppState, args: &SampleArgs) -> Result<serde_j
     include_xmin: false,
   };
   Ok(capped(sql.table_rows(&request).await?))
+}
+
+async fn agent_connection(
+  state: &AppState,
+  id: &str,
+) -> Result<Arc<dyn crate::connectors::Connection>, Error> {
+  opted_in(state, id)?;
+  ensure_connected(state, id).await?;
+  commands::active(state, id).await
+}
+
+async fn list_keys_impl(state: &AppState, args: &KeyScanArgs) -> Result<serde_json::Value, Error> {
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let kv = connection.kv().ok_or_else(|| Error::Unsupported {
+    message: "this connection is not a key-value store".to_string(),
+  })?;
+  let page = kv
+    .scan_keys(
+      args.pattern.as_deref().unwrap_or("*"),
+      args.cursor.as_deref(),
+      args.count.unwrap_or(100).min(MAX_AGENT_ROWS as u32),
+    )
+    .await?;
+  Ok(serde_json::to_value(page)?)
+}
+
+async fn get_key_impl(state: &AppState, args: &KeyArgs) -> Result<serde_json::Value, Error> {
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let kv = connection.kv().ok_or_else(|| Error::Unsupported {
+    message: "this connection is not a key-value store".to_string(),
+  })?;
+  Ok(serde_json::to_value(kv.key_detail(&args.key).await?)?)
+}
+
+/// Redis reports a database count, mongo a named list: both answer "where can
+/// I look" without the agent knowing the engine.
+async fn list_databases_impl(
+  state: &AppState,
+  args: &ConnectionArgs,
+) -> Result<serde_json::Value, Error> {
+  let connection = agent_connection(state, &args.connection_id).await?;
+  if let Some(doc) = connection.doc() {
+    return Ok(serde_json::to_value(doc.databases().await?)?);
+  }
+  if let Some(kv) = connection.kv() {
+    return Ok(serde_json::to_value(kv.databases().await?)?);
+  }
+  Err(Error::Unsupported {
+    message: "this connection has no databases to list; use get_schema".to_string(),
+  })
+}
+
+async fn list_collections_impl(
+  state: &AppState,
+  args: &DatabaseArgs,
+) -> Result<serde_json::Value, Error> {
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let doc = doc_surface(&connection)?;
+  Ok(serde_json::to_value(
+    doc.collections(&args.database).await?,
+  )?)
+}
+
+async fn find_documents_impl(
+  state: &AppState,
+  args: &DocFindArgs,
+) -> Result<serde_json::Value, Error> {
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let doc = doc_surface(&connection)?;
+  let request = crate::connectors::DocFindRequest {
+    db: args.database.clone(),
+    collection: args.collection.clone(),
+    filter: args.filter.clone(),
+    sort: args.sort.clone(),
+    limit: args.limit.unwrap_or(20).min(MAX_AGENT_ROWS as u32),
+    cursor: args.cursor.clone(),
+  };
+  Ok(serde_json::to_value(doc.find_docs(&request).await?)?)
+}
+
+async fn count_documents_impl(
+  state: &AppState,
+  args: &DocCountArgs,
+) -> Result<serde_json::Value, Error> {
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let doc = doc_surface(&connection)?;
+  let count = doc
+    .count_docs(&args.database, &args.collection, args.filter.as_deref())
+    .await?;
+  Ok(serde_json::to_value(count)?)
+}
+
+async fn list_indexes_impl(
+  state: &AppState,
+  args: &CollectionArgs,
+) -> Result<serde_json::Value, Error> {
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let doc = doc_surface(&connection)?;
+  Ok(serde_json::to_value(
+    doc.indexes(&args.database, &args.collection).await?,
+  )?)
+}
+
+fn doc_surface(
+  connection: &Arc<dyn crate::connectors::Connection>,
+) -> Result<&dyn crate::connectors::DocBrowse, Error> {
+  connection.doc().ok_or_else(|| Error::Unsupported {
+    message: "this connection is not a document store".to_string(),
+  })
 }
 
 #[tool_router]
@@ -665,6 +833,149 @@ impl SoquelMcp {
       "sample_rows",
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.schema, args.table)),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+  #[tool(
+    description = "List the databases a key-value or document connection exposes. SQL connections use get_schema instead."
+  )]
+  async fn list_databases(
+    &self,
+    Parameters(args): Parameters<ConnectionArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let outcome = list_databases_impl(&state, &args).await;
+    audit(
+      &state,
+      "list_databases",
+      Some(&args.connection_id),
+      None,
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(
+    description = "Scan keys on a Redis connection, paginated. Operates on the database the connection is on; agents cannot switch database."
+  )]
+  async fn list_keys(
+    &self,
+    Parameters(args): Parameters<KeyScanArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let outcome = list_keys_impl(&state, &args).await;
+    audit(
+      &state,
+      "list_keys",
+      Some(&args.connection_id),
+      args.pattern.as_deref(),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(description = "Read one Redis key: its type, TTL and value.")]
+  async fn get_key(
+    &self,
+    Parameters(args): Parameters<KeyArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let outcome = get_key_impl(&state, &args).await;
+    audit(
+      &state,
+      "get_key",
+      Some(&args.connection_id),
+      Some(&args.key),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(description = "List the collections of a MongoDB database.")]
+  async fn list_collections(
+    &self,
+    Parameters(args): Parameters<DatabaseArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let outcome = list_collections_impl(&state, &args).await;
+    audit(
+      &state,
+      "list_collections",
+      Some(&args.connection_id),
+      Some(&args.database),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(
+    description = "Find documents in a MongoDB collection with an optional extended-JSON filter and sort. Paginated."
+  )]
+  async fn find_documents(
+    &self,
+    Parameters(args): Parameters<DocFindArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let outcome = find_documents_impl(&state, &args).await;
+    audit(
+      &state,
+      "find_documents",
+      Some(&args.connection_id),
+      Some(&format!(
+        "{}.{} {}",
+        args.database,
+        args.collection,
+        args.filter.as_deref().unwrap_or("{}")
+      )),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(description = "Count documents in a MongoDB collection, with or without a filter.")]
+  async fn count_documents(
+    &self,
+    Parameters(args): Parameters<DocCountArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let outcome = count_documents_impl(&state, &args).await;
+    audit(
+      &state,
+      "count_documents",
+      Some(&args.connection_id),
+      Some(&format!("{}.{}", args.database, args.collection)),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(description = "List the indexes of a MongoDB collection.")]
+  async fn list_indexes(
+    &self,
+    Parameters(args): Parameters<CollectionArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let outcome = list_indexes_impl(&state, &args).await;
+    audit(
+      &state,
+      "list_indexes",
+      Some(&args.connection_id),
+      Some(&format!("{}.{}", args.database, args.collection)),
       &outcome,
       started,
     );
@@ -1355,6 +1666,221 @@ mod tests {
       Some("the write was not approved")
     );
     assert_eq!(audit_log(&state, 1).unwrap().len(), 1);
+  }
+
+  /// One opted-in profile against a non-SQL engine, keyed by its params.
+  async fn kind_state(dir: &tempfile::TempDir, params: ConnectorParams) -> (AppState, String) {
+    let mut profiles = ProfileStore::load(dir.path().join("connections.json")).unwrap();
+    let profile = profiles
+      .create(&ConnectionInput {
+        name: "agent target".to_string(),
+        env: Env::Dev,
+        group: None,
+        agent_access: AgentAccess::ReadOnly,
+        params,
+        password: None,
+      })
+      .unwrap();
+    let secrets = InMemoryStore::default();
+    secrets.set(&profile.id, "soquel").unwrap();
+    let state = AppState {
+      profiles: std::sync::Mutex::new(profiles),
+      tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
+      known_hosts: std::sync::Mutex::new(
+        KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
+      ),
+      secrets: Box::new(secrets),
+      connections: tokio::sync::Mutex::new(HashMap::new()),
+      sessions: tokio::sync::Mutex::new(HashMap::new()),
+      data_dir: dir.path().to_path_buf(),
+      mcp: tokio::sync::Mutex::new(None),
+      approvals: tokio::sync::Mutex::new(HashMap::new()),
+    };
+    (state, profile.id)
+  }
+
+  #[tokio::test]
+  async fn integration_mcp_kv_tools_read_redis() {
+    let Ok(addr) = std::env::var("SOQUEL_TEST_REDIS") else {
+      return;
+    };
+    let (host, port) = addr.split_once(':').expect("host:port");
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = kind_state(
+      &dir,
+      ConnectorParams::Redis(crate::profiles::RedisParams {
+        host: host.to_string(),
+        port: port.parse().unwrap(),
+        db: 0,
+        username: None,
+        tls: false,
+        tunnel_id: None,
+      }),
+    )
+    .await;
+
+    // Seed through the app's own surface, then read it back as an agent would.
+    let connection = agent_connection(&state, &id).await.unwrap();
+    connection
+      .kv()
+      .unwrap()
+      .set_string("soquel_test:mcp:key", "hello")
+      .await
+      .unwrap();
+
+    let databases = list_databases_impl(
+      &state,
+      &ConnectionArgs {
+        connection_id: id.clone(),
+      },
+    )
+    .await
+    .unwrap();
+    assert!(databases["total"].as_u64().unwrap() >= 1, "{databases}");
+
+    let page = list_keys_impl(
+      &state,
+      &KeyScanArgs {
+        connection_id: id.clone(),
+        pattern: Some("soquel_test:mcp:*".to_string()),
+        cursor: None,
+        count: None,
+      },
+    )
+    .await
+    .unwrap();
+    let names: Vec<&str> = page["keys"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|key| key["key"].as_str().unwrap())
+      .collect();
+    assert!(names.contains(&"soquel_test:mcp:key"), "{page}");
+
+    let detail = get_key_impl(
+      &state,
+      &KeyArgs {
+        connection_id: id.clone(),
+        key: "soquel_test:mcp:key".to_string(),
+      },
+    )
+    .await
+    .unwrap();
+    assert_eq!(detail["key"], "soquel_test:mcp:key");
+    assert_eq!(detail["value"]["kind"], "string");
+    assert_eq!(detail["value"]["value"], "hello");
+
+    // SQL tools refuse a key-value connection instead of half-working.
+    let err = get_schema_impl(
+      &state,
+      &ConnectionArgs {
+        connection_id: id.clone(),
+      },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, Error::Unsupported { .. }), "{err:?}");
+
+    connection
+      .kv()
+      .unwrap()
+      .delete_key("soquel_test:mcp:key")
+      .await
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn integration_mcp_doc_tools_read_mongo() {
+    let Ok(addr) = std::env::var("SOQUEL_TEST_MONGO") else {
+      return;
+    };
+    let (host, port) = addr.split_once(':').expect("host:port");
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = kind_state(
+      &dir,
+      ConnectorParams::Mongo(crate::profiles::MongoParams {
+        host: host.to_string(),
+        port: port.parse().unwrap(),
+        database: None,
+        username: Some("soquel".to_string()),
+        auth_source: None,
+        tls: false,
+        tunnel_id: None,
+      }),
+    )
+    .await;
+
+    // The compose mongo seeds soquel_e2e for the e2e spec; read that.
+    let databases = list_databases_impl(
+      &state,
+      &ConnectionArgs {
+        connection_id: id.clone(),
+      },
+    )
+    .await
+    .unwrap();
+    let names: Vec<&str> = databases
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|db| db["name"].as_str().unwrap())
+      .collect();
+    assert!(names.contains(&"soquel_e2e"), "{databases}");
+
+    let collections = list_collections_impl(
+      &state,
+      &DatabaseArgs {
+        connection_id: id.clone(),
+        database: "soquel_e2e".to_string(),
+      },
+    )
+    .await
+    .unwrap();
+    let collection = collections.as_array().unwrap()[0]["name"]
+      .as_str()
+      .unwrap()
+      .to_string();
+
+    let page = find_documents_impl(
+      &state,
+      &DocFindArgs {
+        connection_id: id.clone(),
+        database: "soquel_e2e".to_string(),
+        collection: collection.clone(),
+        filter: None,
+        sort: None,
+        limit: Some(3),
+        cursor: None,
+      },
+    )
+    .await
+    .unwrap();
+    assert!(!page["docs"].as_array().unwrap().is_empty(), "{page}");
+
+    let count = count_documents_impl(
+      &state,
+      &DocCountArgs {
+        connection_id: id.clone(),
+        database: "soquel_e2e".to_string(),
+        collection: collection.clone(),
+        filter: None,
+      },
+    )
+    .await
+    .unwrap();
+    assert!(count["count"].as_f64().unwrap() >= 1.0, "{count}");
+
+    let indexes = list_indexes_impl(
+      &state,
+      &CollectionArgs {
+        connection_id: id.clone(),
+        database: "soquel_e2e".to_string(),
+        collection,
+      },
+    )
+    .await
+    .unwrap();
+    assert!(!indexes.as_array().unwrap().is_empty(), "{indexes}");
   }
 
   #[tokio::test]

@@ -107,10 +107,17 @@ describe('mcp server', () => {
 
     const session = await handshake(token)
     const tools = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, token, session)
-    const names = tools.json.result.tools.map((tool: { name: string }) => tool.name)
+    const names: string[] = tools.json.result.tools.map((tool: { name: string }) => tool.name)
     expect(names).toContain('list_connections')
     expect(names).toContain('run_query')
     expect(names).toContain('get_schema')
+    expect(names).toContain('list_keys')
+    expect(names).toContain('find_documents')
+    // run_query is the only way in for a write, so it is the only path that can
+    // ask for approval. Nothing else may mutate.
+    const mutating = names.filter(name => /^(?:set|delete|replace|drop|insert|update)_/.test(name))
+    expect(mutating).toEqual([])
+    expect(names).not.toContain('run_command')
 
     const call = await mcpRequest({
       jsonrpc: '2.0',

@@ -120,6 +120,34 @@ pub struct MysqlConnection {
 }
 
 impl MysqlConnection {
+  /// MariaDB has no MAX_EXECUTION_TIME; its knob is max_statement_time, in seconds.
+  fn is_mariadb(&self) -> bool {
+    self
+      .server_version
+      .get()
+      .is_some_and(|version| version.contains("MariaDB"))
+  }
+
+  fn statement_timeout_sql(&self) -> String {
+    let ms = crate::connectors::AGENT_STATEMENT_TIMEOUT_MS;
+    if self.is_mariadb() {
+      format!(
+        "SET SESSION max_statement_time = {}",
+        f64::from(ms) / 1000.0
+      )
+    } else {
+      format!("SET SESSION MAX_EXECUTION_TIME = {ms}")
+    }
+  }
+
+  fn statement_timeout_reset(&self) -> &'static str {
+    if self.is_mariadb() {
+      "SET SESSION max_statement_time = DEFAULT"
+    } else {
+      "SET SESSION MAX_EXECUTION_TIME = DEFAULT"
+    }
+  }
+
   async fn open(opts: Opts) -> Result<Self, Error> {
     let pool = Pool::new(opts.clone());
     let connection = Self {
@@ -180,10 +208,15 @@ impl SqlQuery for MysqlConnection {
     let mut conn = self.pool.get_conn().await?;
     let _guard = self.active_threads.register(conn.id());
     conn.query_drop("START TRANSACTION READ ONLY").await?;
+    conn.query_drop(self.statement_timeout_sql()).await?;
     let result = run_script(&mut conn, sql).await;
-    let rollback = conn.query_drop("ROLLBACK").await;
+    // Session-scoped on a pooled connection: reset it before handing back.
+    let restored = conn
+      .query_drop("ROLLBACK")
+      .await
+      .and(conn.query_drop(self.statement_timeout_reset()).await);
     let result = result?;
-    rollback?;
+    restored?;
     Ok(result)
   }
 

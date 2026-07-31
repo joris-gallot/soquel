@@ -283,7 +283,14 @@ impl SqlQuery for PostgresConnection {
     // A failed prepare means multiple statements: over the simple protocol
     // `COMMIT; INSERT ...` would escape the read-only transaction.
     pg.client.prepare(sql).await?;
-    pg.client.batch_execute("BEGIN READ ONLY").await?;
+    // SET LOCAL: the cap dies with the transaction, so the pooled connection
+    // goes back unchanged.
+    pg.client
+      .batch_execute(&format!(
+        "BEGIN READ ONLY; SET LOCAL statement_timeout = {}",
+        crate::connectors::AGENT_STATEMENT_TIMEOUT_MS
+      ))
+      .await?;
     let result = run_script(&pg, sql).await;
     // Unconditional: a pooled connection must never keep a transaction open.
     let rollback = pg.client.batch_execute("ROLLBACK").await;

@@ -775,6 +775,33 @@ async fn integration_mysql_read_only_query() {
   };
   assert!(message.to_lowercase().contains("read only"), "{message}");
 
+  // The agent cap is armed for the query and reset before the connection goes
+  // back to the pool. MariaDB caps in seconds under a different name.
+  let mariadb = is_mariadb(connection.as_ref());
+  let knob = if mariadb {
+    "@@max_statement_time"
+  } else {
+    "@@MAX_EXECUTION_TIME"
+  };
+  let expected = if mariadb { "30" } else { "30000" };
+  let armed = sql
+    .run_read_only_query(&format!("SELECT {knob} AS cap"))
+    .await
+    .unwrap();
+  let reported = armed.statements[0].rows[0][0].clone().unwrap();
+  assert!(reported.starts_with(expected), "{reported}");
+  let after = sql
+    .run_query(&format!("SELECT {knob} AS cap"))
+    .await
+    .unwrap();
+  assert!(
+    !after.statements[0].rows[0][0]
+      .clone()
+      .unwrap()
+      .starts_with(expected),
+    "the cap leaked to the pool"
+  );
+
   // The pool stays writable for the app itself.
   sql
     .run_query("UPDATE customers SET name = name LIMIT 1")

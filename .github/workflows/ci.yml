@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - .gitignore
+      - README.md
+      - LICENSE
+  pull_request:
+    paths-ignore:
+      - .gitignore
+      - README.md
+      - LICENSE
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  TAURI_DEPS: libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Tauri system dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $TAURI_DEPS
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: src-tauri
+          shared-key: soquel
+
+      - name: Format
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+
+      # integration_* tests skip themselves without their SOQUEL_TEST_* env vars.
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # export_typescript_bindings just rewrote bindings.ts: fail if it was stale.
+      - name: Bindings up to date
+        run: git diff --exit-code packages/app/src/lib/bindings.ts
+
+  integration_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Tauri system dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $TAURI_DEPS
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: src-tauri
+          shared-key: soquel
+
+      - name: Start test databases
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Integration tests
+        run: bash scripts/test-integration.sh
+
+  e2e_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Install Tauri system dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $TAURI_DEPS webkit2gtk-driver xvfb
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: src-tauri
+          shared-key: soquel
+
+      - name: Cache tauri-driver
+        id: tauri-driver-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: ${{ runner.os }}-tauri-driver-v2
+
+      - name: Install tauri-driver
+        if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start test databases
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
+      # onPrepare builds the debug binary (rust-cache makes this incremental).
+      - name: E2E
+        run: xvfb-run --auto-servernum pnpm test:e2e
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-screenshots
+          path: packages/app/e2e/screenshots/
+          if-no-files-found: ignore

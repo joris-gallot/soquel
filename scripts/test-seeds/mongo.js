@@ -19,6 +19,10 @@ e2e.users.drop()
 e2e.users.insertMany(users)
 e2e.users.createIndex({ email: 1 }, { unique: true })
 
+// A view projecting _id away: documents lose their address (read-only in the UI).
+e2e.no_id.drop()
+e2e.createView('no_id', 'users', [{ $project: { _id: 0, name: 1, plan: 1 } }])
+
 // Delete-test fodder: the spec consumes one per run; reseeds on compose restart.
 e2e.disposable.drop()
 const disposable = []

@@ -44,12 +44,18 @@ describe('mongo workspace', () => {
     await $('[data-testid="collection-users"]').waitForExist()
     await $('[data-testid="collection-users"]').click()
     await $('[data-testid="doc-row-0"]').waitForExist()
-    // 200 seeded users, one page of 100: more to load.
-    await $('[data-testid="doc-more"]').waitForExist()
+    // 200 seeded users, one page of 100: the cursor continues once, then ends.
+    await $('[data-testid="doc-more"]').click()
+    await $('[data-testid="doc-row-100"]').waitForExist()
+    await $('[data-testid="doc-more"]').waitForExist({ reverse: true })
 
     // Half the seed is plan=pro; a filtered count is exact.
     await runFilter('{ "plan": "pro" }')
     await waitForText('[data-testid="doc-count"]', '100 docs')
+
+    // A broken filter reports inline, not as a toast.
+    await runFilter('{ nope')
+    await $('[data-testid="doc-filter-error"]').waitForExist()
   })
 
   it('opens a document and edits it through the canonical editor', async () => {
@@ -80,6 +86,15 @@ describe('mongo workspace', () => {
 
     await runFilter(`{ "_id": "${victim.trim()}" }`)
     await waitForText('[data-testid="doc-count"]', '0 docs')
+  })
+
+  it('shows view documents without _id as read-only', async () => {
+    await $('[data-testid="collection-no_id"]').click()
+    await $('[data-testid="doc-row-0"]').waitForExist()
+    await $('[data-testid="doc-row-0"]').click()
+    await waitForText('[data-testid="doc-detail"]', 'no _id on this document')
+    await $('[data-testid="edit-doc"]').waitForExist({ reverse: true })
+    await $('[data-testid="delete-doc"]').waitForExist({ reverse: true })
   })
 
   it('lists indexes and runs console queries', async () => {

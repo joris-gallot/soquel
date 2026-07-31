@@ -239,6 +239,132 @@ fn respond(outcome: Result<serde_json::Value, Error>) -> Result<CallToolResult, 
   }
 }
 
+fn opted_in(state: &AppState, id: &str) -> Result<ConnectionProfile, Error> {
+  let profile = state.profiles.lock().unwrap().get(id)?;
+  if profile.agent_access == AgentAccess::None {
+    // Indistinguishable from a missing connection on purpose.
+    return Err(Error::NotFound {
+      message: format!("connection {id} not found"),
+    });
+  }
+  Ok(profile)
+}
+
+async fn ensure_connected(state: &AppState, id: &str) -> Result<(), Error> {
+  if state.connections.lock().await.contains_key(id) {
+    return Ok(());
+  }
+  commands::connect_impl(state, id.to_string()).await
+}
+
+fn audit(
+  state: &AppState,
+  tool: &str,
+  connection: Option<&str>,
+  detail: Option<&str>,
+  outcome: &Result<serde_json::Value, Error>,
+  started: Instant,
+) {
+  let entry = serde_json::json!({
+    "ts": SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+    "tool": tool,
+    "connection": connection,
+    "detail": detail,
+    "ok": outcome.is_ok(),
+    "error": outcome.as_ref().err().map(|err| err.to_string()),
+    "durationMs": started.elapsed().as_secs_f64() * 1000.0,
+  });
+  let path = state.data_dir.join("mcp-audit.jsonl");
+  let written = std::fs::OpenOptions::new()
+    .create(true)
+    .append(true)
+    .open(&path)
+    .and_then(|mut file| writeln!(file, "{entry}"));
+  if let Err(err) = written {
+    log::warn!("mcp audit append failed: {err}");
+  }
+}
+
+async fn list_connections_impl(state: &AppState) -> Result<serde_json::Value, Error> {
+  let profiles = agent_visible(state.profiles.lock().unwrap().list());
+  let versions: HashMap<String, Option<String>> = {
+    let connections = state.connections.lock().await;
+    connections
+      .iter()
+      .map(|(id, active)| (id.clone(), active.connection.server_version()))
+      .collect()
+  };
+  let list: Vec<AgentConnection> = profiles
+    .into_iter()
+    .map(|profile| AgentConnection {
+      connected: versions.contains_key(&profile.id),
+      server_version: versions.get(&profile.id).cloned().flatten(),
+      kind: profile.params.kind(),
+      access: profile.agent_access,
+      id: profile.id,
+      name: profile.name,
+    })
+    .collect();
+  Ok(serde_json::to_value(list)?)
+}
+
+async fn get_schema_impl(
+  state: &AppState,
+  args: &ConnectionArgs,
+) -> Result<serde_json::Value, Error> {
+  opted_in(state, &args.connection_id)?;
+  ensure_connected(state, &args.connection_id).await?;
+  let connection = commands::active(state, &args.connection_id).await?;
+  let introspect = connection.introspect().ok_or_else(|| Error::Unsupported {
+    message: "this connection does not support schema introspection".to_string(),
+  })?;
+  Ok(serde_json::to_value(introspect.schema_snapshot().await?)?)
+}
+
+async fn get_table_ddl_impl(
+  state: &AppState,
+  args: &TableArgs,
+) -> Result<serde_json::Value, Error> {
+  opted_in(state, &args.connection_id)?;
+  ensure_connected(state, &args.connection_id).await?;
+  let connection = commands::active(state, &args.connection_id).await?;
+  let introspect = connection.introspect().ok_or_else(|| Error::Unsupported {
+    message: "this connection does not support schema introspection".to_string(),
+  })?;
+  let ddl = introspect.table_ddl(&args.schema, &args.table).await?;
+  Ok(serde_json::Value::String(ddl))
+}
+
+async fn run_query_impl(state: &AppState, args: &QueryArgs) -> Result<serde_json::Value, Error> {
+  opted_in(state, &args.connection_id)?;
+  ensure_connected(state, &args.connection_id).await?;
+  let connection = commands::active(state, &args.connection_id).await?;
+  let sql = connection.sql().ok_or_else(|| Error::Unsupported {
+    message: "this connection does not support SQL".to_string(),
+  })?;
+  Ok(capped(sql.run_read_only_query(&args.sql).await?))
+}
+
+async fn sample_rows_impl(state: &AppState, args: &SampleArgs) -> Result<serde_json::Value, Error> {
+  opted_in(state, &args.connection_id)?;
+  ensure_connected(state, &args.connection_id).await?;
+  let connection = commands::active(state, &args.connection_id).await?;
+  let sql = connection.sql().ok_or_else(|| Error::Unsupported {
+    message: "this connection does not support table browsing".to_string(),
+  })?;
+  let request = TableRowsRequest {
+    schema: args.schema.clone(),
+    table: args.table.clone(),
+    limit: Some(args.limit.unwrap_or(100).min(MAX_AGENT_ROWS as u32)),
+    offset: args.offset.unwrap_or(0),
+    sort: None,
+    filters: Vec::new(),
+    include_ctid: false,
+    include_xmin: false,
+  };
+  Ok(capped(sql.table_rows(&request).await?))
+}
+
 #[tool_router]
 impl SoquelMcp {
   pub fn new(app: AppHandle) -> Self {
@@ -249,84 +375,15 @@ impl SoquelMcp {
     self.app.state::<AppState>()
   }
 
-  fn opted_in(&self, id: &str) -> Result<ConnectionProfile, Error> {
-    let profile = self.state().profiles.lock().unwrap().get(id)?;
-    if profile.agent_access == AgentAccess::None {
-      // Indistinguishable from a missing connection on purpose.
-      return Err(Error::NotFound {
-        message: format!("connection {id} not found"),
-      });
-    }
-    Ok(profile)
-  }
-
-  async fn ensure_connected(&self, id: &str) -> Result<(), Error> {
-    if self.state().connections.lock().await.contains_key(id) {
-      return Ok(());
-    }
-    commands::connect(self.state(), id.to_string()).await
-  }
-
-  fn audit(
-    &self,
-    tool: &str,
-    connection: Option<&str>,
-    detail: Option<&str>,
-    outcome: &Result<serde_json::Value, Error>,
-    started: Instant,
-  ) {
-    let entry = serde_json::json!({
-      "ts": SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
-      "tool": tool,
-      "connection": connection,
-      "detail": detail,
-      "ok": outcome.is_ok(),
-      "error": outcome.as_ref().err().map(|err| err.to_string()),
-      "durationMs": started.elapsed().as_secs_f64() * 1000.0,
-    });
-    let path = self.state().data_dir.join("mcp-audit.jsonl");
-    let written = std::fs::OpenOptions::new()
-      .create(true)
-      .append(true)
-      .open(&path)
-      .and_then(|mut file| writeln!(file, "{entry}"));
-    if let Err(err) = written {
-      log::warn!("mcp audit append failed: {err}");
-    }
-  }
-
   #[tool(
     description = "List the database connections exposed to agents (opt-in per connection in the Soquel UI). Returns id, kind, access level and connected state."
   )]
   async fn list_connections(&self) -> Result<CallToolResult, McpError> {
     let started = Instant::now();
-    let outcome = self.list_connections_impl().await;
-    self.audit("list_connections", None, None, &outcome, started);
-    respond(outcome)
-  }
-
-  async fn list_connections_impl(&self) -> Result<serde_json::Value, Error> {
     let state = self.state();
-    let profiles = agent_visible(state.profiles.lock().unwrap().list());
-    let versions: HashMap<String, Option<String>> = {
-      let connections = state.connections.lock().await;
-      connections
-        .iter()
-        .map(|(id, active)| (id.clone(), active.connection.server_version()))
-        .collect()
-    };
-    let list: Vec<AgentConnection> = profiles
-      .into_iter()
-      .map(|profile| AgentConnection {
-        connected: versions.contains_key(&profile.id),
-        server_version: versions.get(&profile.id).cloned().flatten(),
-        kind: profile.params.kind(),
-        access: profile.agent_access,
-        id: profile.id,
-        name: profile.name,
-      })
-      .collect();
-    Ok(serde_json::to_value(list)?)
+    let outcome = list_connections_impl(&state).await;
+    audit(&state, "list_connections", None, None, &outcome, started);
+    respond(outcome)
   }
 
   #[tool(
@@ -337,8 +394,10 @@ impl SoquelMcp {
     Parameters(args): Parameters<ConnectionArgs>,
   ) -> Result<CallToolResult, McpError> {
     let started = Instant::now();
-    let outcome = self.get_schema_impl(&args).await;
-    self.audit(
+    let state = self.state();
+    let outcome = get_schema_impl(&state, &args).await;
+    audit(
+      &state,
       "get_schema",
       Some(&args.connection_id),
       None,
@@ -348,25 +407,16 @@ impl SoquelMcp {
     respond(outcome)
   }
 
-  async fn get_schema_impl(&self, args: &ConnectionArgs) -> Result<serde_json::Value, Error> {
-    self.opted_in(&args.connection_id)?;
-    self.ensure_connected(&args.connection_id).await?;
-    let state = self.state();
-    let connection = commands::active(&state, &args.connection_id).await?;
-    let introspect = connection.introspect().ok_or_else(|| Error::Unsupported {
-      message: "this connection does not support schema introspection".to_string(),
-    })?;
-    Ok(serde_json::to_value(introspect.schema_snapshot().await?)?)
-  }
-
   #[tool(description = "DDL of one table (CREATE TABLE and related statements).")]
   async fn get_table_ddl(
     &self,
     Parameters(args): Parameters<TableArgs>,
   ) -> Result<CallToolResult, McpError> {
     let started = Instant::now();
-    let outcome = self.get_table_ddl_impl(&args).await;
-    self.audit(
+    let state = self.state();
+    let outcome = get_table_ddl_impl(&state, &args).await;
+    audit(
+      &state,
       "get_table_ddl",
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.schema, args.table)),
@@ -374,18 +424,6 @@ impl SoquelMcp {
       started,
     );
     respond(outcome)
-  }
-
-  async fn get_table_ddl_impl(&self, args: &TableArgs) -> Result<serde_json::Value, Error> {
-    self.opted_in(&args.connection_id)?;
-    self.ensure_connected(&args.connection_id).await?;
-    let state = self.state();
-    let connection = commands::active(&state, &args.connection_id).await?;
-    let introspect = connection.introspect().ok_or_else(|| Error::Unsupported {
-      message: "this connection does not support schema introspection".to_string(),
-    })?;
-    let ddl = introspect.table_ddl(&args.schema, &args.table).await?;
-    Ok(serde_json::Value::String(ddl))
   }
 
   #[tool(
@@ -396,8 +434,10 @@ impl SoquelMcp {
     Parameters(args): Parameters<QueryArgs>,
   ) -> Result<CallToolResult, McpError> {
     let started = Instant::now();
-    let outcome = self.run_query_impl(&args).await;
-    self.audit(
+    let state = self.state();
+    let outcome = run_query_impl(&state, &args).await;
+    audit(
+      &state,
       "run_query",
       Some(&args.connection_id),
       Some(&args.sql),
@@ -407,25 +447,16 @@ impl SoquelMcp {
     respond(outcome)
   }
 
-  async fn run_query_impl(&self, args: &QueryArgs) -> Result<serde_json::Value, Error> {
-    self.opted_in(&args.connection_id)?;
-    self.ensure_connected(&args.connection_id).await?;
-    let state = self.state();
-    let connection = commands::active(&state, &args.connection_id).await?;
-    let sql = connection.sql().ok_or_else(|| Error::Unsupported {
-      message: "this connection does not support SQL".to_string(),
-    })?;
-    Ok(capped(sql.run_read_only_query(&args.sql).await?))
-  }
-
   #[tool(description = "Sample rows from a table without writing SQL. Paginated.")]
   async fn sample_rows(
     &self,
     Parameters(args): Parameters<SampleArgs>,
   ) -> Result<CallToolResult, McpError> {
     let started = Instant::now();
-    let outcome = self.sample_rows_impl(&args).await;
-    self.audit(
+    let state = self.state();
+    let outcome = sample_rows_impl(&state, &args).await;
+    audit(
+      &state,
       "sample_rows",
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.schema, args.table)),
@@ -433,27 +464,6 @@ impl SoquelMcp {
       started,
     );
     respond(outcome)
-  }
-
-  async fn sample_rows_impl(&self, args: &SampleArgs) -> Result<serde_json::Value, Error> {
-    self.opted_in(&args.connection_id)?;
-    self.ensure_connected(&args.connection_id).await?;
-    let state = self.state();
-    let connection = commands::active(&state, &args.connection_id).await?;
-    let sql = connection.sql().ok_or_else(|| Error::Unsupported {
-      message: "this connection does not support table browsing".to_string(),
-    })?;
-    let request = TableRowsRequest {
-      schema: args.schema.clone(),
-      table: args.table.clone(),
-      limit: Some(args.limit.unwrap_or(100).min(MAX_AGENT_ROWS as u32)),
-      offset: args.offset.unwrap_or(0),
-      sort: None,
-      filters: Vec::new(),
-      include_ctid: false,
-      include_xmin: false,
-    };
-    Ok(capped(sql.table_rows(&request).await?))
   }
 }
 
@@ -563,5 +573,251 @@ mod tests {
     assert_eq!(value["truncated"], true);
     let rows = value["result"]["statements"][0]["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 500);
+  }
+
+  use crate::known_hosts::KnownHostsStore;
+  use crate::profiles::{ConnectionInput, ProfileStore, SqlServerParams, SslMode};
+  use crate::secrets::SecretStore;
+  use crate::tunnels::TunnelStore;
+
+  fn pg_params(url: &str) -> ConnectorParams {
+    let config: tokio_postgres::Config = url.parse().unwrap();
+    let tokio_postgres::config::Host::Tcp(host) = &config.get_hosts()[0] else {
+      panic!("expected a tcp host");
+    };
+    ConnectorParams::Postgres(SqlServerParams {
+      host: host.clone(),
+      port: config.get_ports()[0],
+      database: config.get_dbname().unwrap().to_string(),
+      user: config.get_user().unwrap().to_string(),
+      ssl_mode: SslMode::Prefer,
+      ssl_root_cert: None,
+      tunnel_id: None,
+    })
+  }
+
+  /// Two profiles against the compose postgres: one opted in, one hidden.
+  fn test_state(dir: &tempfile::TempDir, url: &str) -> (AppState, String, String) {
+    let mut profiles = ProfileStore::load(dir.path().join("connections.json")).unwrap();
+    let opted = profiles
+      .create(&ConnectionInput {
+        name: "agent-visible".to_string(),
+        env: Env::Dev,
+        group: None,
+        agent_access: AgentAccess::ReadOnly,
+        params: pg_params(url),
+        password: None,
+      })
+      .unwrap();
+    let hidden = profiles
+      .create(&ConnectionInput {
+        name: "hidden".to_string(),
+        env: Env::Dev,
+        group: None,
+        agent_access: AgentAccess::None,
+        params: pg_params(url),
+        password: None,
+      })
+      .unwrap();
+    let secrets = InMemoryStore::default();
+    secrets.set(&opted.id, "soquel").unwrap();
+    secrets.set(&hidden.id, "soquel").unwrap();
+    let state = AppState {
+      profiles: std::sync::Mutex::new(profiles),
+      tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
+      known_hosts: std::sync::Mutex::new(
+        KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
+      ),
+      secrets: Box::new(secrets),
+      connections: tokio::sync::Mutex::new(HashMap::new()),
+      sessions: tokio::sync::Mutex::new(HashMap::new()),
+      data_dir: dir.path().to_path_buf(),
+      mcp: tokio::sync::Mutex::new(None),
+    };
+    (state, opted.id, hidden.id)
+  }
+
+  fn assert_hidden(outcome: Result<serde_json::Value, Error>, tool: &str) {
+    let Err(Error::NotFound { message }) = outcome else {
+      panic!("{tool} must not reach a non-opted-in profile");
+    };
+    assert!(message.contains("not found"), "{message}");
+  }
+
+  #[tokio::test]
+  async fn integration_mcp_opt_in_gates_every_tool() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
+      return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (state, opted, hidden) = test_state(&dir, &url);
+
+    let list = list_connections_impl(&state).await.unwrap();
+    let names: Vec<&str> = list
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|c| c["name"].as_str().unwrap())
+      .collect();
+    assert_eq!(names, ["agent-visible"]);
+
+    assert_hidden(
+      run_query_impl(
+        &state,
+        &QueryArgs {
+          connection_id: hidden.clone(),
+          sql: "SELECT 1".to_string(),
+        },
+      )
+      .await,
+      "run_query",
+    );
+    assert_hidden(
+      get_schema_impl(
+        &state,
+        &ConnectionArgs {
+          connection_id: hidden.clone(),
+        },
+      )
+      .await,
+      "get_schema",
+    );
+    assert_hidden(
+      get_table_ddl_impl(
+        &state,
+        &TableArgs {
+          connection_id: hidden.clone(),
+          schema: "app".to_string(),
+          table: "customers".to_string(),
+        },
+      )
+      .await,
+      "get_table_ddl",
+    );
+    assert_hidden(
+      sample_rows_impl(
+        &state,
+        &SampleArgs {
+          connection_id: hidden.clone(),
+          schema: "app".to_string(),
+          table: "customers".to_string(),
+          limit: None,
+          offset: None,
+        },
+      )
+      .await,
+      "sample_rows",
+    );
+    // Gating happens before any connection attempt.
+    assert!(state.connections.lock().await.is_empty());
+
+    // Same code path lets the opted-in profile through (auto-connect included).
+    let value = run_query_impl(
+      &state,
+      &QueryArgs {
+        connection_id: opted.clone(),
+        sql: "SELECT 1 AS one".to_string(),
+      },
+    )
+    .await
+    .unwrap();
+    assert_eq!(value["result"]["statements"][0]["rows"][0][0], "1");
+    assert!(state.connections.lock().await.contains_key(&opted));
+  }
+
+  #[tokio::test]
+  async fn integration_mcp_tools_read_only_capped_audited() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
+      return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (state, opted, _hidden) = test_state(&dir, &url);
+
+    let err = run_query_impl(
+      &state,
+      &QueryArgs {
+        connection_id: opted.clone(),
+        sql: "UPDATE app.customers SET name = name".to_string(),
+      },
+    )
+    .await
+    .unwrap_err();
+    let Error::Database { message } = err else {
+      panic!("expected a database error");
+    };
+    assert!(message.contains("read-only"), "{message}");
+
+    let value = run_query_impl(
+      &state,
+      &QueryArgs {
+        connection_id: opted.clone(),
+        sql: "SELECT generate_series(1, 600)".to_string(),
+      },
+    )
+    .await
+    .unwrap();
+    assert_eq!(value["truncated"], true);
+    let rows = value["result"]["statements"][0]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 500);
+
+    let schema = get_schema_impl(
+      &state,
+      &ConnectionArgs {
+        connection_id: opted.clone(),
+      },
+    )
+    .await
+    .unwrap();
+    assert!(
+      schema["schemas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["name"] == "app"),
+      "{schema}"
+    );
+
+    let ddl = get_table_ddl_impl(
+      &state,
+      &TableArgs {
+        connection_id: opted.clone(),
+        schema: "app".to_string(),
+        table: "customers".to_string(),
+      },
+    )
+    .await
+    .unwrap();
+    assert!(ddl.as_str().unwrap().contains("CREATE TABLE"), "{ddl}");
+
+    let sample = sample_rows_impl(
+      &state,
+      &SampleArgs {
+        connection_id: opted.clone(),
+        schema: "app".to_string(),
+        table: "customers".to_string(),
+        limit: Some(3),
+        offset: None,
+      },
+    )
+    .await
+    .unwrap();
+    let rows = sample["result"]["statements"][0]["rows"]
+      .as_array()
+      .unwrap();
+    assert_eq!(rows.len(), 3);
+
+    audit(
+      &state,
+      "run_query",
+      Some(&opted),
+      Some("SELECT 1"),
+      &Ok(serde_json::Value::Null),
+      Instant::now(),
+    );
+    let raw = std::fs::read_to_string(state.data_dir.join("mcp-audit.jsonl")).unwrap();
+    let entry: serde_json::Value = serde_json::from_str(raw.lines().last().unwrap()).unwrap();
+    assert_eq!(entry["tool"], "run_query");
+    assert_eq!(entry["ok"], true);
+    assert_eq!(entry["connection"].as_str().unwrap(), opted);
   }
 }

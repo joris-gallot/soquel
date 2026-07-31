@@ -22,7 +22,7 @@ fn tunnel_secret_id(tunnel_id: &str) -> String {
 /// Resolve a profile's tunnel (if any); the returned forward tells the
 /// connector where TCP actually goes while the profile keeps the logical host.
 async fn open_tunnel(
-  state: &State<'_, AppState>,
+  state: &AppState,
   profile: &ConnectionProfile,
 ) -> Result<Option<(SshTunnel, LocalForward)>, Error> {
   let Some(remote) = profile.params.remote() else {
@@ -106,9 +106,13 @@ pub async fn test_connection(
 #[tauri::command]
 #[specta::specta]
 pub async fn connect(state: State<'_, AppState>, id: String) -> Result<(), Error> {
+  connect_impl(state.inner(), id).await
+}
+
+pub(crate) async fn connect_impl(state: &AppState, id: String) -> Result<(), Error> {
   let profile = state.profiles.lock().unwrap().get(&id)?;
   let secret = state.secrets.get(&id)?;
-  let opened = open_tunnel(&state, &profile).await?;
+  let opened = open_tunnel(state, &profile).await?;
   let forward = opened.as_ref().map(|(_, f)| *f);
   let connection = connector_for(profile.params.kind())
     .connect(&profile, secret.as_deref(), forward)
@@ -382,10 +386,7 @@ fn introspect_surface(
 }
 
 // Clone the Arc out so queries never hold the map lock.
-pub(crate) async fn active(
-  state: &State<'_, AppState>,
-  id: &str,
-) -> Result<Arc<dyn Connection>, Error> {
+pub(crate) async fn active(state: &AppState, id: &str) -> Result<Arc<dyn Connection>, Error> {
   state
     .connections
     .lock()

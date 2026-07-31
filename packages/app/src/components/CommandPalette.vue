@@ -12,6 +12,7 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
+  CommandShortcut,
 } from '@/components/ui/command'
 import { useConnections } from '@/composables/useConnections'
 import { useTheme } from '@/composables/useTheme'
@@ -82,9 +83,11 @@ defineExpose({ open })
         >
           <Plug />
           <span>{{ profile.name }}</span>
-          <span class="ml-auto font-mono text-xs text-muted-foreground">
+          <!-- CommandShortcut: the slot CommandItem right-aligns, hiding its
+               trailing check icon that would otherwise split the free space. -->
+          <CommandShortcut class="font-mono tracking-normal">
             {{ connectionTarget(profile.params) }}
-          </span>
+          </CommandShortcut>
         </CommandItem>
       </CommandGroup>
       <CommandSeparator />

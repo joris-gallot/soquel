@@ -148,7 +148,8 @@ services:
       retries: 15
 
   mongo:
-    image: mongo:8
+    # 8.0 = the LTS major deployments actually run; the bare `8` tag tracks rapid releases.
+    image: mongo:8.0
     ports:
       - '5464:27017'
     environment:

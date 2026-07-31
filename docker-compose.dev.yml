@@ -53,7 +53,7 @@ services:
       retries: 15
 
   mongo:
-    image: mongo:8
+    image: mongo:8.0
     ports:
       - '5473:27017'
     environment:

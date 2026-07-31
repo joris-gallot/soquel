@@ -434,18 +434,32 @@ pub struct DialogApprover {
 #[async_trait::async_trait]
 impl Approver for DialogApprover {
   async fn request(&self, state: &AppState, request: McpApprovalRequest) -> bool {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
     let id = request.id.clone();
-    state.approvals.lock().await.insert(id.clone(), sender);
+    let receiver = register_approval(state, &id).await;
     if request.emit(&self.app).is_err() {
       state.approvals.lock().await.remove(&id);
       return false;
     }
-    let answer = tokio::time::timeout(APPROVAL_TIMEOUT, receiver).await;
-    // Timed out or the dialog vanished: drop the slot and refuse.
-    state.approvals.lock().await.remove(&id);
-    matches!(answer, Ok(Ok(true)))
+    await_approval(state, &id, receiver, APPROVAL_TIMEOUT).await
   }
+}
+
+async fn register_approval(state: &AppState, id: &str) -> tokio::sync::oneshot::Receiver<bool> {
+  let (sender, receiver) = tokio::sync::oneshot::channel();
+  state.approvals.lock().await.insert(id.to_string(), sender);
+  receiver
+}
+
+/// Anything other than an explicit yes refuses: timeout, closed dialog, no answer.
+async fn await_approval(
+  state: &AppState,
+  id: &str,
+  receiver: tokio::sync::oneshot::Receiver<bool>,
+  timeout: std::time::Duration,
+) -> bool {
+  let answer = tokio::time::timeout(timeout, receiver).await;
+  state.approvals.lock().await.remove(id);
+  matches!(answer, Ok(Ok(true)))
 }
 
 async fn list_connections_impl(state: &AppState) -> Result<serde_json::Value, Error> {
@@ -1152,6 +1166,152 @@ mod tests {
     // The slot is consumed: answering twice is a stale request.
     let err = resolve_approval(&state, "req-1", true).await.unwrap_err();
     assert!(matches!(err, Error::NotFound { .. }), "{err:?}");
+  }
+
+  #[tokio::test]
+  async fn silence_denies_the_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    let receiver = register_approval(&state, "req-quiet").await;
+
+    // Nobody answers: the default must be no, and the slot must not leak.
+    let approved = await_approval(
+      &state,
+      "req-quiet",
+      receiver,
+      std::time::Duration::from_millis(30),
+    )
+    .await;
+    assert!(!approved);
+    assert!(state.approvals.lock().await.is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_closed_dialog_denies_the_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    let receiver = register_approval(&state, "req-gone").await;
+    // Dropping the sender is what a vanished webview looks like.
+    state.approvals.lock().await.remove("req-gone");
+
+    assert!(
+      !await_approval(
+        &state,
+        "req-gone",
+        receiver,
+        std::time::Duration::from_secs(5)
+      )
+      .await
+    );
+  }
+
+  #[tokio::test]
+  async fn concurrent_requests_resolve_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    let first = register_approval(&state, "req-a").await;
+    let second = register_approval(&state, "req-b").await;
+
+    // Answering out of order must not cross the wires.
+    resolve_approval(&state, "req-b", true).await.unwrap();
+    resolve_approval(&state, "req-a", false).await.unwrap();
+
+    let timeout = std::time::Duration::from_secs(5);
+    assert!(!await_approval(&state, "req-a", first, timeout).await);
+    assert!(await_approval(&state, "req-b", second, timeout).await);
+    assert!(state.approvals.lock().await.is_empty());
+  }
+
+  /// Blocks until released, and records how many callers were inside at once.
+  struct CountingApprover {
+    inside: Arc<std::sync::atomic::AtomicUsize>,
+    peak: Arc<std::sync::atomic::AtomicUsize>,
+    release: Arc<tokio::sync::Notify>,
+  }
+
+  #[async_trait::async_trait]
+  impl Approver for CountingApprover {
+    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> bool {
+      use std::sync::atomic::Ordering;
+      let now = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
+      self.peak.fetch_max(now, Ordering::SeqCst);
+      self.release.notified().await;
+      self.inside.fetch_sub(1, Ordering::SeqCst);
+      true
+    }
+  }
+
+  fn sqlite_state(dir: &tempfile::TempDir) -> (AppState, String) {
+    let path = dir.path().join("agent.db");
+    std::fs::write(&path, "").unwrap();
+    let mut profiles = ProfileStore::load(dir.path().join("connections.json")).unwrap();
+    let profile = profiles
+      .create(&ConnectionInput {
+        name: "agent sqlite".to_string(),
+        env: Env::Dev,
+        group: None,
+        agent_access: AgentAccess::WriteWithApproval,
+        params: ConnectorParams::Sqlite {
+          path: path.to_string_lossy().into_owned(),
+        },
+        password: None,
+      })
+      .unwrap();
+    let state = AppState {
+      profiles: std::sync::Mutex::new(profiles),
+      tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
+      known_hosts: std::sync::Mutex::new(
+        KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
+      ),
+      secrets: Box::new(InMemoryStore::default()),
+      connections: tokio::sync::Mutex::new(HashMap::new()),
+      sessions: tokio::sync::Mutex::new(HashMap::new()),
+      data_dir: dir.path().to_path_buf(),
+      mcp: tokio::sync::Mutex::new(None),
+      approvals: tokio::sync::Mutex::new(HashMap::new()),
+    };
+    (state, profile.id)
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn two_writes_wait_on_approval_at_the_same_time() {
+    use std::sync::atomic::Ordering;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = sqlite_state(&dir);
+    let approver = CountingApprover {
+      inside: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+      peak: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+      release: Arc::new(tokio::sync::Notify::new()),
+    };
+    let first_args = QueryArgs {
+      connection_id: id.clone(),
+      sql: "CREATE TABLE one (id integer)".to_string(),
+    };
+    let second_args = QueryArgs {
+      connection_id: id.clone(),
+      sql: "CREATE TABLE two (id integer)".to_string(),
+    };
+
+    // Nothing in the request path may hold a lock across the approval await.
+    let both = tokio::join!(run_query_impl(&state, &approver, &first_args), async {
+      while approver.inside.load(Ordering::SeqCst) == 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+      }
+      let second = run_query_impl(&state, &approver, &second_args);
+      let releaser = async {
+        while approver.inside.load(Ordering::SeqCst) < 2 {
+          tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        approver.release.notify_waiters();
+        approver.release.notify_waiters();
+      };
+      let (result, ()) = tokio::join!(second, releaser);
+      result
+    });
+    assert_eq!(approver.peak.load(Ordering::SeqCst), 2);
+    both.0.unwrap();
+    both.1.unwrap();
   }
 
   #[tokio::test]

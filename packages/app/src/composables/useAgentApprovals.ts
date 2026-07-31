@@ -1,5 +1,6 @@
 import type { McpApprovalRequest } from '@/lib/bindings'
 import { computed, ref } from 'vue'
+import { toast } from 'vue-sonner'
 import { commands, events } from '@/lib/bindings'
 import { unwrap } from '@/lib/result'
 
@@ -23,12 +24,15 @@ export function useAgentApprovals() {
     const request = pending.value
     if (!request)
       return
-    queue.value = queue.value.slice(1)
-    // A request the core already timed out is gone: nothing left to answer.
+    queue.value = queue.value.filter(entry => entry.id !== request.id)
     try {
       unwrap(await commands.mcpResolveApproval(request.id, approved))
     }
-    catch {}
+    catch {
+      // The core timed the request out while the dialog was still up: say so,
+      // or an approved write looks like it ran.
+      toast.error('That request expired. The agent has to ask again.')
+    }
   }
 
   return { pending, queue, listen, resolve }

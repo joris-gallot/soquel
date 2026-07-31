@@ -34,6 +34,7 @@ export const config: WebdriverIO.Config = {
   // The webdriver session drives a built binary, not a dev server.
   onPrepare: () => {
     fs.rmSync(E2E_DATA_DIR, { recursive: true, force: true })
+    fs.mkdirSync(path.join(import.meta.dirname, 'e2e/screenshots'), { recursive: true })
     spawnSync('pnpm', ['tauri', 'build', '--debug', '--no-bundle'], {
       cwd: path.resolve(import.meta.dirname, '../..'),
       stdio: 'inherit',

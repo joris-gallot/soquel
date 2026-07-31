@@ -103,6 +103,11 @@ jobs:
           workspaces: src-tauri
           shared-key: soquel
 
+      # sshd StrictModes wants authorized_keys owned by root or the tunnel user (uid 1000);
+      # the runner checkout is uid 1001.
+      - name: Fix sshd mount ownership
+        run: sudo chown root:root scripts/test-ssh/authorized_keys
+
       - name: Start test databases
         run: docker compose -f docker-compose.test.yml up -d --wait
 
@@ -152,8 +157,9 @@ jobs:
         run: docker compose -f docker-compose.test.yml up -d --wait
 
       # onPrepare builds the debug binary (rust-cache makes this incremental).
+      # Default xvfb screen is 640x480: smaller than the app's minimum window size.
       - name: E2E
-        run: xvfb-run --auto-servernum pnpm test:e2e
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" pnpm test:e2e
 
       - name: Upload failure screenshots
         if: failure()

@@ -23,7 +23,14 @@ use crate::error::Error;
 use crate::profiles::{AgentAccess, ConnectionProfile, ConnectorKind};
 use crate::{commands, AppState};
 
-pub const DEFAULT_PORT: u16 = 52700;
+// Debug builds get their own port and agent-facing name, like the data dir
+// and keychain scope: dev and an installed release can run side by side.
+pub const DEFAULT_PORT: u16 = if cfg!(debug_assertions) { 52701 } else { 52700 };
+const SERVER_NAME: &str = if cfg!(debug_assertions) {
+  "soquel-dev"
+} else {
+  "soquel"
+};
 const TOKEN_SECRET_ID: &str = "soquel-mcp-token";
 /// Agents get capped result sets; the UI streams, agents paginate.
 const MAX_AGENT_ROWS: usize = 500;
@@ -88,6 +95,7 @@ pub struct McpStatus {
   pub port: u16,
   pub endpoint: String,
   pub token: String,
+  pub server_name: String,
 }
 
 fn new_token() -> String {
@@ -129,6 +137,7 @@ pub async fn status(state: &AppState) -> Result<McpStatus, Error> {
     port,
     endpoint: format!("http://127.0.0.1:{port}/mcp"),
     token: ensure_token(state.secrets.as_ref())?,
+    server_name: SERVER_NAME.to_string(),
   })
 }
 

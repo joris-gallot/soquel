@@ -1,7 +1,8 @@
 import { $, browser, expect } from '@wdio/globals'
 import { createSqliteConnection, deleteFirstConnection } from './helpers'
 
-const ENDPOINT = 'http://127.0.0.1:52700/mcp'
+// The e2e binary is a debug build: dev port, isolated from an installed app.
+const ENDPOINT = 'http://127.0.0.1:52701/mcp'
 
 /// Minimal streamable-HTTP MCP client: POST JSON-RPC, parse the SSE answer.
 async function mcpRequest(body: unknown, token: string, sessionId?: string) {

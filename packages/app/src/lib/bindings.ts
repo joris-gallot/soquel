@@ -291,6 +291,7 @@ export type McpStatus = {
 	port: number,
 	endpoint: string,
 	token: string,
+	serverName: string,
 };
 
 /**

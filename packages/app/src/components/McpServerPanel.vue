@@ -18,7 +18,7 @@ const exposedCount = computed(() =>
 function setupCommand(token: string) {
   if (!status.value)
     return ''
-  return `claude mcp add --transport http soquel ${status.value.endpoint} --header "Authorization: Bearer ${token}"`
+  return `claude mcp add --transport http ${status.value.serverName} ${status.value.endpoint} --header "Authorization: Bearer ${token}"`
 }
 
 const busy = ref(false)

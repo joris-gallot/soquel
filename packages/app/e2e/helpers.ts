@@ -46,13 +46,23 @@ export async function deleteFirstConnection() {
 }
 
 /// First displayed match: inactive tabs keep their panels mounted but hidden,
-/// so bare selectors can land on an invisible duplicate.
-export async function visible(selector: string) {
-  for (const element of await $$(selector)) {
-    if (await element.isDisplayed())
-      return element
-  }
-  throw new Error(`no visible element for ${selector}`)
+/// so bare selectors can land on an invisible duplicate. Waits, because a
+/// conditional field is mounted a frame after the click that reveals it.
+export async function visible(selector: string, timeout = 5000) {
+  let found: WebdriverIO.Element | undefined
+  await browser.waitUntil(
+    async () => {
+      for (const element of await $$(selector)) {
+        if (await element.isDisplayed()) {
+          found = element
+          return true
+        }
+      }
+      return false
+    },
+    { timeout, timeoutMsg: `no visible element for ${selector}` },
+  )
+  return found!
 }
 
 export async function clickVisible(selector: string) {

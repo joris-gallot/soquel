@@ -33,7 +33,6 @@ export const config: WebdriverIO.Config = {
 
   // The webdriver session drives a built binary, not a dev server.
   onPrepare: () => {
-    fs.rmSync(E2E_DATA_DIR, { recursive: true, force: true })
     fs.mkdirSync(path.join(import.meta.dirname, 'e2e/screenshots'), { recursive: true })
     spawnSync('pnpm', ['tauri', 'build', '--debug', '--no-bundle'], {
       cwd: path.resolve(import.meta.dirname, '../..'),
@@ -42,6 +41,9 @@ export const config: WebdriverIO.Config = {
   },
 
   beforeSession: () => {
+    // Per spec, not per run: every spec starts from an empty connection list,
+    // so one failing spec must not leave a connection behind and fail the rest.
+    fs.rmSync(E2E_DATA_DIR, { recursive: true, force: true })
     tauriDriver = spawn(path.resolve(os.homedir(), '.cargo/bin/tauri-driver'), [], {
       stdio: [null, process.stdout, process.stderr],
     })

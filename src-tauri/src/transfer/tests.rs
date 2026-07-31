@@ -4,10 +4,14 @@ use std::path::PathBuf;
 use super::*;
 use crate::known_hosts::KnownHostsStore;
 use crate::profiles::{ConnectionInput, ProfileStore, RedisParams, SqlServerParams, SslMode};
-use crate::secrets::InMemoryStore;
+use crate::secrets::{InMemoryStore, SecretStore};
 use crate::tunnels::{TunnelInput, TunnelStore};
 
 fn app_state(dir: &tempfile::TempDir) -> AppState {
+  app_state_with(dir, Box::new(InMemoryStore::default()))
+}
+
+fn app_state_with(dir: &tempfile::TempDir, secrets: Box<dyn SecretStore>) -> AppState {
   AppState {
     profiles: std::sync::Mutex::new(
       ProfileStore::load(dir.path().join("connections.json")).unwrap(),
@@ -16,7 +20,7 @@ fn app_state(dir: &tempfile::TempDir) -> AppState {
     known_hosts: std::sync::Mutex::new(
       KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
     ),
-    secrets: Box::new(InMemoryStore::default()),
+    secrets,
     connections: tokio::sync::Mutex::new(HashMap::new()),
     sessions: tokio::sync::Mutex::new(HashMap::new()),
     data_dir: dir.path().to_path_buf(),
@@ -518,4 +522,168 @@ fn a_sqlite_only_export_needs_no_tunnel() {
   let imported = &receiver.profiles.lock().unwrap().list()[0];
   assert_eq!(target(&imported.params), "/tmp/app.db");
   assert_eq!(imported.agent_access, AgentAccess::None);
+}
+
+/// A keychain that goes away partway through: writes past `allowed` fail.
+struct FlakySecrets {
+  inner: InMemoryStore,
+  allowed: usize,
+  writes: std::sync::Mutex<usize>,
+}
+
+impl SecretStore for FlakySecrets {
+  fn set(&self, id: &str, secret: &str) -> Result<(), Error> {
+    let mut writes = self.writes.lock().unwrap();
+    *writes += 1;
+    if *writes > self.allowed {
+      return Err(Error::Secret {
+        message: "keychain: locked".to_string(),
+      });
+    }
+    self.inner.set(id, secret)
+  }
+
+  fn get(&self, id: &str) -> Result<Option<String>, Error> {
+    self.inner.get(id)
+  }
+
+  fn delete(&self, id: &str) -> Result<(), Error> {
+    self.inner.delete(id)
+  }
+}
+
+#[test]
+fn a_keychain_that_refuses_midway_unwinds_both_stores() {
+  let source_dir = tempfile::tempdir().unwrap();
+  let (source, _) = seeded(&source_dir);
+  let path = out(&source_dir);
+  export(&source, &path, true, Some("pass")).unwrap();
+
+  // The tunnel secret lands, the connection secret does not.
+  let target_dir = tempfile::tempdir().unwrap();
+  let target = app_state_with(
+    &target_dir,
+    Box::new(FlakySecrets {
+      inner: InMemoryStore::default(),
+      allowed: 1,
+      writes: Default::default(),
+    }),
+  );
+  let kept = target
+    .profiles
+    .lock()
+    .unwrap()
+    .create(&ConnectionInput {
+      name: "already here".to_string(),
+      env: Env::Dev,
+      group: None,
+      agent_access: AgentAccess::None,
+      params: ConnectorParams::Sqlite {
+        path: "/tmp/kept.db".to_string(),
+      },
+      password: None,
+    })
+    .unwrap();
+
+  let err = import_file(&target, &path, Some("pass"), DuplicateStrategy::Skip).unwrap_err();
+  assert!(matches!(err, Error::Secret { .. }), "{err:?}");
+
+  // What was here before is still here, untouched, and nothing new stuck.
+  let profiles = target.profiles.lock().unwrap().list();
+  assert_eq!(profiles.len(), 1);
+  assert_eq!(profiles[0].id, kept.id);
+  assert!(target.tunnels.lock().unwrap().list().is_empty());
+  // The rolled-back file on disk agrees with the in-memory store.
+  let reloaded = ProfileStore::load(target_dir.path().join("connections.json")).unwrap();
+  assert_eq!(reloaded.list().len(), 1);
+  assert!(TunnelStore::load(target_dir.path().join("tunnels.json"))
+    .unwrap()
+    .list()
+    .is_empty());
+}
+
+#[test]
+fn the_preview_never_carries_a_secret_across_the_ipc_boundary() {
+  let source_dir = tempfile::tempdir().unwrap();
+  let (source, _) = seeded(&source_dir);
+  let path = out(&source_dir);
+  export(&source, &path, true, Some("pass")).unwrap();
+
+  let target_dir = tempfile::tempdir().unwrap();
+  let target = app_state(&target_dir);
+  let preview = preview_file(&target, &path, Some("pass")).unwrap();
+  let serialized = serde_json::to_string(&preview).unwrap();
+  assert!(!serialized.contains("pg-password"), "{serialized}");
+  assert!(!serialized.contains("key-passphrase"), "{serialized}");
+  assert!(serialized.contains(r#""hasSecret":true"#), "{serialized}");
+}
+
+#[test]
+fn connections_sharing_one_tunnel_land_on_one_tunnel() {
+  let dir = tempfile::tempdir().unwrap();
+  let state = app_state(&dir);
+  let path = out(&dir);
+  std::fs::write(
+    &path,
+    r#"{
+      "soquel": "soquel-connections",
+      "version": 1,
+      "document": {
+        "connections": [
+          {"name": "one", "env": "dev", "params": {
+            "kind": "postgres", "host": "db", "port": 5432, "database": "app",
+            "user": "soquel", "tunnelId": "t1"}},
+          {"name": "two", "env": "prod", "params": {
+            "kind": "mysql", "host": "db", "port": 3306, "database": "app",
+            "user": "soquel", "tunnelId": "t1"}}
+        ],
+        "tunnels": [{"id": "t1", "name": "bastion", "host": "b.internal",
+          "port": 22, "user": "deploy", "auth": {"method": "agent"}}]
+      }
+    }"#,
+  )
+  .unwrap();
+
+  let outcome = import_file(&state, &path, None, DuplicateStrategy::Skip).unwrap();
+  assert_eq!(outcome.created, 2);
+  assert_eq!(outcome.tunnels_created, 1);
+  let tunnels = state.tunnels.lock().unwrap().list();
+  assert_eq!(tunnels.len(), 1);
+  let profiles = state.profiles.lock().unwrap().list();
+  for profile in &profiles {
+    assert_eq!(
+      profile.params.remote().unwrap().tunnel_id,
+      Some(tunnels[0].id.as_str()),
+      "{} lost the shared tunnel",
+      profile.name
+    );
+  }
+}
+
+#[test]
+fn a_file_that_is_half_new_replaces_and_creates_in_one_pass() {
+  let dir = tempfile::tempdir().unwrap();
+  let (state, _) = seeded(&dir);
+  let path = out(&dir);
+  export(&state, &path, false, None).unwrap();
+  let cache_id = state
+    .profiles
+    .lock()
+    .unwrap()
+    .list()
+    .into_iter()
+    .find(|profile| profile.name == "cache")
+    .unwrap()
+    .id;
+  state.profiles.lock().unwrap().delete(&cache_id).unwrap();
+
+  let outcome = import_file(&state, &path, None, DuplicateStrategy::Replace).unwrap();
+  assert_eq!(outcome.replaced, 1);
+  assert_eq!(outcome.created, 1);
+  assert_eq!(outcome.tunnels_created, 0);
+  let profiles = state.profiles.lock().unwrap().list();
+  assert_eq!(profiles.len(), 2);
+  // The recreated one is a new profile, the replaced one kept its identity.
+  assert!(profiles.iter().any(|profile| profile.name == "cache"));
+  assert!(profiles.iter().all(|profile| profile.id != cache_id));
 }

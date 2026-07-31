@@ -5,7 +5,6 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
-	ping: () => typedError<string, Error>(__TAURI_INVOKE("ping")),
 	connectorCapabilities: (kind: ConnectorKind) => typedError<Capability[], Error>(__TAURI_INVOKE("connector_capabilities", { kind })),
 	listConnections: () => typedError<ConnectionProfile[], Error>(__TAURI_INVOKE("list_connections")),
 	getConnection: (id: string) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("get_connection", { id })),

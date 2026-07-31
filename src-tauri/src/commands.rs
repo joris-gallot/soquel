@@ -58,12 +58,6 @@ async fn open_tunnel(
 
 #[tauri::command]
 #[specta::specta]
-pub fn ping() -> Result<String, Error> {
-  Ok("pong".to_string())
-}
-
-#[tauri::command]
-#[specta::specta]
 pub fn connector_capabilities(kind: ConnectorKind) -> Result<Vec<Capability>, Error> {
   Ok(connector_for(kind).capabilities().to_vec())
 }

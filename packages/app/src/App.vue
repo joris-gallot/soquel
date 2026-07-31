@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Moon, Sun } from '@lucide/vue'
+import { getVersion } from '@tauri-apps/api/app'
 import { useAsyncState } from '@vueuse/core'
 import { TooltipProvider } from 'reka-ui'
 import { ref } from 'vue'
@@ -8,16 +9,12 @@ import HostKeyDialog from '@/components/HostKeyDialog.vue'
 import McpApprovalDialog from '@/components/McpApprovalDialog.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { useTheme } from '@/composables/useTheme'
-import { commands } from '@/lib/bindings'
 
 const { mode, toggle } = useTheme()
 
 const palette = ref<InstanceType<typeof CommandPalette> | null>(null)
 
-const { state: pong, isLoading } = useAsyncState(async () => {
-  const result = await commands.ping()
-  return result.status === 'ok' ? result.data : null
-}, null)
+const { state: version } = useAsyncState(getVersion, '')
 </script>
 
 <template>
@@ -30,12 +27,7 @@ const { state: pong, isLoading } = useAsyncState(async () => {
         </RouterView>
       </div>
       <footer class="flex items-center gap-2 border-t px-4 py-1 font-mono text-[11px] text-muted-foreground">
-        <span
-          class="inline-block size-1.5 rounded-full"
-          :class="pong ? 'bg-[oklch(0.72_0.11_240)]' : 'bg-muted-foreground/40'"
-          aria-hidden="true"
-        />
-        <span data-testid="core-status">core {{ pong ?? (isLoading ? 'connecting' : 'not connected') }}</span>
+        <span data-testid="app-version">soquel {{ version }}</span>
         <span class="flex-1" />
         <button
           type="button"

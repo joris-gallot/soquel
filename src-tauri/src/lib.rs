@@ -53,7 +53,6 @@ pub struct AppState {
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
   tauri_specta::Builder::new()
     .commands(tauri_specta::collect_commands![
-      commands::ping,
       commands::connector_capabilities,
       commands::list_connections,
       commands::get_connection,

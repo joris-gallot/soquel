@@ -1,9 +1,20 @@
-import type { ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams, Env, SslMode } from '@/lib/bindings'
+import type { AgentAccess, ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams, Env, SslMode } from '@/lib/bindings'
 import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
 
 export const KINDS = ['postgres', 'mysql', 'sqlite', 'redis', 'mongo'] as const satisfies readonly ConnectorKind[]
+
+export const AGENT_ACCESS = ['none', 'read-only', 'write-with-approval'] as const satisfies readonly AgentAccess[]
+
+// The form offers write-with-approval once the approval dialog ships.
+export const AGENT_ACCESS_CHOICES = ['none', 'read-only'] as const satisfies readonly AgentAccess[]
+
+export const AGENT_ACCESS_LABELS: Record<AgentAccess, string> = {
+  'none': 'Off',
+  'read-only': 'Read-only',
+  'write-with-approval': 'Writes need approval',
+}
 
 export const KIND_META: Record<ConnectorKind, {
   label: string
@@ -99,6 +110,7 @@ export const connectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   env: z.enum(ENVS),
   kind: z.enum(KINDS),
+  agentAccess: z.enum(AGENT_ACCESS),
   host: z.string(),
   port: z.coerce.number().int('Port must be a whole number').min(0).max(65535, 'Port must be below 65536'),
   database: z.string(),
@@ -137,6 +149,7 @@ export interface ConnectionFormValues {
   name: string
   env: Env
   kind: ConnectorKind
+  agentAccess: AgentAccess
   host: string
   // Bound to a text input: coerced by the schema on submit.
   port: number | string
@@ -160,6 +173,7 @@ export function toConnectionInput(values: z.output<typeof connectionSchema>): Co
     name: values.name,
     env: values.env,
     group: values.group.trim() === '' ? null : values.group.trim(),
+    agentAccess: values.agentAccess,
     password: values.password === '' ? null : values.password,
   }
   if (values.kind === 'sqlite')
@@ -221,6 +235,7 @@ export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFor
     env: profile.env,
     kind: params.kind,
     group: profile.group ?? '',
+    agentAccess: profile.agentAccess ?? 'none',
     password: '',
   }
   const defaults = {

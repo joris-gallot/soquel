@@ -26,7 +26,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { connectionSchema, ENGINE_CHOICES, engineChoiceForKind, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { AGENT_ACCESS_CHOICES, AGENT_ACCESS_LABELS, connectionSchema, ENGINE_CHOICES, engineChoiceForKind, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -53,7 +53,7 @@ function groupValue(): string {
 }
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', path: '', dbIndex: 0, tls: false, authSource: '' }
+  return { name: '', env: 'dev', kind: 'postgres', agentAccess: 'none', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', path: '', dbIndex: 0, tls: false, authSource: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -401,6 +401,28 @@ async function save() {
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        <div class="space-y-1.5">
+          <Label>Agent access</Label>
+          <Select v-model="values.agentAccess">
+            <SelectTrigger data-testid="field-agent-access" class="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                v-for="access in AGENT_ACCESS_CHOICES"
+                :key="access"
+                :value="access"
+                :data-testid="`agent-access-${access}`"
+              >
+                {{ AGENT_ACCESS_LABELS[access] }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-muted-foreground">
+            What the MCP server may let agents do here. Off keeps this connection invisible to them.
+          </p>
         </div>
 
         <HostKeyTrustPanel />

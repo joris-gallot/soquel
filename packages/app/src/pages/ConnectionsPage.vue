@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { ConnectionProfile, TunnelProfile } from '@/lib/bindings'
-import { Cable, ChevronDown, ChevronRight, MoreHorizontal, Plug, Plus, Unplug } from '@lucide/vue'
+import { Bot, Cable, ChevronDown, ChevronRight, MoreHorizontal, Plug, Plus, Unplug } from '@lucide/vue'
 import { useLocalStorage } from '@vueuse/core'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import ConnectionFormDialog from '@/components/ConnectionFormDialog.vue'
+import McpServerPanel from '@/components/McpServerPanel.vue'
 import TunnelFormDialog from '@/components/TunnelFormDialog.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -185,6 +186,15 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
                   <Badge variant="outline" class="font-mono text-[10px]" :class="ENV_BADGE_CLASSES[profile.env]">
                     {{ profile.env }}
                   </Badge>
+                  <Badge
+                    v-if="(profile.agentAccess ?? 'none') !== 'none'"
+                    variant="outline"
+                    class="gap-1 font-mono text-[10px]"
+                    data-testid="agent-badge"
+                  >
+                    <Bot class="size-2.5" />
+                    agent
+                  </Badge>
                 </div>
                 <p class="truncate font-mono text-xs text-muted-foreground">
                   {{ connectionDsn(profile.params) }}
@@ -275,6 +285,8 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
         </li>
       </ul>
     </section>
+
+    <McpServerPanel />
 
     <ConnectionFormDialog v-model:open="formOpen" :profile="editing" />
     <TunnelFormDialog v-model:open="tunnelFormOpen" :tunnel="editingTunnel" />

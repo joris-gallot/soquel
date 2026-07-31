@@ -139,6 +139,13 @@ describe('formValuesFromProfile', () => {
     expect(values.sslRootCert).toBe('')
     expect(values.group).toBe('')
   })
+
+  it('carries agent access into the input; pre-field profiles read as off', () => {
+    const values = formValuesFromProfile(profile('bare', null))
+    expect(values.agentAccess).toBe('none')
+    const input = toConnectionInput(connectionSchema.parse({ ...values, agentAccess: 'read-only' }))
+    expect(input.agentAccess).toBe('read-only')
+  })
 })
 
 describe('serverBadge', () => {
@@ -170,6 +177,7 @@ describe('connectionSchema', () => {
     name: 'local',
     env: 'dev',
     kind: 'postgres',
+    agentAccess: 'none',
     host: 'localhost',
     port: '5432',
     database: 'app',

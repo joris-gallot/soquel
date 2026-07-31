@@ -13,3 +13,7 @@ pnpm dev:app    # vite only, webview in a browser
 ```
 
 See `AGENTS.md` for the full command list and architecture rules.
+
+## License
+
+[FSL-1.1-MIT](LICENSE). Source available: use it, read it, build it for yourself.

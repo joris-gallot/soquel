@@ -390,7 +390,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
         auto-save-id="soquel-docs"
         class="min-h-0 flex-1"
       >
-        <ResizablePanel id="doc-list" :default-size="38" :min-size="20" :max-size="60">
+        <ResizablePanel id="doc-list" class="flex min-w-0 flex-col" :default-size="38" :min-size="20" :max-size="60">
           <DocList
             ref="docList"
             :connection-id="id"
@@ -401,7 +401,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           />
         </ResizablePanel>
         <ResizableHandle with-handle />
-        <ResizablePanel id="doc-detail">
+        <ResizablePanel id="doc-detail" class="flex min-w-0 flex-col">
           <DocDetailPanel
             :connection-id="id"
             :db="docDb"

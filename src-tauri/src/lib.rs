@@ -15,6 +15,7 @@ mod connectors;
 mod error;
 mod export;
 mod known_hosts;
+mod mcp;
 mod mongo;
 mod mysql;
 mod postgres;
@@ -43,6 +44,8 @@ pub struct AppState {
   pub secrets: Box<dyn SecretStore>,
   pub connections: tokio::sync::Mutex<HashMap<String, ActiveConnection>>,
   pub sessions: tokio::sync::Mutex<HashMap<String, SessionEntry>>,
+  pub data_dir: std::path::PathBuf,
+  pub mcp: tokio::sync::Mutex<Option<mcp::McpRunning>>,
 }
 
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
@@ -99,6 +102,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::test_tunnel,
       commands::default_ssh_keys,
       commands::trust_host_key,
+      commands::mcp_status,
+      commands::mcp_start,
+      commands::mcp_stop,
+      commands::mcp_regenerate_token,
     ])
     .error_handling(tauri_specta::ErrorHandlingMode::Result)
 }
@@ -156,6 +163,8 @@ pub fn run() {
         secrets,
         connections: tokio::sync::Mutex::new(HashMap::new()),
         sessions: tokio::sync::Mutex::new(HashMap::new()),
+        data_dir,
+        mcp: tokio::sync::Mutex::new(None),
       });
       Ok(())
     })

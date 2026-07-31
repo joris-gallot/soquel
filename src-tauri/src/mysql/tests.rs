@@ -18,6 +18,7 @@ fn profile_with_ssl(ssl_mode: SslMode) -> Option<ConnectionProfile> {
     name: "test".to_string(),
     env: Env::Dev,
     group: None,
+    agent_access: Default::default(),
     params: ConnectorParams::Mysql(SqlServerParams {
       host: host.to_string(),
       port: port.parse().unwrap(),
@@ -697,4 +698,86 @@ async fn integration_mysql_table_ddl_via_show_create() {
     introspect.table_ddl("soquel_test", "nope").await,
     Err(Error::NotFound { .. })
   ));
+}
+
+#[test]
+fn statement_head_skips_noise() {
+  assert_eq!(statement_head("SELECT 1"), "SELECT");
+  assert_eq!(
+    statement_head("  -- lead\n/* block */ (select 1)"),
+    "select"
+  );
+  assert_eq!(statement_head("# hash comment\nSHOW TABLES"), "SHOW");
+  assert_eq!(statement_head("/* unterminated"), "");
+  assert_eq!(statement_head(""), "");
+}
+
+#[test]
+fn read_statement_guard_allows_reads_only() {
+  for sql in [
+    "SELECT 1",
+    "with recent as (select 1) select * from recent",
+    "EXPLAIN SELECT 1",
+    "SHOW TABLES",
+    "DESCRIBE customers",
+  ] {
+    assert!(read_statement_guard(sql).is_ok(), "{sql}");
+  }
+  for sql in [
+    "INSERT INTO t VALUES (1)",
+    "UPDATE t SET a = 1",
+    "CREATE TABLE t (id int)",
+    "DROP TABLE t",
+    "SET SESSION sql_mode = ''",
+    "CALL cleanup()",
+    "/* sneaky */ TRUNCATE t",
+    "",
+  ] {
+    let err = read_statement_guard(sql).unwrap_err();
+    let Error::Unsupported { message } = err else {
+      panic!("expected unsupported for {sql}: {err:?}");
+    };
+    assert!(message.contains("only read statements"), "{message}");
+  }
+}
+
+#[tokio::test]
+async fn integration_mysql_read_only_query() {
+  let Some(profile) = profile_from_env() else {
+    return;
+  };
+  let connection = MysqlConnector
+    .connect(&profile, Some("soquel"), None)
+    .await
+    .unwrap();
+  let sql = connection.sql().unwrap();
+
+  let result = sql.run_read_only_query("SELECT 1 AS one").await.unwrap();
+  assert_eq!(result.statements[0].rows[0][0].as_deref(), Some("1"));
+
+  let err = sql
+    .run_read_only_query("INSERT INTO customers (name) VALUES ('x')")
+    .await
+    .unwrap_err();
+  let Error::Unsupported { message } = err else {
+    panic!("expected unsupported: {err:?}");
+  };
+  assert!(message.contains("only read statements"), "{message}");
+
+  // A read head that locks still dies on the READ ONLY transaction
+  // (WITH...UPDATE would too, but MariaDB does not parse CTE writes).
+  let err = sql
+    .run_read_only_query("SELECT id FROM customers LIMIT 1 FOR UPDATE")
+    .await
+    .unwrap_err();
+  let Error::Database { message } = err else {
+    panic!("expected a database error: {err:?}");
+  };
+  assert!(message.to_lowercase().contains("read only"), "{message}");
+
+  // The pool stays writable for the app itself.
+  sql
+    .run_query("UPDATE customers SET name = name LIMIT 1")
+    .await
+    .unwrap();
 }

@@ -153,6 +153,16 @@ impl ConnectorParams {
   }
 }
 
+/// What the MCP server may do with a connection; `None` hides it from agents entirely.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentAccess {
+  #[default]
+  None,
+  ReadOnly,
+  WriteWithApproval,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
@@ -161,6 +171,8 @@ pub struct ConnectionProfile {
   pub env: Env,
   #[serde(default)]
   pub group: Option<String>,
+  #[serde(default)]
+  pub agent_access: AgentAccess,
   pub params: ConnectorParams,
 }
 
@@ -172,6 +184,8 @@ pub struct ConnectionInput {
   pub env: Env,
   #[serde(default)]
   pub group: Option<String>,
+  #[serde(default)]
+  pub agent_access: AgentAccess,
   pub params: ConnectorParams,
   pub password: Option<String>,
 }
@@ -229,6 +243,7 @@ impl ProfileStore {
       name: input.name.clone(),
       env: input.env,
       group: input.group.clone(),
+      agent_access: input.agent_access,
       params: input.params.clone(),
     };
     self.profiles.push(profile.clone());
@@ -247,6 +262,7 @@ impl ProfileStore {
     profile.name = input.name.clone();
     profile.env = input.env;
     profile.group = input.group.clone();
+    profile.agent_access = input.agent_access;
     profile.params = input.params.clone();
     let updated = profile.clone();
     self.save()?;
@@ -274,6 +290,7 @@ mod tests {
       name: name.to_string(),
       env: Env::Dev,
       group: None,
+      agent_access: Default::default(),
       params: ConnectorParams::Postgres(SqlServerParams {
         host: "localhost".to_string(),
         port: 5432,

@@ -1329,6 +1329,7 @@ fn profile_from_env_url(url: &str) -> ConnectionProfile {
     name: "test".to_string(),
     env: crate::profiles::Env::Dev,
     group: None,
+    agent_access: Default::default(),
     params: crate::profiles::ConnectorParams::Postgres(SqlServerParams {
       host: host.clone(),
       port: config.get_ports()[0],
@@ -1374,4 +1375,48 @@ async fn integration_postgres_unreachable_maps_to_database_error() {
     panic!("expected a database error");
   };
   assert!(!message.is_empty());
+}
+
+#[tokio::test]
+async fn integration_postgres_read_only_query() {
+  let Some(pg) = test_connection_from_env().await else {
+    return;
+  };
+
+  let result = pg.run_read_only_query("SELECT 1 AS one").await.unwrap();
+  assert_eq!(result.statements[0].rows[0][0].as_deref(), Some("1"));
+
+  let err = pg
+    .run_read_only_query("UPDATE app.customers SET name = name")
+    .await
+    .unwrap_err();
+  let Error::Database { message } = err else {
+    panic!("expected a database error: {err:?}");
+  };
+  assert!(message.contains("read-only"), "{message}");
+
+  let err = pg
+    .run_read_only_query("CREATE TABLE app.agent_leak (id int)")
+    .await
+    .unwrap_err();
+  let Error::Database { message } = err else {
+    panic!("expected a database error: {err:?}");
+  };
+  assert!(message.contains("read-only"), "{message}");
+
+  // Multiple statements cannot escape the transaction: prepare rejects them.
+  let err = pg
+    .run_read_only_query("SELECT 1; DROP TABLE app.customers")
+    .await
+    .unwrap_err();
+  let Error::Database { message } = err else {
+    panic!("expected a database error: {err:?}");
+  };
+  assert!(message.contains("multiple commands"), "{message}");
+
+  // The pooled connection comes back clean and writable for the app itself.
+  pg.run_query("SELECT 1").await.unwrap();
+  pg.run_query("UPDATE app.customers SET name = name WHERE id = 1")
+    .await
+    .unwrap();
 }

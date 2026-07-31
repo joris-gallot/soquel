@@ -106,6 +106,7 @@ fn test_profile(params: MongoParams) -> ConnectionProfile {
     name: "test".to_string(),
     env: Env::Dev,
     group: None,
+    agent_access: Default::default(),
     params: ConnectorParams::Mongo(params),
   }
 }

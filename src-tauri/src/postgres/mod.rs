@@ -277,6 +277,21 @@ impl SqlQuery for PostgresConnection {
     self.execute_script(sql).await
   }
 
+  async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, Error> {
+    let pg = self.checkout().await?;
+    let _guard = self.cancels.register(pg.client.cancel_token());
+    // A failed prepare means multiple statements: over the simple protocol
+    // `COMMIT; INSERT ...` would escape the read-only transaction.
+    pg.client.prepare(sql).await?;
+    pg.client.batch_execute("BEGIN READ ONLY").await?;
+    let result = run_script(&pg, sql).await;
+    // Unconditional: a pooled connection must never keep a transaction open.
+    let rollback = pg.client.batch_execute("ROLLBACK").await;
+    let result = result?;
+    rollback?;
+    Ok(result)
+  }
+
   async fn cancel(&self) -> Result<(), Error> {
     for token in self.cancels.tokens() {
       token

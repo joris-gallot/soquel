@@ -67,9 +67,16 @@ export const commands = {
 	testTunnel: (input: TunnelInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_tunnel", { input, existingId })),
 	defaultSshKeys: () => typedError<string[], Error>(__TAURI_INVOKE("default_ssh_keys")),
 	trustHostKey: (host: string, port: number, key: string) => typedError<null, Error>(__TAURI_INVOKE("trust_host_key", { host, port, key })),
+	mcpStatus: () => typedError<McpStatus, Error>(__TAURI_INVOKE("mcp_status")),
+	mcpStart: (port: number | null) => typedError<McpStatus, Error>(__TAURI_INVOKE("mcp_start", { port })),
+	mcpStop: () => typedError<null, Error>(__TAURI_INVOKE("mcp_stop")),
+	mcpRegenerateToken: () => typedError<McpStatus, Error>(__TAURI_INVOKE("mcp_regenerate_token")),
 };
 
 /* Types */
+/**  What the MCP server may do with a connection; `None` hides it from agents entirely. */
+export type AgentAccess = "none" | "read-only" | "write-with-approval";
+
 export type ApplyResult = {
 	updated: number,
 	inserted: number,
@@ -110,6 +117,7 @@ export type ConnectionInput = {
 	name: string,
 	env: Env,
 	group?: string | null,
+	agentAccess?: AgentAccess,
 	params: ConnectorParams,
 	password: string | null,
 };
@@ -119,6 +127,7 @@ export type ConnectionProfile = {
 	name: string,
 	env: Env,
 	group?: string | null,
+	agentAccess?: AgentAccess,
 	params: ConnectorParams,
 };
 
@@ -275,6 +284,13 @@ export type KvDatabases = {
 	total: number,
 	/**  Non-empty databases with their key counts. */
 	used: KvDatabaseKeys[],
+};
+
+export type McpStatus = {
+	running: boolean,
+	port: number,
+	endpoint: string,
+	token: string,
 };
 
 /**

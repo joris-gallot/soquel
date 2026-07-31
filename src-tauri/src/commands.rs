@@ -88,6 +88,7 @@ pub async fn test_connection(
     name: input.name.clone(),
     env: input.env,
     group: input.group.clone(),
+    agent_access: input.agent_access,
     params: input.params.clone(),
   };
   let opened = open_tunnel(&state, &profile).await?;
@@ -381,7 +382,10 @@ fn introspect_surface(
 }
 
 // Clone the Arc out so queries never hold the map lock.
-async fn active(state: &State<'_, AppState>, id: &str) -> Result<Arc<dyn Connection>, Error> {
+pub(crate) async fn active(
+  state: &State<'_, AppState>,
+  id: &str,
+) -> Result<Arc<dyn Connection>, Error> {
   state
     .connections
     .lock()
@@ -827,4 +831,36 @@ pub fn trust_host_key(
 ) -> Result<(), Error> {
   ssh::parse_public_key(&key)?;
   state.known_hosts.lock().unwrap().trust(&host, port, &key)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_status(state: State<'_, AppState>) -> Result<crate::mcp::McpStatus, Error> {
+  crate::mcp::status(state.inner()).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_start(
+  app: tauri::AppHandle,
+  state: State<'_, AppState>,
+  port: Option<u16>,
+) -> Result<crate::mcp::McpStatus, Error> {
+  crate::mcp::start(app, port.unwrap_or(crate::mcp::DEFAULT_PORT)).await?;
+  crate::mcp::status(state.inner()).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_stop(state: State<'_, AppState>) -> Result<(), Error> {
+  crate::mcp::stop(state.inner()).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_regenerate_token(
+  state: State<'_, AppState>,
+) -> Result<crate::mcp::McpStatus, Error> {
+  crate::mcp::regenerate_token(state.inner()).await?;
+  crate::mcp::status(state.inner()).await
 }

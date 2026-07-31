@@ -196,6 +196,9 @@ pub type ChunkSink = Box<dyn Fn(RowsChunk) -> bool + Send>;
 #[async_trait::async_trait]
 pub trait SqlQuery: Send + Sync {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error>;
+  /// Single statement for the agent surface, read-only enforced by the engine
+  /// (never by SQL parsing).
+  async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, Error>;
   async fn cancel(&self) -> Result<(), Error>;
   async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error>;
   async fn stream_rows(

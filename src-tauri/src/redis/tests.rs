@@ -110,6 +110,7 @@ fn profile_from_env(db: u32) -> Option<ConnectionProfile> {
     name: "test".to_string(),
     env: Env::Dev,
     group: None,
+    agent_access: Default::default(),
     params: ConnectorParams::Redis(params_from_env(db)?),
   })
 }
@@ -533,6 +534,7 @@ async fn integration_redis_acl_user_auth() {
     name: "test".to_string(),
     env: Env::Dev,
     group: None,
+    agent_access: Default::default(),
     params: ConnectorParams::Redis(RedisParams {
       username: Some("app".to_string()),
       ..params

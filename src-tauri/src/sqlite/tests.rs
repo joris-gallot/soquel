@@ -541,3 +541,39 @@ fn change_statements_use_is_keys_and_rowid_mapping() {
     "INSERT INTO \"main\".\"t\" DEFAULT VALUES"
   );
 }
+
+#[tokio::test]
+async fn read_only_query_blocks_writes() {
+  let (_dir, connection) = fixture().await;
+
+  let result = connection
+    .run_read_only_query("SELECT name FROM customers ORDER BY id LIMIT 1")
+    .await
+    .unwrap();
+  assert_eq!(result.statements[0].rows[0][0].as_deref(), Some("Ada"));
+
+  let err = connection
+    .run_read_only_query("INSERT INTO logs (message, level) VALUES ('x', 'info')")
+    .await
+    .unwrap_err();
+  let Error::Database { message } = err else {
+    panic!("expected a database error: {err:?}");
+  };
+  assert!(message.contains("readonly"), "{message}");
+
+  // PRAGMA cannot undo a handle opened SQLITE_OPEN_READ_ONLY.
+  let err = connection
+    .run_read_only_query("PRAGMA query_only = 0; DELETE FROM logs")
+    .await
+    .unwrap_err();
+  let Error::Database { message } = err else {
+    panic!("expected a database error: {err:?}");
+  };
+  assert!(message.contains("readonly"), "{message}");
+
+  // The shared read-write handle is untouched.
+  connection
+    .run_query("INSERT INTO logs (message, level) VALUES ('still-writable', 'info')")
+    .await
+    .unwrap();
+}

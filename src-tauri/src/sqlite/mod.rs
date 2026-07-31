@@ -65,6 +65,18 @@ fn open_file(path: &str) -> Result<rusqlite::Connection, Error> {
   Ok(conn)
 }
 
+fn open_file_read_only(path: &str) -> Result<rusqlite::Connection, Error> {
+  let conn = rusqlite::Connection::open_with_flags(
+    path,
+    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+  )
+  .map_err(|err| Error::Database {
+    message: format!("cannot open {path}: {err}"),
+  })?;
+  conn.busy_timeout(std::time::Duration::from_secs(5))?;
+  Ok(conn)
+}
+
 pub struct SqliteConnection {
   pub(super) conn: Arc<Mutex<rusqlite::Connection>>,
   /// Sessions open their own file handle.
@@ -142,6 +154,19 @@ impl SqlQuery for SqliteConnection {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error> {
     let sql = sql.to_string();
     self.exec(move |conn| run_script(conn, &sql)).await
+  }
+
+  async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, Error> {
+    let path = self.path.clone();
+    let sql = sql.to_string();
+    // A separate handle opened SQLITE_OPEN_READ_ONLY: file-level enforcement
+    // that no SQL (PRAGMA included) can undo.
+    tokio::task::spawn_blocking(move || {
+      let mut conn = open_file_read_only(&path)?;
+      run_script(&mut conn, &sql)
+    })
+    .await
+    .map_err(join_error)?
   }
 
   async fn cancel(&self) -> Result<(), Error> {

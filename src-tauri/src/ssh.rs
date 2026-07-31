@@ -530,6 +530,7 @@ mod tests {
           name: String::new(),
           env: Env::Dev,
           group: None,
+          agent_access: Default::default(),
           params: ConnectorParams::Postgres(SqlServerParams {
             host: "postgres-tls".to_string(),
             port: 5432,
@@ -584,6 +585,7 @@ mod tests {
           name: String::new(),
           env: Env::Dev,
           group: None,
+          agent_access: Default::default(),
           params: ConnectorParams::Redis(RedisParams {
             host: "redis".to_string(),
             port: 6379,
@@ -646,6 +648,7 @@ mod tests {
         name: "kv-swap".to_string(),
         env: Env::Dev,
         group: None,
+        agent_access: Default::default(),
         params: ConnectorParams::Redis(RedisParams {
           host: "redis".to_string(),
           port: 6379,
@@ -694,6 +697,8 @@ mod tests {
         },
       )])),
       sessions: tokio::sync::Mutex::new(HashMap::new()),
+      data_dir: dir.path().to_path_buf(),
+      mcp: tokio::sync::Mutex::new(None),
     };
     let active =
       |connections: &HashMap<String, ActiveConnection>| -> std::sync::Arc<dyn Connection> {
@@ -755,6 +760,7 @@ mod tests {
           name: String::new(),
           env: Env::Dev,
           group: None,
+          agent_access: Default::default(),
           params: ConnectorParams::Mongo(MongoParams {
             host: "mongo".to_string(),
             port: 27017,
@@ -814,6 +820,7 @@ mod tests {
       name: String::new(),
       env: Env::Dev,
       group: None,
+      agent_access: Default::default(),
       params: ConnectorParams::Postgres(SqlServerParams {
         host: host.to_string(),
         port: 5432,

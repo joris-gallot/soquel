@@ -172,6 +172,20 @@ impl SqlQuery for MysqlConnection {
     run_script(&mut conn, sql).await
   }
 
+  async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, Error> {
+    // READ ONLY transactions block DML, but DDL implicit-commits right out of
+    // them: only read statement heads may pass.
+    read_statement_guard(sql)?;
+    let mut conn = self.pool.get_conn().await?;
+    let _guard = self.active_threads.register(conn.id());
+    conn.query_drop("START TRANSACTION READ ONLY").await?;
+    let result = run_script(&mut conn, sql).await;
+    let rollback = conn.query_drop("ROLLBACK").await;
+    let result = result?;
+    rollback?;
+    Ok(result)
+  }
+
   async fn cancel(&self) -> Result<(), Error> {
     let mut conn = self.pool.get_conn().await?;
     for thread in self.active_threads.tokens() {
@@ -408,6 +422,42 @@ impl SqlSession for MysqlSession {
     // Dropping the detached conn closes it; nothing to hand back.
     Ok(())
   }
+}
+
+/// First significant keyword allowlist for the agent read-only surface.
+fn read_statement_guard(sql: &str) -> Result<(), Error> {
+  const READ_HEADS: [&str; 11] = [
+    "SELECT", "WITH", "SHOW", "EXPLAIN", "DESCRIBE", "DESC", "TABLE", "VALUES", "CHECKSUM", "HELP",
+    "DO",
+  ];
+  let head = statement_head(sql);
+  if READ_HEADS.iter().any(|h| head.eq_ignore_ascii_case(h)) {
+    return Ok(());
+  }
+  Err(Error::Unsupported {
+    message: format!("only read statements are allowed for agents (got `{head}`)"),
+  })
+}
+
+/// First keyword of a statement, past whitespace, comments and opening parens.
+fn statement_head(sql: &str) -> String {
+  let mut rest = sql;
+  loop {
+    rest = rest.trim_start();
+    if let Some(stripped) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+      rest = stripped.split_once('\n').map_or("", |(_, tail)| tail);
+    } else if let Some(stripped) = rest.strip_prefix("/*") {
+      rest = stripped.split_once("*/").map_or("", |(_, tail)| tail);
+    } else if let Some(stripped) = rest.strip_prefix('(') {
+      rest = stripped;
+    } else {
+      break;
+    }
+  }
+  rest
+    .chars()
+    .take_while(|c| c.is_ascii_alphabetic())
+    .collect()
 }
 
 async fn run_script(conn: &mut mysql_async::Conn, sql: &str) -> Result<QueryResult, Error> {

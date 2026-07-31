@@ -204,6 +204,13 @@ async fn integration_mongo_databases_and_collections() {
   })
   .await
   .unwrap();
+  db.run_command(doc! {
+    "create": "no_id",
+    "viewOn": "users",
+    "pipeline": [{ "$project": { "_id": 0, "n": 1 } }],
+  })
+  .await
+  .unwrap();
 
   let surface = connection.doc().unwrap();
   let databases = surface.databases().await.unwrap();
@@ -229,6 +236,25 @@ async fn integration_mongo_databases_and_collections() {
   let view = by_name("active_users");
   assert_eq!(view.kind, DocCollectionKind::View);
   assert_eq!(view.estimated_docs, None);
+
+  // A view can project _id away: entries lose their address (UI disables edit/delete).
+  let page = surface
+    .find_docs(&DocFindRequest {
+      db: "soquel_test_browse".to_string(),
+      collection: "no_id".to_string(),
+      filter: None,
+      sort: None,
+      limit: 10,
+      cursor: None,
+    })
+    .await
+    .unwrap();
+  assert!(!page.docs.is_empty());
+  assert!(
+    page.docs.iter().all(|entry| entry.id.is_none()),
+    "{:?}",
+    page.docs
+  );
 
   db.drop().await.unwrap();
   connection.close().await.unwrap();
@@ -315,8 +341,131 @@ async fn integration_mongo_find_filter_sort_pagination() {
     assert!(matches!(broken, Err(Error::Unsupported { .. })));
   }
 
+  // An oversized limit clamps to DOC_PAGE_MAX instead of dumping the collection.
+  let clamped = surface
+    .find_docs(&DocFindRequest {
+      limit: 5000,
+      ..find_request(None, None, None)
+    })
+    .await
+    .unwrap();
+  assert_eq!(clamped.docs.len(), DOC_PAGE_MAX as usize);
+  assert!(clamped.cursor.is_some());
+
   db.drop().await.unwrap();
   connection.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn integration_mongo_replace_rejects_id_mutation() {
+  let Some(connection) = connection_from_env().await else {
+    return;
+  };
+  let db = raw_database("soquel_test_idmut").await.unwrap();
+  db.collection::<Document>("docs")
+    .insert_one(doc! { "_id": "a", "state": "before" })
+    .await
+    .unwrap();
+  let surface = connection.doc().unwrap();
+  let id = Bson::String("a".to_string())
+    .into_canonical_extjson()
+    .to_string();
+
+  let Err(err) = surface
+    .replace_doc(
+      "soquel_test_idmut",
+      "docs",
+      &id,
+      r#"{"_id": "b", "state": "after"}"#,
+    )
+    .await
+  else {
+    panic!("mutating _id through a replace must be rejected");
+  };
+  assert!(matches!(err, Error::Database { .. }), "{err:?}");
+
+  let detail = surface
+    .doc_detail("soquel_test_idmut", "docs", &id)
+    .await
+    .unwrap();
+  assert!(detail.relaxed.contains("before"), "{}", detail.relaxed);
+
+  db.drop().await.unwrap();
+  connection.close().await.unwrap();
+}
+
+/// Scoped read-only user: the credential source falls back to the profile db,
+/// and database listing degrades to the authorized ones instead of failing.
+#[tokio::test]
+async fn integration_mongo_scoped_user() {
+  let Some(params) = params_from_env() else {
+    return;
+  };
+  let db = raw_database("soquel_test_scoped").await.unwrap();
+  db.collection::<Document>("docs")
+    .insert_many(vec![doc! { "n": 1 }, doc! { "n": 2 }])
+    .await
+    .unwrap();
+  let _ = db.run_command(doc! { "dropUser": "scoped" }).await;
+  db.run_command(doc! {
+    "createUser": "scoped",
+    "pwd": "scoped-pw",
+    "roles": [{ "role": "read", "db": "soquel_test_scoped" }],
+  })
+  .await
+  .unwrap();
+
+  let profile = test_profile(MongoParams {
+    database: Some("soquel_test_scoped".to_string()),
+    username: Some("scoped".to_string()),
+    auth_source: None,
+    ..params
+  });
+  let connection = MongoConnector
+    .connect(&profile, Some("scoped-pw"), None)
+    .await
+    .unwrap();
+  let surface = connection.doc().unwrap();
+
+  let databases = surface.databases().await.unwrap();
+  assert!(
+    databases
+      .iter()
+      .any(|entry| entry.name == "soquel_test_scoped"),
+    "{databases:?}"
+  );
+  assert!(
+    !databases.iter().any(|entry| entry.name == "admin"),
+    "{databases:?}"
+  );
+
+  let collections = surface.collections("soquel_test_scoped").await.unwrap();
+  assert_eq!(collections.len(), 1);
+  assert_eq!(collections[0].estimated_docs, Some(2.0));
+
+  let page = surface
+    .find_docs(&DocFindRequest {
+      db: "soquel_test_scoped".to_string(),
+      collection: "docs".to_string(),
+      filter: None,
+      sort: None,
+      limit: 10,
+      cursor: None,
+    })
+    .await
+    .unwrap();
+  assert_eq!(page.docs.len(), 2);
+
+  // Read-only role: writes bounce with the server's message.
+  let id = page.docs[0].id.clone().unwrap();
+  let Err(err) = surface.delete_doc("soquel_test_scoped", "docs", &id).await else {
+    panic!("a read-only user must not delete");
+  };
+  assert!(matches!(err, Error::Database { .. }), "{err:?}");
+
+  connection.close().await.unwrap();
+  let _ = db.run_command(doc! { "dropUser": "scoped" }).await;
+  db.drop().await.unwrap();
 }
 
 #[tokio::test]

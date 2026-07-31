@@ -65,6 +65,37 @@ fn open_file(path: &str) -> Result<rusqlite::Connection, Error> {
   Ok(conn)
 }
 
+impl SqliteConnection {
+  /// The timeout is a parameter so tests can watch it fire.
+  pub(super) async fn read_only_within(
+    &self,
+    sql: &str,
+    timeout: std::time::Duration,
+  ) -> Result<QueryResult, Error> {
+    let path = self.path.clone();
+    let sql = sql.to_string();
+    // A separate handle opened SQLITE_OPEN_READ_ONLY: file-level enforcement
+    // that no SQL (PRAGMA included) can undo.
+    let conn = tokio::task::spawn_blocking(move || open_file_read_only(&path))
+      .await
+      .map_err(join_error)??;
+    // No statement_timeout in sqlite: a timer interrupts this handle only.
+    let interrupt = conn.get_interrupt_handle();
+    let timer = tokio::spawn(async move {
+      tokio::time::sleep(timeout).await;
+      interrupt.interrupt();
+    });
+    let result = tokio::task::spawn_blocking(move || {
+      let mut conn = conn;
+      run_script(&mut conn, &sql)
+    })
+    .await
+    .map_err(join_error)?;
+    timer.abort();
+    result
+  }
+}
+
 fn open_file_read_only(path: &str) -> Result<rusqlite::Connection, Error> {
   let conn = rusqlite::Connection::open_with_flags(
     path,
@@ -157,30 +188,12 @@ impl SqlQuery for SqliteConnection {
   }
 
   async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, Error> {
-    let path = self.path.clone();
-    let sql = sql.to_string();
-    // A separate handle opened SQLITE_OPEN_READ_ONLY: file-level enforcement
-    // that no SQL (PRAGMA included) can undo.
-    let conn = tokio::task::spawn_blocking(move || open_file_read_only(&path))
+    self
+      .read_only_within(
+        sql,
+        std::time::Duration::from_millis(crate::connectors::AGENT_STATEMENT_TIMEOUT_MS.into()),
+      )
       .await
-      .map_err(join_error)??;
-    // No statement_timeout in sqlite: a timer interrupts this handle only.
-    let interrupt = conn.get_interrupt_handle();
-    let timer = tokio::spawn(async move {
-      tokio::time::sleep(std::time::Duration::from_millis(
-        crate::connectors::AGENT_STATEMENT_TIMEOUT_MS.into(),
-      ))
-      .await;
-      interrupt.interrupt();
-    });
-    let result = tokio::task::spawn_blocking(move || {
-      let mut conn = conn;
-      run_script(&mut conn, &sql)
-    })
-    .await
-    .map_err(join_error)?;
-    timer.abort();
-    result
   }
 
   async fn cancel(&self) -> Result<(), Error> {

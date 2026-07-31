@@ -1154,6 +1154,35 @@ mod tests {
     (state, opted.id, hidden.id)
   }
 
+  /// Tripwire: adding a tool means visiting the gating test below, which proves
+  /// the tool refuses a connection the user never opted in.
+  #[test]
+  fn the_agent_surface_is_exactly_these_tools() {
+    let mut names: Vec<String> = SoquelMcp::tool_router()
+      .list_all()
+      .into_iter()
+      .map(|tool| tool.name.to_string())
+      .collect();
+    names.sort();
+    assert_eq!(
+      names,
+      [
+        "count_documents",
+        "find_documents",
+        "get_key",
+        "get_schema",
+        "get_table_ddl",
+        "list_collections",
+        "list_connections",
+        "list_databases",
+        "list_indexes",
+        "list_keys",
+        "run_query",
+        "sample_rows",
+      ]
+    );
+  }
+
   fn assert_hidden(outcome: Result<serde_json::Value, Error>, tool: &str) {
     let Err(Error::NotFound { message }) = outcome else {
       panic!("{tool} must not reach a non-opted-in profile");
@@ -1225,6 +1254,94 @@ mod tests {
       )
       .await,
       "sample_rows",
+    );
+    // The kv/doc tools gate on opt-in before they even check the engine kind:
+    // this profile is postgres, and the refusal must still be "not found".
+    assert_hidden(
+      list_databases_impl(
+        &state,
+        &ConnectionArgs {
+          connection_id: hidden.clone(),
+        },
+      )
+      .await,
+      "list_databases",
+    );
+    assert_hidden(
+      list_keys_impl(
+        &state,
+        &KeyScanArgs {
+          connection_id: hidden.clone(),
+          pattern: None,
+          cursor: None,
+          count: None,
+        },
+      )
+      .await,
+      "list_keys",
+    );
+    assert_hidden(
+      get_key_impl(
+        &state,
+        &KeyArgs {
+          connection_id: hidden.clone(),
+          key: "any".to_string(),
+        },
+      )
+      .await,
+      "get_key",
+    );
+    assert_hidden(
+      list_collections_impl(
+        &state,
+        &DatabaseArgs {
+          connection_id: hidden.clone(),
+          database: "app".to_string(),
+        },
+      )
+      .await,
+      "list_collections",
+    );
+    assert_hidden(
+      find_documents_impl(
+        &state,
+        &DocFindArgs {
+          connection_id: hidden.clone(),
+          database: "app".to_string(),
+          collection: "customers".to_string(),
+          filter: None,
+          sort: None,
+          limit: None,
+          cursor: None,
+        },
+      )
+      .await,
+      "find_documents",
+    );
+    assert_hidden(
+      count_documents_impl(
+        &state,
+        &DocCountArgs {
+          connection_id: hidden.clone(),
+          database: "app".to_string(),
+          collection: "customers".to_string(),
+          filter: None,
+        },
+      )
+      .await,
+      "count_documents",
+    );
+    assert_hidden(
+      list_indexes_impl(
+        &state,
+        &CollectionArgs {
+          connection_id: hidden.clone(),
+          database: "app".to_string(),
+          collection: "customers".to_string(),
+        },
+      )
+      .await,
+      "list_indexes",
     );
     // Gating happens before any connection attempt.
     assert!(state.connections.lock().await.is_empty());

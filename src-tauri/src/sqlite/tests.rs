@@ -586,3 +586,25 @@ async fn read_only_query_blocks_writes() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn the_agent_timer_interrupts_a_runaway_query() {
+  let (_dir, connection) = fixture().await;
+
+  // An unbounded recursive CTE only ends when something stops it.
+  let err = connection
+    .read_only_within(
+      "WITH RECURSIVE forever(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM forever) \
+       SELECT count(*) FROM forever",
+      std::time::Duration::from_millis(50),
+    )
+    .await
+    .unwrap_err();
+  let Error::Database { message } = err else {
+    panic!("expected a database error: {err:?}");
+  };
+  assert!(message.contains("interrupted"), "{message}");
+
+  // The timer belongs to that one handle: the shared connection still works.
+  connection.run_query("SELECT 1").await.unwrap();
+}

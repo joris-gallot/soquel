@@ -27,6 +27,7 @@
     "db:dev:seed:pg": "docker compose -f docker-compose.dev.yml exec -T postgres psql -U soquel -d soquel_dev -f /seeds/postgres.sql",
     "db:dev:seed:mysql": "docker compose -f docker-compose.dev.yml exec -T mysql sh -c 'mysql -usoquel -psoquel soquel_dev < /seeds/mysql.sql'",
     "db:dev:seed:redis": "docker compose -f docker-compose.dev.yml exec -T redis sh /seeds/redis.sh",
+    "db:dev:seed:mongo": "docker compose -f docker-compose.dev.yml exec -T mongo mongosh --quiet -u soquel -p soquel --authenticationDatabase admin /seeds/mongo.js",
     "db:dev:down": "docker compose -f docker-compose.dev.yml down"
   },
   "devDependencies": {

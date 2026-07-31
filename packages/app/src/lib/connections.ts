@@ -3,7 +3,7 @@ import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
 
-export const KINDS = ['postgres', 'mysql', 'sqlite', 'redis'] as const satisfies readonly ConnectorKind[]
+export const KINDS = ['postgres', 'mysql', 'sqlite', 'redis', 'mongo'] as const satisfies readonly ConnectorKind[]
 
 export const KIND_META: Record<ConnectorKind, {
   label: string
@@ -15,8 +15,8 @@ export const KIND_META: Record<ConnectorKind, {
   mysql: { label: 'MySQL', short: 'MySQL', defaultPort: 3306, protocols: ['mysql:'] },
   sqlite: { label: 'SQLite', short: 'SQLite', defaultPort: 0, protocols: [] },
   redis: { label: 'Redis', short: 'Redis', defaultPort: 6379, protocols: ['redis:', 'rediss:'] },
-  // Rust surface only for now: the doc browser UI round adds the form entry + mongodb: prefill.
-  mongo: { label: 'MongoDB', short: 'Mongo', defaultPort: 27017, protocols: [] },
+  // mongodb+srv needs DNS discovery the single-node connector doesn't do yet.
+  mongo: { label: 'MongoDB', short: 'Mongo', defaultPort: 27017, protocols: ['mongodb:'] },
 }
 
 /// What the form's engine select shows: MariaDB is a display entry riding the
@@ -27,6 +27,7 @@ export const ENGINE_CHOICES = [
   { id: 'mariadb', label: 'MariaDB', kind: 'mysql' },
   { id: 'sqlite', label: 'SQLite', kind: 'sqlite' },
   { id: 'redis', label: 'Redis', kind: 'redis' },
+  { id: 'mongo', label: 'MongoDB', kind: 'mongo' },
 ] as const satisfies readonly { id: string, label: string, kind: ConnectorKind }[]
 
 export type EngineChoice = (typeof ENGINE_CHOICES)[number]['id']
@@ -111,8 +112,10 @@ export const connectionSchema = z.object({
   path: z.string(),
   dbIndex: z.coerce.number().int('DB index must be a whole number').min(0, 'DB index must be positive').catch(0),
   tls: z.boolean(),
+  authSource: z.string(),
 }).superRefine((values, ctx) => {
-  // Each kind validates its own shape; sqlite is a file, redis has no database/user.
+  // Each kind validates its own shape; sqlite is a file, redis and mongo need
+  // nothing beyond host+port (their database/user are optional).
   if (values.kind === 'sqlite') {
     if (values.path.trim() === '')
       ctx.addIssue({ code: 'custom', path: ['path'], message: 'Database file is required' })
@@ -122,7 +125,7 @@ export const connectionSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['host'], message: 'Host is required' })
   if (values.port < 1)
     ctx.addIssue({ code: 'custom', path: ['port'], message: 'Port is required' })
-  if (values.kind === 'redis')
+  if (values.kind === 'redis' || values.kind === 'mongo')
     return
   if (values.database === '')
     ctx.addIssue({ code: 'custom', path: ['database'], message: 'Database is required' })
@@ -145,9 +148,11 @@ export interface ConnectionFormValues {
   group: string
   password: string
   path: string
-  // Redis only: numeric database index and plain TLS toggle.
+  // Redis only: numeric database index. TLS toggle shared with mongo.
   dbIndex: number | string
   tls: boolean
+  // Mongo only: authentication database (empty = database, then admin).
+  authSource: string
 }
 
 export function toConnectionInput(values: z.output<typeof connectionSchema>): ConnectionInput {
@@ -168,6 +173,21 @@ export function toConnectionInput(values: z.output<typeof connectionSchema>): Co
         port: values.port,
         db: values.dbIndex,
         username: values.user.trim() === '' ? null : values.user.trim(),
+        tls: values.tls,
+        tunnelId: values.tunnelId === NO_TUNNEL || values.tunnelId === '' ? null : values.tunnelId,
+      },
+    }
+  }
+  if (values.kind === 'mongo') {
+    return {
+      ...base,
+      params: {
+        kind: 'mongo',
+        host: values.host,
+        port: values.port,
+        database: values.database.trim() === '' ? null : values.database.trim(),
+        username: values.user.trim() === '' ? null : values.user.trim(),
+        authSource: values.authSource.trim() === '' ? null : values.authSource.trim(),
         tls: values.tls,
         tunnelId: values.tunnelId === NO_TUNNEL || values.tunnelId === '' ? null : values.tunnelId,
       },
@@ -214,6 +234,7 @@ export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFor
     path: '',
     dbIndex: 0,
     tls: false,
+    authSource: '',
   }
   if (params.kind === 'sqlite')
     return { ...base, ...defaults, path: params.path }
@@ -237,6 +258,7 @@ export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFor
       port: params.port,
       database: params.database ?? '',
       user: params.username ?? '',
+      authSource: params.authSource ?? '',
       tls: params.tls ?? false,
       tunnelId: params.tunnelId ?? NO_TUNNEL,
     }
@@ -300,6 +322,12 @@ export function parseConnectionUrl(raw: string): Partial<ConnectionFormValues> |
     parsed.database = ''
     parsed.dbIndex = Number(url.pathname.replace(/^\//, '')) || 0
     parsed.tls = url.protocol === 'rediss:'
+  }
+  if (kind === 'mongo') {
+    const authSource = url.searchParams.get('authSource')
+    if (authSource)
+      parsed.authSource = authSource
+    parsed.tls = url.searchParams.get('tls') === 'true' || url.searchParams.get('ssl') === 'true'
   }
   const sslmode = url.searchParams.get('sslmode')
   if (sslmode && sslmode in URL_SSL_MODES)

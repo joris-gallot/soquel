@@ -53,7 +53,7 @@ function groupValue(): string {
 }
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', path: '', dbIndex: 0, tls: false }
+  return { name: '', env: 'dev', kind: 'postgres', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', path: '', dbIndex: 0, tls: false, authSource: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -69,8 +69,9 @@ watch(engineChoice, (id) => {
 
 const isSqlite = computed(() => values.value.kind === 'sqlite')
 const isRedis = computed(() => values.value.kind === 'redis')
+const isMongo = computed(() => values.value.kind === 'mongo')
 // postgres/mysql: the full server shape (database, user, ssl).
-const isSqlServer = computed(() => !isSqlite.value && !isRedis.value)
+const isSqlServer = computed(() => !isSqlite.value && !isRedis.value && !isMongo.value)
 
 async function browsePath() {
   const selected = await openFileDialog({
@@ -107,7 +108,7 @@ watch(open, (isOpen) => {
 function applyUrl() {
   const parsed = parseConnectionUrl(importUrl.value)
   if (!parsed) {
-    toast.error('Not a valid postgres:// or mysql:// URL')
+    toast.error('Not a valid postgres://, mysql://, redis:// or mongodb:// URL')
     return
   }
   values.value = { ...values.value, ...parsed }
@@ -188,7 +189,7 @@ async function save() {
           <Input
             v-model="importUrl"
             data-testid="import-url"
-            placeholder="paste a postgres://, mysql:// or redis:// url to prefill"
+            placeholder="paste a postgres://, mysql://, redis:// or mongodb:// url to prefill"
             class="font-mono text-xs"
           />
           <Button type="button" variant="secondary" :disabled="!importUrl" @click="applyUrl">
@@ -292,10 +293,33 @@ async function save() {
           </div>
         </div>
 
-        <!-- The db lives in the workspace selector; a url prefill still carries it. -->
-        <div v-if="isRedis" class="flex items-center gap-2">
+        <div v-if="isMongo" class="grid grid-cols-2 gap-3">
+          <div class="space-y-1.5">
+            <Label for="conn-database">Database</Label>
+            <Input
+              id="conn-database"
+              v-model="values.database"
+              data-testid="field-database"
+              class="font-mono"
+              placeholder="optional"
+            />
+          </div>
+          <div class="space-y-1.5">
+            <Label for="conn-auth-source">Auth source</Label>
+            <Input
+              id="conn-auth-source"
+              v-model="values.authSource"
+              data-testid="field-auth-source"
+              class="font-mono"
+              placeholder="admin"
+            />
+          </div>
+        </div>
+
+        <!-- The redis db lives in the workspace selector; a url prefill still carries it. -->
+        <div v-if="isRedis || isMongo" class="flex items-center gap-2">
           <Switch id="conn-tls" v-model="values.tls" data-testid="field-tls" />
-          <Label for="conn-tls" class="cursor-pointer">TLS (rediss)</Label>
+          <Label for="conn-tls" class="cursor-pointer">{{ isRedis ? 'TLS (rediss)' : 'TLS' }}</Label>
         </div>
 
         <div v-if="values.sslMode === 'verify-full'" class="space-y-1.5">
@@ -317,7 +341,7 @@ async function save() {
               v-model="values.user"
               data-testid="field-user"
               class="font-mono"
-              :placeholder="isRedis ? 'default (ACL user, optional)' : ''"
+              :placeholder="isRedis ? 'default (ACL user, optional)' : isMongo ? 'optional' : ''"
             />
             <p v-if="errors.user" class="text-xs text-destructive">
               {{ errors.user }}

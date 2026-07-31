@@ -52,7 +52,24 @@ services:
       timeout: 3s
       retries: 15
 
+  mongo:
+    image: mongo:8
+    ports:
+      - '5473:27017'
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: soquel
+      MONGO_INITDB_ROOT_PASSWORD: soquel
+    volumes:
+      - mongodata:/data/db
+      - ./scripts/dev-seed:/seeds:ro
+    healthcheck:
+      test: [CMD-SHELL, mongosh --quiet -u soquel -p soquel --eval "db.adminCommand('ping').ok" | grep 1]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
 volumes:
   pgdata:
   mysqldata:
   redisdata:
+  mongodata:

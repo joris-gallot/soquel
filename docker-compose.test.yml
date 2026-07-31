@@ -154,7 +154,10 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: soquel
       MONGO_INITDB_ROOT_PASSWORD: soquel
-    # Throwaway data: tests create/drop their own soquel_test_* databases.
+    volumes:
+      # Seeds soquel_e2e for the e2e spec; integration tests own soquel_test_*.
+      - ./scripts/test-seeds/mongo.js:/docker-entrypoint-initdb.d/seed.js:ro
+    # Throwaway data: fresh seed on every up.
     tmpfs:
       - /data/db
     healthcheck:

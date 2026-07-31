@@ -50,11 +50,12 @@ pnpm db:test           # start the test databases (docker-compose.test.yml), see
 pnpm test:integration  # cargo integration_* tests against them
 pnpm db:test:down
 
-pnpm db:dev            # dev postgres on 5470 + mysql on 5471 + redis on 5472 (docker-compose.dev.yml), persistent volumes
+pnpm db:dev            # dev postgres 5470 + mysql 5471 + redis 5472 + mongo 5473 (docker-compose.dev.yml), persistent volumes
                        # dev stays out of 5455-5464: that whole range belongs to docker-compose.test.yml
 pnpm db:dev:seed:pg    # (re)seed the dev postgres: ~1.5M rows across a SaaS-shaped app schema
 pnpm db:dev:seed:mysql # same shape for the dev mysql (soquel_dev)
 pnpm db:dev:seed:redis # SaaS-shaped keys for the key browser (~16k: sessions, cache, queues, stream)
+pnpm db:dev:seed:mongo # SaaS-shaped documents for the doc browser (~85k: users, orders, events, sessions)
 pnpm db:dev:down
 ```
 
@@ -62,7 +63,7 @@ pnpm db:dev:down
 
 Weight: Rust integration against real databases is the core; unit tests for pure logic; e2e stays a thin smoke layer.
 
-- `docker-compose.test.yml`: one service per connector kind, seeded from `scripts/test-seeds/<engine>.sql`. Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459 (self-signed cert from `scripts/test-tls/`, unseeded, TLS handshake tests only), postgres-oldest 5460, sshd-reconnect 5461, mysql-oldest 5462, mongo 5464 (unseeded, tests own their soquel_test_* databases).
+- `docker-compose.test.yml`: one service per connector kind, seeded from `scripts/test-seeds/<engine>.sql`. Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459 (self-signed cert from `scripts/test-tls/`, unseeded, TLS handshake tests only), postgres-oldest 5460, sshd-reconnect 5461, mysql-oldest 5462, mongo 5464 (seeds soquel_e2e for the e2e spec; integration tests own their soquel_test_* databases).
 - Minimum supported postgres = oldest non-EOL major (currently 14). Minimum supported mysql = 8.0 (EOL upstream but dominant in the wild via RDS/Aurora extended support). The `*-oldest` services run them with the same seeds, and `pnpm test:integration` runs the `integration_postgres_*` / `integration_mysql_*` suites against both versions; the seeds must stay valid on the oldest.
 - MariaDB is supported through the mysql kind (suite runs against `mariadb` LTS on 5463). Known quirks, asserted flavor-aware in tests: JSON columns read as text (LONGTEXT alias), COLUMN_TYPE keeps display widths (`int(11)`), KILL QUERY raises ER_QUERY_INTERRUPTED instead of returning; the workspace badge shows "MariaDB x.y.z" from the version string.
 - Rust integration tests are named `integration_<engine>_*`, each gated by its env var (`SOQUEL_TEST_PG`, `SOQUEL_TEST_SSH`, later `SOQUEL_TEST_MYSQL`, ...) and skipped silently when unset. `pnpm test:integration` wires the env vars to the compose databases. SSH tunnel tests use the sshd service (key auth via the committed throwaway keypair in `scripts/test-ssh/`).

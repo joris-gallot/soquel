@@ -79,7 +79,9 @@ describe('parseConnectionUrl', () => {
   })
 
   it('rejects other protocols', () => {
-    expect(parseConnectionUrl('mongodb://u:p@h:27017/app')).toBeNull()
+    // srv needs DNS discovery the single-node connector doesn't do.
+    expect(parseConnectionUrl('mongodb+srv://u:p@cluster0.example.net/app')).toBeNull()
+    expect(parseConnectionUrl('ftp://h/x')).toBeNull()
   })
 
   it('rejects garbage', () => {
@@ -180,6 +182,7 @@ describe('connectionSchema', () => {
     path: '',
     dbIndex: 0,
     tls: false,
+    authSource: '',
   }
 
   it('coerces the port from a text input', () => {
@@ -336,5 +339,60 @@ describe('redis profiles', () => {
     expect(connectionDsn(stored.params)).toBe('rediss://cache.internal:6380/2')
     expect(serverBadge('redis', '7.4.1')).toEqual({ engine: 'Redis', version: '7.4.1' })
     expect(serverBadge('redis', '8.0.1-valkey')).toEqual({ engine: 'Valkey', version: '8.0.1' })
+  })
+})
+
+describe('mongo profiles', () => {
+  const stored: ConnectionProfile = {
+    id: 'c-4',
+    name: 'docs',
+    env: 'dev',
+    group: null,
+    params: { kind: 'mongo', host: 'db.internal', port: 27018, database: 'app', username: 'reader', authSource: 'admin', tls: true, tunnelId: 't-1' },
+  }
+
+  it('round-trips through the form values, authSource included', () => {
+    const values = { ...formValuesFromProfile(stored), password: 's3cret' }
+    const input = toConnectionInput(connectionSchema.parse(values))
+    expect(input.params).toEqual(stored.params)
+    expect(input.password).toBe('s3cret')
+  })
+
+  it('validates on host and port alone', () => {
+    const values = formValuesFromProfile(stored)
+    const bare = connectionSchema.safeParse({ ...values, database: '', user: '', authSource: '' })
+    expect(bare.success).toBe(true)
+    const noHost = connectionSchema.safeParse({ ...values, host: '' })
+    expect(noHost.success).toBe(false)
+    if (!noHost.success)
+      expect(zodFieldErrors(noHost.error).host).toBe('Host is required')
+  })
+
+  it('turns blank optionals into nulls', () => {
+    const values = { ...formValuesFromProfile(stored), database: ' ', user: ' ', authSource: ' ' }
+    expect(toConnectionInput(connectionSchema.parse(values)).params)
+      .toMatchObject({ database: null, username: null, authSource: null })
+  })
+
+  it('parses mongodb:// urls with authSource and tls params', () => {
+    expect(parseConnectionUrl('mongodb://reader:pw@db.internal:27018/app?authSource=admin&tls=true')).toMatchObject({
+      kind: 'mongo',
+      host: 'db.internal',
+      port: 27018,
+      database: 'app',
+      user: 'reader',
+      password: 'pw',
+      authSource: 'admin',
+      tls: true,
+    })
+    expect(parseConnectionUrl('mongodb://h')).toMatchObject({ kind: 'mongo', port: 27017, tls: false })
+    expect(parseConnectionUrl('mongodb://h/app')).not.toHaveProperty('authSource')
+  })
+
+  it('renders identity lines and the badge', () => {
+    expect(connectionTarget(stored.params)).toBe('db.internal:27018/app')
+    expect(connectionDsn(stored.params)).toBe('mongodb://reader@db.internal:27018/app')
+    expect(connectionTarget({ kind: 'mongo', host: 'h', port: 27017 })).toBe('h:27017')
+    expect(serverBadge('mongo', '8.0.4')).toEqual({ engine: 'Mongo', version: '8.0.4' })
   })
 })

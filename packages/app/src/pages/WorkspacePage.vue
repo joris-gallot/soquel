@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import type { Capability, ColumnFilter, TableInfo } from '@/lib/bindings'
+import type { Capability, ColumnFilter, DocEntry, TableInfo } from '@/lib/bindings'
 import type { WorkspaceTab } from '@/lib/tabs'
-import { ArrowLeft, KeyRound, Plus, RefreshCw, SquareTerminal, Table2, Unplug, X } from '@lucide/vue'
+import { ArrowLeft, FileJson, KeyRound, ListTree, Plus, RefreshCw, SquareTerminal, Table2, Unplug, X } from '@lucide/vue'
 import { useEventListener } from '@vueuse/core'
 import { computed, onMounted, ref, useTemplateRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import CollectionList from '@/components/CollectionList.vue'
+import DocDbSelect from '@/components/DocDbSelect.vue'
+import DocDetailPanel from '@/components/DocDetailPanel.vue'
+import DocIndexesPanel from '@/components/DocIndexesPanel.vue'
+import DocList from '@/components/DocList.vue'
 import KeyDetailPanel from '@/components/KeyDetailPanel.vue'
 import KeyList from '@/components/KeyList.vue'
 import KvDbSelect from '@/components/KvDbSelect.vue'
+import MongoConsolePanel from '@/components/MongoConsolePanel.vue'
 import RedisConsolePanel from '@/components/RedisConsolePanel.vue'
 import SchemaTree from '@/components/SchemaTree.vue'
 import SqlEditorPanel from '@/components/SqlEditorPanel.vue'
@@ -58,6 +64,35 @@ function onDbSwitched() {
   selectedKey.value = null
   keyList.value?.refresh()
 }
+
+const isDoc = computed(() => capabilities.value.includes('doc-browse'))
+const docDb = ref<string | null>(null)
+const selectedCollection = ref<string | null>(null)
+const selectedEntry = ref<DocEntry | null>(null)
+const docView = ref<'docs' | 'indexes' | 'console'>('docs')
+const collectionList = useTemplateRef('collectionList')
+const docList = useTemplateRef('docList')
+
+function selectCollection(collection: string) {
+  selectedCollection.value = collection
+  selectedEntry.value = null
+  docView.value = 'docs'
+}
+
+function onDocDbSwitched() {
+  selectedCollection.value = null
+  selectedEntry.value = null
+}
+
+function onDocSaved() {
+  docList.value?.refresh()
+}
+
+function onDocDeleted() {
+  selectedEntry.value = null
+  docList.value?.refresh()
+  collectionList.value?.refresh()
+}
 const snapshot = computed(() => snapshots.value[id.value])
 const filter = ref('')
 const serverVersion = ref<string | null>(null)
@@ -104,9 +139,9 @@ function closeTab(tab: WorkspaceTab) {
   tabs.close(tab.id)
 }
 
-// Tab shortcuts: new sql, close, cycle. No tabs on the kv surface.
+// Tab shortcuts: new sql, close, cycle. No tabs on the kv/doc surfaces.
 useEventListener('keydown', (event) => {
-  if (!event.ctrlKey || event.defaultPrevented || isKv.value)
+  if (!event.ctrlKey || event.defaultPrevented || isKv.value || isDoc.value)
     return
   if (event.key === 't') {
     event.preventDefault()
@@ -130,10 +165,12 @@ onMounted(async () => {
   }
   try {
     capabilities.value = unwrap(await commands.connectorCapabilities(profile.value.params.kind))
+    if (isDoc.value && profile.value.params.kind === 'mongo')
+      docDb.value = profile.value.params.database ?? null
     if (!activeIds.value.has(id.value))
       await connect(id.value)
     serverVersion.value = unwrap(await commands.serverVersion(id.value))
-    if (!isKv.value)
+    if (!isKv.value && !isDoc.value)
       await load(id.value)
   }
   catch (error) {
@@ -213,7 +250,7 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           >
             {{ versionBadge.engine }} {{ versionBadge.version }}
           </Badge>
-          <Tooltip v-if="!isKv">
+          <Tooltip v-if="!isKv && !isDoc">
             <TooltipTrigger as-child>
               <Button
                 size="icon-sm"
@@ -243,6 +280,14 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
           :connection-id="id"
           :selected="selectedKey"
           @select="key => { selectedKey = key; kvView = 'key' }"
+        />
+        <CollectionList
+          v-else-if="isDoc"
+          ref="collectionList"
+          :connection-id="id"
+          :db="docDb"
+          :selected="selectedCollection"
+          @select="selectCollection"
         />
         <template v-else>
           <div class="px-2 py-2">
@@ -296,6 +341,88 @@ function hop(schema: string, table: string, filters: ColumnFilter[]) {
         v-show="kvView === 'console'"
         :connection-id="id"
         @ran="onKvChanged"
+      />
+    </ResizablePanel>
+
+    <ResizablePanel v-else-if="isDoc" id="workspace-main" class="flex min-w-0 flex-col">
+      <header class="flex items-center gap-0.5 border-b px-1.5 py-1 font-mono text-xs text-muted-foreground">
+        <button
+          type="button"
+          class="flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5"
+          :class="docView === 'docs' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground'"
+          data-testid="doc-view-docs"
+          @click="docView = 'docs'"
+        >
+          <FileJson class="size-3 opacity-60" />
+          documents
+        </button>
+        <button
+          type="button"
+          class="flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5"
+          :class="docView === 'indexes' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground'"
+          data-testid="doc-view-indexes"
+          @click="docView = 'indexes'"
+        >
+          <ListTree class="size-3 opacity-60" />
+          indexes
+        </button>
+        <button
+          type="button"
+          class="flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5"
+          :class="docView === 'console' ? 'bg-accent text-accent-foreground' : 'hover:text-foreground'"
+          data-testid="doc-view-console"
+          @click="docView = 'console'"
+        >
+          <SquareTerminal class="size-3 opacity-60" />
+          console
+        </button>
+        <span class="flex-1" />
+        <DocDbSelect
+          v-if="serverVersion"
+          v-model="docDb"
+          :connection-id="id"
+          @switched="onDocDbSwitched"
+        />
+      </header>
+      <ResizablePanelGroup
+        v-show="docView === 'docs'"
+        direction="horizontal"
+        auto-save-id="soquel-docs"
+        class="min-h-0 flex-1"
+      >
+        <ResizablePanel id="doc-list" :default-size="38" :min-size="20" :max-size="60">
+          <DocList
+            ref="docList"
+            :connection-id="id"
+            :db="docDb"
+            :collection="selectedCollection"
+            :selected="selectedEntry"
+            @select="entry => selectedEntry = entry"
+          />
+        </ResizablePanel>
+        <ResizableHandle with-handle />
+        <ResizablePanel id="doc-detail">
+          <DocDetailPanel
+            :connection-id="id"
+            :db="docDb"
+            :collection="selectedCollection"
+            :entry="selectedEntry"
+            @saved="onDocSaved"
+            @deleted="onDocDeleted"
+          />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+      <DocIndexesPanel
+        v-show="docView === 'indexes'"
+        :connection-id="id"
+        :db="docDb"
+        :collection="selectedCollection"
+      />
+      <MongoConsolePanel
+        v-show="docView === 'console'"
+        :connection-id="id"
+        :db="docDb"
+        :collection="selectedCollection"
       />
     </ResizablePanel>
 

@@ -64,7 +64,7 @@ function truncate(text: string, max: number): string {
 
 const COMPACT = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
 
-/// "1.2k", "45m" — for collection counts and estimates.
+/// "1.2k", "45m" for collection counts and estimates.
 export function compactCount(value: number): string {
   return COMPACT.format(value).toLowerCase()
 }

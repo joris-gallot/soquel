@@ -104,7 +104,7 @@ pub struct AuditEntry {
   pub duration_ms: f64,
 }
 
-/// A write an agent wants to run, waiting on the user's answer.
+/// The MCP call stays blocked until this is answered.
 #[derive(Debug, Clone, Serialize, serde::Deserialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct McpApprovalRequest {
@@ -380,7 +380,7 @@ pub fn agent_visible(profiles: Vec<ConnectionProfile>) -> Vec<ConnectionProfile>
     .collect()
 }
 
-/// Cap statement rows for agent consumption; flag when anything was dropped.
+/// Flags `truncated` so an agent knows it is looking at a partial result.
 pub fn capped(mut result: crate::connectors::QueryResult) -> serde_json::Value {
   let mut truncated = false;
   for statement in &mut result.statements {
@@ -658,8 +658,7 @@ async fn get_key_impl(state: &AppState, args: &KeyArgs) -> Result<serde_json::Va
   Ok(serde_json::to_value(kv.key_detail(&args.key).await?)?)
 }
 
-/// Redis reports a database count, mongo a named list: both answer "where can
-/// I look" without the agent knowing the engine.
+/// Redis reports a count, mongo a named list: one tool for either engine.
 async fn list_databases_impl(
   state: &AppState,
   args: &ConnectionArgs,

@@ -305,7 +305,7 @@ export type KvDatabases = {
 	used: KvDatabaseKeys[],
 };
 
-/**  A write an agent wants to run, waiting on the user's answer. */
+/**  The MCP call stays blocked until this is answered. */
 export type McpApprovalRequest = {
 	id: string,
 	connectionId: string,

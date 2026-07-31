@@ -166,6 +166,7 @@ pub fn run() {
         data_dir,
         mcp: tokio::sync::Mutex::new(None),
       });
+      mcp::autostart(app.handle());
       Ok(())
     })
     .run(tauri::generate_context!())

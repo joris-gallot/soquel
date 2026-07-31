@@ -90,7 +90,12 @@ async function regenerate() {
         />
       </div>
 
-      <div v-if="status?.running" class="space-y-3 border-t px-4 py-3" data-testid="mcp-details">
+      <div
+        v-if="status?.running"
+        class="space-y-3 border-t px-4 py-3"
+        data-testid="mcp-details"
+        :data-token="status.token"
+      >
         <p class="text-xs text-muted-foreground">
           {{ exposedCount === 0
             ? 'No connections are exposed yet. Opt one in with the Agent access field in its settings.'

@@ -33,6 +33,54 @@ pub struct McpRunning {
   pub cancel: CancellationToken,
 }
 
+/// The toggle survives restarts: an enabled server comes back on launch.
+#[derive(Debug, Clone, Copy, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpSettings {
+  enabled: bool,
+  port: u16,
+}
+
+impl Default for McpSettings {
+  fn default() -> Self {
+    Self {
+      enabled: false,
+      port: DEFAULT_PORT,
+    }
+  }
+}
+
+fn load_settings(state: &AppState) -> McpSettings {
+  std::fs::read_to_string(state.data_dir.join("mcp.json"))
+    .ok()
+    .and_then(|raw| serde_json::from_str(&raw).ok())
+    .unwrap_or_default()
+}
+
+fn save_settings(state: &AppState, settings: McpSettings) {
+  let path = state.data_dir.join("mcp.json");
+  let written = serde_json::to_string_pretty(&settings)
+    .map_err(std::io::Error::other)
+    .and_then(|raw| std::fs::write(&path, raw));
+  if let Err(err) = written {
+    log::warn!("mcp settings write failed: {err}");
+  }
+}
+
+pub fn autostart(app: &AppHandle) {
+  let state = app.state::<AppState>();
+  let settings = load_settings(state.inner());
+  if !settings.enabled {
+    return;
+  }
+  let app = app.clone();
+  tauri::async_runtime::spawn(async move {
+    if let Err(err) = start(app, settings.port).await {
+      log::error!("mcp autostart failed: {err}");
+    }
+  });
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct McpStatus {
@@ -73,7 +121,9 @@ pub async fn regenerate_token(state: &AppState) -> Result<String, Error> {
 
 pub async fn status(state: &AppState) -> Result<McpStatus, Error> {
   let running = state.mcp.lock().await;
-  let port = running.as_ref().map_or(DEFAULT_PORT, |r| r.port);
+  let port = running
+    .as_ref()
+    .map_or_else(|| load_settings(state).port, |r| r.port);
   Ok(McpStatus {
     running: running.is_some(),
     port,
@@ -126,6 +176,13 @@ pub async fn start(app: AppHandle, port: u16) -> Result<(), Error> {
     }
   });
   *state.mcp.lock().await = Some(McpRunning { port, cancel });
+  save_settings(
+    state.inner(),
+    McpSettings {
+      enabled: true,
+      port,
+    },
+  );
   Ok(())
 }
 
@@ -133,6 +190,13 @@ pub async fn stop(state: &AppState) -> Result<(), Error> {
   if let Some(running) = state.mcp.lock().await.take() {
     running.cancel.cancel();
   }
+  save_settings(
+    state,
+    McpSettings {
+      enabled: false,
+      ..load_settings(state)
+    },
+  );
   Ok(())
 }
 
@@ -819,5 +883,62 @@ mod tests {
     assert_eq!(entry["tool"], "run_query");
     assert_eq!(entry["ok"], true);
     assert_eq!(entry["connection"].as_str().unwrap(), opted);
+  }
+
+  fn bare_state(dir: &tempfile::TempDir) -> AppState {
+    AppState {
+      profiles: std::sync::Mutex::new(
+        ProfileStore::load(dir.path().join("connections.json")).unwrap(),
+      ),
+      tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
+      known_hosts: std::sync::Mutex::new(
+        KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
+      ),
+      secrets: Box::new(InMemoryStore::default()),
+      connections: tokio::sync::Mutex::new(HashMap::new()),
+      sessions: tokio::sync::Mutex::new(HashMap::new()),
+      data_dir: dir.path().to_path_buf(),
+      mcp: tokio::sync::Mutex::new(None),
+    }
+  }
+
+  #[tokio::test]
+  async fn regenerate_token_requires_a_stopped_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    let first = ensure_token(state.secrets.as_ref()).unwrap();
+
+    *state.mcp.lock().await = Some(McpRunning {
+      port: 1,
+      cancel: CancellationToken::new(),
+    });
+    let err = regenerate_token(&state).await.unwrap_err();
+    assert!(matches!(err, Error::Unsupported { .. }), "{err:?}");
+    assert_eq!(ensure_token(state.secrets.as_ref()).unwrap(), first);
+
+    *state.mcp.lock().await = None;
+    let fresh = regenerate_token(&state).await.unwrap();
+    assert_ne!(fresh, first);
+    assert_eq!(ensure_token(state.secrets.as_ref()).unwrap(), fresh);
+  }
+
+  #[test]
+  fn settings_default_off_and_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    let settings = load_settings(&state);
+    assert!(!settings.enabled);
+    assert_eq!(settings.port, DEFAULT_PORT);
+
+    save_settings(
+      &state,
+      McpSettings {
+        enabled: true,
+        port: 4242,
+      },
+    );
+    let loaded = load_settings(&state);
+    assert!(loaded.enabled);
+    assert_eq!(loaded.port, 4242);
   }
 }

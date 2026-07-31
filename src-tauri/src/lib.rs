@@ -24,6 +24,7 @@ mod redis;
 mod secrets;
 mod sqlite;
 mod ssh;
+mod transfer;
 mod tunnels;
 
 /// A connected database plus the tunnel carrying it: dropped together.
@@ -59,6 +60,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::create_connection,
       commands::update_connection,
       commands::delete_connection,
+      commands::export_connections,
+      commands::preview_connection_import,
+      commands::import_connections,
       commands::test_connection,
       commands::connect,
       commands::disconnect,

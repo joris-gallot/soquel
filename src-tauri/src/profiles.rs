@@ -130,6 +130,26 @@ impl ConnectorParams {
     }
   }
 
+  /// Point the params at a tunnel (or at none); ignored by file-backed kinds.
+  pub fn set_tunnel_id(&mut self, tunnel_id: Option<String>) {
+    match self {
+      Self::Postgres(params) | Self::Mysql(params) => params.tunnel_id = tunnel_id,
+      Self::Redis(params) => params.tunnel_id = tunnel_id,
+      Self::Mongo(params) => params.tunnel_id = tunnel_id,
+      Self::Sqlite { .. } => {}
+    }
+  }
+
+  /// Lift the tunnel reference out: an id from elsewhere means nothing here.
+  pub fn take_tunnel_id(&mut self) -> Option<String> {
+    match self {
+      Self::Postgres(params) | Self::Mysql(params) => params.tunnel_id.take(),
+      Self::Redis(params) => params.tunnel_id.take(),
+      Self::Mongo(params) => params.tunnel_id.take(),
+      Self::Sqlite { .. } => None,
+    }
+  }
+
   /// Where TCP goes (tunnel included); None for file-backed kinds.
   pub fn remote(&self) -> Option<RemoteEndpoint<'_>> {
     match self {
@@ -277,6 +297,12 @@ impl ProfileStore {
         message: format!("connection {id} not found"),
       });
     }
+    self.save()
+  }
+
+  /// Bulk write for imports: one save, so a refused batch leaves no half file.
+  pub fn replace_all(&mut self, profiles: Vec<ConnectionProfile>) -> Result<(), Error> {
+    self.profiles = profiles;
     self.save()
   }
 }

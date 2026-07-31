@@ -11,6 +11,14 @@ export const commands = {
 	createConnection: (input: ConnectionInput) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("create_connection", { input })),
 	updateConnection: (id: string, input: ConnectionInput) => typedError<ConnectionProfile, Error>(__TAURI_INVOKE("update_connection", { id, input })),
 	deleteConnection: (id: string) => typedError<null, Error>(__TAURI_INVOKE("delete_connection", { id })),
+	/**
+	 *  Writes every connection, tunnel and group to a file. Passwords ride along
+	 *  only with `include_secrets`, and only inside a passphrase-encrypted payload.
+	 */
+	exportConnections: (path: string, includeSecrets: boolean, passphrase: string | null) => typedError<ExportSummary, Error>(__TAURI_INVOKE("export_connections", { path, includeSecrets, passphrase })),
+	/**  What importing that file would do; writes nothing. */
+	previewConnectionImport: (path: string, passphrase: string | null) => typedError<ImportPreview, Error>(__TAURI_INVOKE("preview_connection_import", { path, passphrase })),
+	importConnections: (path: string, passphrase: string | null, strategy: DuplicateStrategy) => typedError<ImportOutcome, Error>(__TAURI_INVOKE("import_connections", { path, passphrase, strategy })),
 	/**  Ephemeral connect + health check; never touches the active connections. */
 	testConnection: (input: ConnectionInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_connection", { input, existingId })),
 	connect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("connect", { id })),
@@ -233,6 +241,9 @@ export type DocQueryResult = {
 	durationMs: number | null,
 };
 
+/**  What to do with an entry that already exists here (same name, same target). */
+export type DuplicateStrategy = "replace" | "keep-both" | "skip";
+
 export type Env = "dev" | "staging" | "prod";
 
 /**  Normalized error shape crossing the IPC boundary. */
@@ -242,6 +253,13 @@ export type ExportFormat = "csv" | "json" | "sql" | "markdown";
 
 export type ExportProgress = {
 	rows: number | null,
+};
+
+export type ExportSummary = {
+	connections: number,
+	tunnels: number,
+	secrets: number,
+	encrypted: boolean,
 };
 
 export type FilterOp = "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "contains" | "starts-with" | "is-null" | "is-not-null";
@@ -257,6 +275,21 @@ export type ForeignKeyInfo = {
 export type HashField = {
 	field: string,
 	value: string,
+};
+
+export type ImportOutcome = {
+	created: number,
+	replaced: number,
+	skipped: number,
+	tunnelsCreated: number,
+};
+
+export type ImportPreview = {
+	encrypted: boolean,
+	/**  Encrypted file, no passphrase yet: ask, then preview again. */
+	needsPassphrase: boolean,
+	connections: PreviewEntry[],
+	tunnels: PreviewEntry[],
 };
 
 export type IndexInfo = {
@@ -333,6 +366,15 @@ export type MongoParams = {
 	authSource?: string | null,
 	tls?: boolean,
 	tunnelId?: string | null,
+};
+
+export type PreviewEntry = {
+	name: string,
+	target: string,
+	hasSecret: boolean,
+	duplicate: boolean,
+	/**  Set when the entry cannot be written; any problem blocks the whole import. */
+	problem: string | null,
 };
 
 export type QueryColumn = {

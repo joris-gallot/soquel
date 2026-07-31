@@ -116,6 +116,12 @@ impl TunnelStore {
     Ok(updated)
   }
 
+  /// Bulk write for imports: one save, so a refused batch leaves no half file.
+  pub fn replace_all(&mut self, tunnels: Vec<TunnelProfile>) -> Result<(), Error> {
+    self.tunnels = tunnels;
+    self.save()
+  }
+
   pub fn delete(&mut self, id: &str) -> Result<(), Error> {
     let before = self.tunnels.len();
     self.tunnels.retain(|t| t.id != id);

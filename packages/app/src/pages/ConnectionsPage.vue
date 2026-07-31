@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { ConnectionProfile, TunnelProfile } from '@/lib/bindings'
-import { Bot, Cable, ChevronDown, ChevronRight, MoreHorizontal, Plug, Plus, Unplug } from '@lucide/vue'
+import { Bot, Cable, ChevronDown, ChevronRight, Download, MoreHorizontal, Plug, Plus, Unplug, Upload } from '@lucide/vue'
 import { useLocalStorage } from '@vueuse/core'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import ConnectionFormDialog from '@/components/ConnectionFormDialog.vue'
+import ExportConnectionsDialog from '@/components/ExportConnectionsDialog.vue'
+import ImportConnectionsDialog from '@/components/ImportConnectionsDialog.vue'
 import McpServerPanel from '@/components/McpServerPanel.vue'
 import TunnelFormDialog from '@/components/TunnelFormDialog.vue'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +24,7 @@ import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
 import { connectionDsn, ENV_BADGE_CLASSES, groupConnections } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
+import { pickImportFile } from '@/lib/transfer'
 import { SSH_AUTH_LABELS } from '@/lib/tunnels'
 
 const router = useRouter()
@@ -42,6 +45,22 @@ const editing = ref<ConnectionProfile | null>(null)
 const busyId = ref<string | null>(null)
 const tunnelFormOpen = ref(false)
 const editingTunnel = ref<TunnelProfile | null>(null)
+const exportOpen = ref(false)
+const importOpen = ref(false)
+const importPath = ref<string | null>(null)
+
+async function startImport() {
+  const path = await pickImportFile()
+  if (!path)
+    return
+  importPath.value = path
+  importOpen.value = true
+}
+
+async function afterImport() {
+  await refresh()
+  await refreshTunnels()
+}
 
 onMounted(() => {
   refresh()
@@ -122,10 +141,34 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
       <h1 class="font-mono text-sm text-muted-foreground">
         connections
       </h1>
-      <Button size="sm" data-testid="new-connection" @click="openCreate">
-        <Plus />
-        New connection
-      </Button>
+      <div class="flex items-center gap-1.5">
+        <DropdownMenu>
+          <DropdownMenuTrigger as-child>
+            <Button size="icon-sm" variant="ghost" data-testid="connections-menu" aria-label="Connection list actions">
+              <MoreHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <!-- The content defaults to the trigger width: an icon button would wrap these labels. -->
+          <DropdownMenuContent align="end" class="w-auto!">
+            <DropdownMenuItem data-testid="open-import" @click="startImport">
+              <Upload />
+              Import connections…
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              data-testid="open-export"
+              :disabled="connections.length === 0"
+              @click="exportOpen = true"
+            >
+              <Download />
+              Export connections…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button size="sm" data-testid="new-connection" @click="openCreate">
+          <Plus />
+          New connection
+        </Button>
+      </div>
     </header>
 
     <div
@@ -140,10 +183,16 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
       <p class="text-sm text-muted-foreground">
         No connections yet. Add your first database.
       </p>
-      <Button size="sm" variant="secondary" @click="openCreate">
-        <Plus />
-        Add connection
-      </Button>
+      <div class="flex items-center gap-2">
+        <Button size="sm" variant="secondary" @click="openCreate">
+          <Plus />
+          Add connection
+        </Button>
+        <Button size="sm" variant="ghost" data-testid="empty-import" @click="startImport">
+          <Upload />
+          Import a file
+        </Button>
+      </div>
     </div>
 
     <div v-else class="divide-y rounded-lg border">
@@ -290,6 +339,8 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
 
     <ConnectionFormDialog v-model:open="formOpen" :profile="editing" />
     <TunnelFormDialog v-model:open="tunnelFormOpen" :tunnel="editingTunnel" />
+    <ExportConnectionsDialog v-model:open="exportOpen" />
+    <ImportConnectionsDialog v-model:open="importOpen" :path="importPath" @imported="afterImport" />
   </div>
 </template>
 

@@ -12,6 +12,7 @@ use crate::error::Error;
 use crate::export::{quote_ident, ExportFormat, ExportWriter};
 use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams};
 use crate::ssh::{self, SshTunnel, TunnelTarget};
+use crate::transfer::{self, DuplicateStrategy, ExportSummary, ImportOutcome, ImportPreview};
 use crate::tunnels::{TunnelInput, TunnelProfile};
 use crate::{ActiveConnection, AppState, SessionEntry};
 
@@ -700,6 +701,55 @@ pub fn update_connection(
 pub fn delete_connection(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   state.profiles.lock().unwrap().delete(&id)?;
   state.secrets.delete(&id)
+}
+
+/// Writes every connection, tunnel and group to a file. Passwords ride along
+/// only with `include_secrets`, and only inside a passphrase-encrypted payload.
+#[tauri::command]
+#[specta::specta]
+pub fn export_connections(
+  state: State<'_, AppState>,
+  path: String,
+  include_secrets: bool,
+  passphrase: Option<String>,
+) -> Result<ExportSummary, Error> {
+  transfer::export(
+    state.inner(),
+    std::path::Path::new(&path),
+    include_secrets,
+    passphrase.as_deref(),
+  )
+}
+
+/// What importing that file would do; writes nothing.
+#[tauri::command]
+#[specta::specta]
+pub fn preview_connection_import(
+  state: State<'_, AppState>,
+  path: String,
+  passphrase: Option<String>,
+) -> Result<ImportPreview, Error> {
+  transfer::preview_file(
+    state.inner(),
+    std::path::Path::new(&path),
+    passphrase.as_deref(),
+  )
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn import_connections(
+  state: State<'_, AppState>,
+  path: String,
+  passphrase: Option<String>,
+  strategy: DuplicateStrategy,
+) -> Result<ImportOutcome, Error> {
+  transfer::import_file(
+    state.inner(),
+    std::path::Path::new(&path),
+    passphrase.as_deref(),
+    strategy,
+  )
 }
 
 #[tauri::command]

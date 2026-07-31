@@ -550,6 +550,40 @@ pub trait Connection: Send + Sync {
 pub const POOL_MAX_SIZE: usize = 4;
 pub const CHUNK_ROWS: usize = 200;
 
+/// First keyword of a statement, past whitespace, comments and opening parens.
+pub fn statement_head(sql: &str) -> String {
+  let mut rest = sql;
+  loop {
+    rest = rest.trim_start();
+    if let Some(stripped) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+      rest = stripped.split_once('\n').map_or("", |(_, tail)| tail);
+    } else if let Some(stripped) = rest.strip_prefix("/*") {
+      rest = stripped.split_once("*/").map_or("", |(_, tail)| tail);
+    } else if let Some(stripped) = rest.strip_prefix('(') {
+      rest = stripped;
+    } else {
+      break;
+    }
+  }
+  rest
+    .chars()
+    .take_while(|c| c.is_ascii_alphabetic())
+    .collect()
+}
+
+/// Whether a statement only reads, across engines. Deliberately generous: a
+/// false "read" still hits the engine-enforced read-only path, while a false
+/// "write" only costs a needless approval prompt.
+pub fn is_read_statement(sql: &str) -> bool {
+  const READ_HEADS: [&str; 8] = [
+    "SELECT", "WITH", "TABLE", "VALUES", "SHOW", "EXPLAIN", "DESCRIBE", "DESC",
+  ];
+  let head = statement_head(sql);
+  READ_HEADS
+    .iter()
+    .any(|candidate| head.eq_ignore_ascii_case(candidate))
+}
+
 /// Update/delete guard shared by SQL connectors: exactly one row or the whole
 /// batch rolls back.
 pub fn verify_exactly_one(kind: &str, affected: u64) -> Result<(), Error> {

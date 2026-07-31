@@ -865,3 +865,22 @@ pub async fn mcp_regenerate_token(
   crate::mcp::regenerate_token(state.inner()).await?;
   crate::mcp::status(state.inner()).await
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_audit_log(
+  state: State<'_, AppState>,
+  limit: Option<u32>,
+) -> Result<Vec<crate::mcp::AuditEntry>, Error> {
+  crate::mcp::audit_log(state.inner(), limit.unwrap_or(200) as usize)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_resolve_approval(
+  state: State<'_, AppState>,
+  id: String,
+  approved: bool,
+) -> Result<(), Error> {
+  crate::mcp::resolve_approval(state.inner(), &id, approved).await
+}

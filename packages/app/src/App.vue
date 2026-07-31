@@ -5,6 +5,7 @@ import { TooltipProvider } from 'reka-ui'
 import { ref } from 'vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import HostKeyDialog from '@/components/HostKeyDialog.vue'
+import McpApprovalDialog from '@/components/McpApprovalDialog.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { useTheme } from '@/composables/useTheme'
 import { commands } from '@/lib/bindings'
@@ -56,6 +57,7 @@ const { state: pong, isLoading } = useAsyncState(async () => {
       </footer>
       <CommandPalette ref="palette" />
       <HostKeyDialog />
+      <McpApprovalDialog />
       <Toaster />
     </div>
   </TooltipProvider>

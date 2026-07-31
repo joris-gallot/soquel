@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { Check, Copy, RefreshCw } from '@lucide/vue'
+import { Check, Copy, RefreshCw, ScrollText } from '@lucide/vue'
 import { useClipboard } from '@vueuse/core'
 import { computed, onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
+import McpAuditDialog from '@/components/McpAuditDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useConnections } from '@/composables/useConnections'
@@ -22,6 +23,10 @@ function setupCommand(token: string) {
 }
 
 const busy = ref(false)
+const auditOpen = ref(false)
+const connectionNames = computed(() =>
+  Object.fromEntries(connections.value.map(profile => [profile.id, profile.name])),
+)
 const { copy, copied } = useClipboard({ legacy: true })
 
 onMounted(refresh)
@@ -66,6 +71,10 @@ async function regenerate() {
       <h2 class="font-mono text-sm text-muted-foreground">
         agent access (mcp)
       </h2>
+      <Button size="sm" variant="secondary" data-testid="open-audit" @click="auditOpen = true">
+        <ScrollText />
+        Activity
+      </Button>
     </header>
 
     <div class="rounded-lg border">
@@ -125,5 +134,7 @@ async function regenerate() {
         </Button>
       </div>
     </div>
+
+    <McpAuditDialog v-model:open="auditOpen" :names="connectionNames" />
   </section>
 </template>

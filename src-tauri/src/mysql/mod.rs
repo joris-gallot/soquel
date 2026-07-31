@@ -10,9 +10,10 @@ use mysql_async::{
 };
 
 use crate::connectors::{
-  verify_exactly_one, ApplyResult, CancelRegistry, Capability, ColumnKind, Connection, Connector,
-  Introspect, LocalForward, QueryColumn, QueryResult, RowsChunk, SqlQuery, SqlSession,
-  StatementResult, StreamSummary, TableChanges, TableRowsRequest, CHUNK_ROWS, POOL_MAX_SIZE,
+  statement_head, verify_exactly_one, ApplyResult, CancelRegistry, Capability, ColumnKind,
+  Connection, Connector, Introspect, LocalForward, QueryColumn, QueryResult, RowsChunk, SqlQuery,
+  SqlSession, StatementResult, StreamSummary, TableChanges, TableRowsRequest, CHUNK_ROWS,
+  POOL_MAX_SIZE,
 };
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SqlServerParams, SslMode};
@@ -437,27 +438,6 @@ fn read_statement_guard(sql: &str) -> Result<(), Error> {
   Err(Error::Unsupported {
     message: format!("only read statements are allowed for agents (got `{head}`)"),
   })
-}
-
-/// First keyword of a statement, past whitespace, comments and opening parens.
-fn statement_head(sql: &str) -> String {
-  let mut rest = sql;
-  loop {
-    rest = rest.trim_start();
-    if let Some(stripped) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
-      rest = stripped.split_once('\n').map_or("", |(_, tail)| tail);
-    } else if let Some(stripped) = rest.strip_prefix("/*") {
-      rest = stripped.split_once("*/").map_or("", |(_, tail)| tail);
-    } else if let Some(stripped) = rest.strip_prefix('(') {
-      rest = stripped;
-    } else {
-      break;
-    }
-  }
-  rest
-    .chars()
-    .take_while(|c| c.is_ascii_alphabetic())
-    .collect()
 }
 
 async fn run_script(conn: &mut mysql_async::Conn, sql: &str) -> Result<QueryResult, Error> {

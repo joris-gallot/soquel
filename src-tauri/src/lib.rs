@@ -46,6 +46,8 @@ pub struct AppState {
   pub sessions: tokio::sync::Mutex<HashMap<String, SessionEntry>>,
   pub data_dir: std::path::PathBuf,
   pub mcp: tokio::sync::Mutex<Option<mcp::McpRunning>>,
+  /// Agent write requests waiting on the approval dialog.
+  pub approvals: tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
 }
 
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
@@ -106,7 +108,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_start,
       commands::mcp_stop,
       commands::mcp_regenerate_token,
+      commands::mcp_audit_log,
+      commands::mcp_resolve_approval,
     ])
+    .events(tauri_specta::collect_events![mcp::McpApprovalRequest])
     .error_handling(tauri_specta::ErrorHandlingMode::Result)
 }
 
@@ -129,7 +134,9 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(builder.invoke_handler())
-    .setup(|app| {
+    .setup(move |app| {
+      // Typed event channel for the approval dialog.
+      builder.mount_events(app);
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
@@ -165,6 +172,7 @@ pub fn run() {
         sessions: tokio::sync::Mutex::new(HashMap::new()),
         data_dir,
         mcp: tokio::sync::Mutex::new(None),
+        approvals: tokio::sync::Mutex::new(HashMap::new()),
       });
       mcp::autostart(app.handle());
       Ok(())

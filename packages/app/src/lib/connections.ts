@@ -7,8 +7,7 @@ export const KINDS = ['postgres', 'mysql', 'sqlite', 'redis', 'mongo'] as const 
 
 export const AGENT_ACCESS = ['none', 'read-only', 'write-with-approval'] as const satisfies readonly AgentAccess[]
 
-// The form offers write-with-approval once the approval dialog ships.
-export const AGENT_ACCESS_CHOICES = ['none', 'read-only'] as const satisfies readonly AgentAccess[]
+export const AGENT_ACCESS_CHOICES = AGENT_ACCESS
 
 export const AGENT_ACCESS_LABELS: Record<AgentAccess, string> = {
   'none': 'Off',

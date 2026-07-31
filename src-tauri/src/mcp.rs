@@ -16,6 +16,7 @@ use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Manager, State};
+use tauri_specta::Event as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::connectors::TableRowsRequest;
@@ -26,6 +27,8 @@ use crate::{commands, AppState};
 // Debug builds get their own port and agent-facing name, like the data dir
 // and keychain scope: dev and an installed release can run side by side.
 pub const DEFAULT_PORT: u16 = if cfg!(debug_assertions) { 52701 } else { 52700 };
+/// A write nobody answers is a write nobody wanted.
+const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const SERVER_NAME: &str = if cfg!(debug_assertions) {
   "soquel-dev"
 } else {
@@ -86,6 +89,29 @@ pub fn autostart(app: &AppHandle) {
       log::error!("mcp autostart failed: {err}");
     }
   });
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+  /// Milliseconds since the epoch; f64 because specta forbids u64 in bindings.
+  pub ts: f64,
+  pub tool: String,
+  pub connection: Option<String>,
+  pub detail: Option<String>,
+  pub ok: bool,
+  pub error: Option<String>,
+  pub duration_ms: f64,
+}
+
+/// A write an agent wants to run, waiting on the user's answer.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct McpApprovalRequest {
+  pub id: String,
+  pub connection_id: String,
+  pub connection_name: String,
+  pub sql: String,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -338,23 +364,87 @@ fn audit(
   outcome: &Result<serde_json::Value, Error>,
   started: Instant,
 ) {
-  let entry = serde_json::json!({
-    "ts": SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
-    "tool": tool,
-    "connection": connection,
-    "detail": detail,
-    "ok": outcome.is_ok(),
-    "error": outcome.as_ref().err().map(|err| err.to_string()),
-    "durationMs": started.elapsed().as_secs_f64() * 1000.0,
-  });
+  let entry = AuditEntry {
+    ts: SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .map_or(0.0, |since| since.as_millis() as f64),
+    tool: tool.to_string(),
+    connection: connection.map(str::to_string),
+    detail: detail.map(str::to_string),
+    ok: outcome.is_ok(),
+    error: outcome.as_ref().err().map(|err| err.to_string()),
+    duration_ms: started.elapsed().as_secs_f64() * 1000.0,
+  };
   let path = state.data_dir.join("mcp-audit.jsonl");
-  let written = std::fs::OpenOptions::new()
-    .create(true)
-    .append(true)
-    .open(&path)
-    .and_then(|mut file| writeln!(file, "{entry}"));
+  let written = serde_json::to_string(&entry)
+    .map_err(std::io::Error::other)
+    .and_then(|line| {
+      std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "{line}"))
+    });
   if let Err(err) = written {
     log::warn!("mcp audit append failed: {err}");
+  }
+}
+
+/// Newest first; unparseable lines are skipped rather than failing the read.
+pub fn audit_log(state: &AppState, limit: usize) -> Result<Vec<AuditEntry>, Error> {
+  let raw = match std::fs::read_to_string(state.data_dir.join("mcp-audit.jsonl")) {
+    Ok(raw) => raw,
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(err) => return Err(err.into()),
+  };
+  let mut entries: Vec<AuditEntry> = raw
+    .lines()
+    .filter_map(|line| serde_json::from_str(line).ok())
+    .collect();
+  entries.reverse();
+  entries.truncate(limit);
+  Ok(entries)
+}
+
+/// Answer a pending write request; unknown ids are stale (timed out) requests.
+pub async fn resolve_approval(state: &AppState, id: &str, approved: bool) -> Result<(), Error> {
+  let waiting = state.approvals.lock().await.remove(id);
+  match waiting {
+    Some(sender) => {
+      let _ = sender.send(approved);
+      Ok(())
+    }
+    None => Err(Error::NotFound {
+      message: format!("approval request {id} is no longer pending"),
+    }),
+  }
+}
+
+/// How a pending write gets an answer; the app asks the user, tests decide.
+#[async_trait::async_trait]
+pub trait Approver: Send + Sync {
+  async fn request(&self, state: &AppState, request: McpApprovalRequest) -> bool;
+}
+
+/// Emits to the webview and waits for the dialog; a silent UI denies by timeout.
+pub struct DialogApprover {
+  pub app: AppHandle,
+}
+
+#[async_trait::async_trait]
+impl Approver for DialogApprover {
+  async fn request(&self, state: &AppState, request: McpApprovalRequest) -> bool {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let id = request.id.clone();
+    state.approvals.lock().await.insert(id.clone(), sender);
+    if request.emit(&self.app).is_err() {
+      state.approvals.lock().await.remove(&id);
+      return false;
+    }
+    let answer = tokio::time::timeout(APPROVAL_TIMEOUT, receiver).await;
+    // Timed out or the dialog vanished: drop the slot and refuse.
+    state.approvals.lock().await.remove(&id);
+    matches!(answer, Ok(Ok(true)))
   }
 }
 
@@ -408,14 +498,39 @@ async fn get_table_ddl_impl(
   Ok(serde_json::Value::String(ddl))
 }
 
-async fn run_query_impl(state: &AppState, args: &QueryArgs) -> Result<serde_json::Value, Error> {
-  opted_in(state, &args.connection_id)?;
+async fn run_query_impl(
+  state: &AppState,
+  approver: &dyn Approver,
+  args: &QueryArgs,
+) -> Result<serde_json::Value, Error> {
+  let profile = opted_in(state, &args.connection_id)?;
   ensure_connected(state, &args.connection_id).await?;
   let connection = commands::active(state, &args.connection_id).await?;
   let sql = connection.sql().ok_or_else(|| Error::Unsupported {
     message: "this connection does not support SQL".to_string(),
   })?;
-  Ok(capped(sql.run_read_only_query(&args.sql).await?))
+  // Reads always take the engine-enforced read-only path: classification only
+  // decides whether to ask, never what the engine allows.
+  if crate::connectors::is_read_statement(&args.sql) {
+    return Ok(capped(sql.run_read_only_query(&args.sql).await?));
+  }
+  if profile.agent_access != AgentAccess::WriteWithApproval {
+    return Err(Error::Unsupported {
+      message: "this connection is read-only for agents".to_string(),
+    });
+  }
+  let request = McpApprovalRequest {
+    id: uuid::Uuid::new_v4().to_string(),
+    connection_id: profile.id.clone(),
+    connection_name: profile.name.clone(),
+    sql: args.sql.clone(),
+  };
+  if !approver.request(state, request).await {
+    return Err(Error::Unsupported {
+      message: "the write was not approved".to_string(),
+    });
+  }
+  Ok(capped(sql.run_query(&args.sql).await?))
 }
 
 async fn sample_rows_impl(state: &AppState, args: &SampleArgs) -> Result<serde_json::Value, Error> {
@@ -508,7 +623,10 @@ impl SoquelMcp {
   ) -> Result<CallToolResult, McpError> {
     let started = Instant::now();
     let state = self.state();
-    let outcome = run_query_impl(&state, &args).await;
+    let approver = DialogApprover {
+      app: self.app.clone(),
+    };
+    let outcome = run_query_impl(&state, &approver, &args).await;
     audit(
       &state,
       "run_query",
@@ -706,6 +824,7 @@ mod tests {
       sessions: tokio::sync::Mutex::new(HashMap::new()),
       data_dir: dir.path().to_path_buf(),
       mcp: tokio::sync::Mutex::new(None),
+      approvals: tokio::sync::Mutex::new(HashMap::new()),
     };
     (state, opted.id, hidden.id)
   }
@@ -737,6 +856,7 @@ mod tests {
     assert_hidden(
       run_query_impl(
         &state,
+        &FixedApprover(true),
         &QueryArgs {
           connection_id: hidden.clone(),
           sql: "SELECT 1".to_string(),
@@ -787,6 +907,7 @@ mod tests {
     // Same code path lets the opted-in profile through (auto-connect included).
     let value = run_query_impl(
       &state,
+      &FixedApprover(true),
       &QueryArgs {
         connection_id: opted.clone(),
         sql: "SELECT 1 AS one".to_string(),
@@ -808,6 +929,7 @@ mod tests {
 
     let err = run_query_impl(
       &state,
+      &FixedApprover(true),
       &QueryArgs {
         connection_id: opted.clone(),
         sql: "UPDATE app.customers SET name = name".to_string(),
@@ -815,13 +937,32 @@ mod tests {
     )
     .await
     .unwrap_err();
-    let Error::Database { message } = err else {
-      panic!("expected a database error");
+    let Error::Unsupported { message } = err else {
+      panic!("expected the agent guard to refuse: {err:?}");
+    };
+    assert!(message.contains("read-only for agents"), "{message}");
+
+    // Defense in depth: a write the classifier reads as a read still dies in
+    // the engine's read-only transaction, not on the guard.
+    let leaked = run_query_impl(
+      &state,
+      &FixedApprover(true),
+      &QueryArgs {
+        connection_id: opted.clone(),
+        sql: "WITH touched AS (UPDATE app.customers SET name = name RETURNING id) SELECT * FROM touched"
+          .to_string(),
+      },
+    )
+    .await
+    .unwrap_err();
+    let Error::Database { message } = leaked else {
+      panic!("expected a database error: {leaked:?}");
     };
     assert!(message.contains("read-only"), "{message}");
 
     let value = run_query_impl(
       &state,
+      &FixedApprover(true),
       &QueryArgs {
         connection_id: opted.clone(),
         sql: "SELECT generate_series(1, 600)".to_string(),
@@ -908,6 +1049,7 @@ mod tests {
       sessions: tokio::sync::Mutex::new(HashMap::new()),
       data_dir: dir.path().to_path_buf(),
       mcp: tokio::sync::Mutex::new(None),
+      approvals: tokio::sync::Mutex::new(HashMap::new()),
     }
   }
 
@@ -949,5 +1091,194 @@ mod tests {
     let loaded = load_settings(&state);
     assert!(loaded.enabled);
     assert_eq!(loaded.port, 4242);
+  }
+
+  /// Answers without a dialog: the decision under test, not the transport.
+  struct FixedApprover(bool);
+
+  #[async_trait::async_trait]
+  impl Approver for FixedApprover {
+    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> bool {
+      self.0
+    }
+  }
+
+  struct DenyingApprover;
+
+  #[async_trait::async_trait]
+  impl Approver for DenyingApprover {
+    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> bool {
+      false
+    }
+  }
+
+  #[test]
+  fn classifies_reads_generously_and_writes_as_writes() {
+    for sql in [
+      "SELECT 1",
+      "  with x as (select 1) select * from x",
+      "/* lead */ (SELECT 1)",
+      "EXPLAIN SELECT 1",
+      "SHOW TABLES",
+    ] {
+      assert!(crate::connectors::is_read_statement(sql), "{sql}");
+    }
+    for sql in [
+      "INSERT INTO t VALUES (1)",
+      "UPDATE t SET a = 1",
+      "DELETE FROM t",
+      "CREATE TABLE t (id int)",
+      "DROP TABLE t",
+      "TRUNCATE t",
+      "",
+    ] {
+      assert!(!crate::connectors::is_read_statement(sql), "{sql}");
+    }
+  }
+
+  #[tokio::test]
+  async fn resolve_approval_answers_a_pending_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    state
+      .approvals
+      .lock()
+      .await
+      .insert("req-1".to_string(), sender);
+
+    resolve_approval(&state, "req-1", true).await.unwrap();
+    assert!(receiver.await.unwrap());
+    // The slot is consumed: answering twice is a stale request.
+    let err = resolve_approval(&state, "req-1", true).await.unwrap_err();
+    assert!(matches!(err, Error::NotFound { .. }), "{err:?}");
+  }
+
+  #[tokio::test]
+  async fn audit_log_reads_newest_first_and_survives_junk() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    assert!(audit_log(&state, 10).unwrap().is_empty());
+
+    for tool in ["first", "second"] {
+      audit(
+        &state,
+        tool,
+        Some("conn"),
+        Some("SELECT 1"),
+        &Ok(serde_json::Value::Null),
+        Instant::now(),
+      );
+    }
+    std::fs::OpenOptions::new()
+      .append(true)
+      .open(dir.path().join("mcp-audit.jsonl"))
+      .and_then(|mut file| writeln!(file, "not json"))
+      .unwrap();
+    audit(
+      &state,
+      "third",
+      None,
+      None,
+      &Err(Error::Unsupported {
+        message: "the write was not approved".to_string(),
+      }),
+      Instant::now(),
+    );
+
+    let entries = audit_log(&state, 10).unwrap();
+    let tools: Vec<&str> = entries.iter().map(|entry| entry.tool.as_str()).collect();
+    assert_eq!(tools, ["third", "second", "first"]);
+    assert!(!entries[0].ok);
+    assert_eq!(
+      entries[0].error.as_deref(),
+      Some("the write was not approved")
+    );
+    assert_eq!(audit_log(&state, 1).unwrap().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn integration_mcp_write_needs_approval() {
+    let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
+      return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (state, read_only, _hidden) = test_state(&dir, &url);
+    let write = |sql: &str| QueryArgs {
+      connection_id: read_only.clone(),
+      sql: sql.to_string(),
+    };
+
+    // read-only never reaches the approver, whatever it would answer.
+    let err = run_query_impl(
+      &state,
+      &FixedApprover(true),
+      &write("CREATE TABLE app.leak (id int)"),
+    )
+    .await
+    .unwrap_err();
+    let Error::Unsupported { message } = err else {
+      panic!("expected unsupported: {err:?}");
+    };
+    assert!(message.contains("read-only for agents"), "{message}");
+
+    // Same profile, upgraded to write-with-approval.
+    {
+      let mut profiles = state.profiles.lock().unwrap();
+      let input = crate::profiles::ConnectionInput {
+        name: "agent-visible".to_string(),
+        env: Env::Dev,
+        group: None,
+        agent_access: AgentAccess::WriteWithApproval,
+        params: pg_params(&url),
+        password: None,
+      };
+      profiles.update(&read_only, &input).unwrap();
+    }
+
+    let denied = run_query_impl(
+      &state,
+      &DenyingApprover,
+      &write("CREATE TABLE app.denied (id int)"),
+    )
+    .await
+    .unwrap_err();
+    let Error::Unsupported { message } = denied else {
+      panic!("expected unsupported: {denied:?}");
+    };
+    assert!(message.contains("not approved"), "{message}");
+    // Denial means nothing ran.
+    let missing = run_query_impl(
+      &state,
+      &FixedApprover(true),
+      &write("SELECT to_regclass('app.denied') IS NULL AS absent"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(missing["result"]["statements"][0]["rows"][0][0], "t");
+
+    // Approved: the write lands, outside the read-only path.
+    run_query_impl(
+      &state,
+      &FixedApprover(true),
+      &write("CREATE TABLE app.approved_probe (id int)"),
+    )
+    .await
+    .unwrap();
+    let exists = run_query_impl(
+      &state,
+      &FixedApprover(true),
+      &write("SELECT to_regclass('app.approved_probe') IS NOT NULL AS there"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(exists["result"]["statements"][0]["rows"][0][0], "t");
+    run_query_impl(
+      &state,
+      &FixedApprover(true),
+      &write("DROP TABLE app.approved_probe"),
+    )
+    .await
+    .unwrap();
   }
 }

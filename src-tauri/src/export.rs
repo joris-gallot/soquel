@@ -263,8 +263,11 @@ impl<W: Write> ChunkSink<W> {
 
 pub fn quote_ident(kind: ConnectorKind, ident: &str) -> String {
   match kind {
-    // Redis never reaches SQL export; the arm only keeps the match exhaustive.
-    ConnectorKind::Postgres | ConnectorKind::Sqlite | ConnectorKind::Redis => {
+    // Redis/mongo never reach SQL export; the arm only keeps the match exhaustive.
+    ConnectorKind::Postgres
+    | ConnectorKind::Sqlite
+    | ConnectorKind::Redis
+    | ConnectorKind::Mongo => {
       format!("\"{}\"", ident.replace('"', "\"\""))
     }
     ConnectorKind::Mysql => format!("`{}`", ident.replace('`', "``")),
@@ -282,7 +285,10 @@ fn csv_field(value: &str) -> String {
 fn sql_literal(kind: ConnectorKind, value: &str) -> String {
   match kind {
     // standard_conforming_strings: backslashes are literal in postgres and sqlite.
-    ConnectorKind::Postgres | ConnectorKind::Sqlite | ConnectorKind::Redis => {
+    ConnectorKind::Postgres
+    | ConnectorKind::Sqlite
+    | ConnectorKind::Redis
+    | ConnectorKind::Mongo => {
       format!("'{}'", value.replace('\'', "''"))
     }
     // mysql treats backslash as an escape character inside strings.

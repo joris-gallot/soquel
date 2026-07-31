@@ -70,7 +70,7 @@ const versionBadge = computed(() => {
 // sqlite's schema namespace is always "main"; servers use the profile database.
 const database = computed(() => {
   const params = profile.value?.params
-  if (!params || params.kind === 'redis')
+  if (!params || params.kind === 'redis' || params.kind === 'mongo')
     return ''
   return params.kind === 'sqlite' ? 'main' : params.database
 })

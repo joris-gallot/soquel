@@ -26,7 +26,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { connectionSchema, ENGINE_CHOICES, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { connectionSchema, ENGINE_CHOICES, engineChoiceForKind, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -101,7 +101,7 @@ watch(open, (isOpen) => {
   newGroup.value = ''
   values.value = props.profile ? formValuesFromProfile(props.profile) : emptyValues()
   // A stored mariadb profile reads back as mysql: same kind by design.
-  engineChoice.value = values.value.kind
+  engineChoice.value = engineChoiceForKind(values.value.kind)
 })
 
 function applyUrl() {
@@ -112,7 +112,7 @@ function applyUrl() {
   }
   values.value = { ...values.value, ...parsed }
   if (parsed.kind)
-    engineChoice.value = parsed.kind
+    engineChoice.value = engineChoiceForKind(parsed.kind)
   importUrl.value = ''
 }
 

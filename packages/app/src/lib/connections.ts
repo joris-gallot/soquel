@@ -15,6 +15,8 @@ export const KIND_META: Record<ConnectorKind, {
   mysql: { label: 'MySQL', short: 'MySQL', defaultPort: 3306, protocols: ['mysql:'] },
   sqlite: { label: 'SQLite', short: 'SQLite', defaultPort: 0, protocols: [] },
   redis: { label: 'Redis', short: 'Redis', defaultPort: 6379, protocols: ['redis:', 'rediss:'] },
+  // Rust surface only for now: the doc browser UI round adds the form entry + mongodb: prefill.
+  mongo: { label: 'MongoDB', short: 'Mongo', defaultPort: 27017, protocols: [] },
 }
 
 /// What the form's engine select shows: MariaDB is a display entry riding the
@@ -28,6 +30,11 @@ export const ENGINE_CHOICES = [
 ] as const satisfies readonly { id: string, label: string, kind: ConnectorKind }[]
 
 export type EngineChoice = (typeof ENGINE_CHOICES)[number]['id']
+
+/// The form only edits kinds ENGINE_CHOICES offers; mongo arrives with its UI round.
+export function engineChoiceForKind(kind: ConnectorKind): EngineChoice {
+  return ENGINE_CHOICES.some(choice => choice.id === kind) ? kind as EngineChoice : 'postgres'
+}
 
 export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-full'] as const satisfies readonly SslMode[]
 
@@ -72,6 +79,8 @@ export function connectionTarget(params: ConnectorParams): string {
     return params.path
   if (params.kind === 'redis')
     return `${params.host}:${params.port}/${params.db}`
+  if (params.kind === 'mongo')
+    return `${params.host}:${params.port}${params.database ? `/${params.database}` : ''}`
   return `${params.host}:${params.port}/${params.database}`
 }
 
@@ -80,6 +89,8 @@ export function connectionDsn(params: ConnectorParams): string {
     return `sqlite://${params.path}`
   if (params.kind === 'redis')
     return `${params.tls ? 'rediss' : 'redis'}://${params.host}:${params.port}/${params.db}`
+  if (params.kind === 'mongo')
+    return `mongodb://${params.username ? `${params.username}@` : ''}${params.host}:${params.port}${params.database ? `/${params.database}` : ''}`
   return `${params.kind}://${params.user}@${params.host}:${params.port}/${params.database}`
 }
 
@@ -214,6 +225,18 @@ export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFor
       port: params.port,
       user: params.username ?? '',
       dbIndex: params.db ?? 0,
+      tls: params.tls ?? false,
+      tunnelId: params.tunnelId ?? NO_TUNNEL,
+    }
+  }
+  if (params.kind === 'mongo') {
+    return {
+      ...base,
+      ...defaults,
+      host: params.host,
+      port: params.port,
+      database: params.database ?? '',
+      user: params.username ?? '',
       tls: params.tls ?? false,
       tunnelId: params.tunnelId ?? NO_TUNNEL,
     }

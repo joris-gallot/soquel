@@ -21,6 +21,7 @@ pub enum ConnectorKind {
   Mysql,
   Sqlite,
   Redis,
+  Mongo,
 }
 
 /// libpq semantics: `require` encrypts without verifying the certificate,
@@ -69,6 +70,26 @@ pub struct RedisParams {
   pub tunnel_id: Option<String>,
 }
 
+/// MongoDB single node (v1); srv/replica-set discovery later. `database` is
+/// the default db the UI opens; credentials validate against `auth_source`,
+/// falling back to `database`, then the driver's "admin" (URI semantics).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MongoParams {
+  pub host: String,
+  pub port: u16,
+  #[serde(default)]
+  pub database: Option<String>,
+  #[serde(default)]
+  pub username: Option<String>,
+  #[serde(default)]
+  pub auth_source: Option<String>,
+  #[serde(default)]
+  pub tls: bool,
+  #[serde(default)]
+  pub tunnel_id: Option<String>,
+}
+
 /// Per-kind connection parameters; future kinds bring their own shapes.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -80,6 +101,7 @@ pub enum ConnectorParams {
     path: String,
   },
   Redis(RedisParams),
+  Mongo(MongoParams),
 }
 
 /// TCP endpoint a tunnel can forward to; kind-agnostic.
@@ -96,6 +118,7 @@ impl ConnectorParams {
       Self::Mysql(_) => ConnectorKind::Mysql,
       Self::Sqlite { .. } => ConnectorKind::Sqlite,
       Self::Redis(_) => ConnectorKind::Redis,
+      Self::Mongo(_) => ConnectorKind::Mongo,
     }
   }
 
@@ -103,7 +126,7 @@ impl ConnectorParams {
   pub fn sql_server(&self) -> Option<&SqlServerParams> {
     match self {
       Self::Postgres(params) | Self::Mysql(params) => Some(params),
-      Self::Sqlite { .. } | Self::Redis(_) => None,
+      Self::Sqlite { .. } | Self::Redis(_) | Self::Mongo(_) => None,
     }
   }
 
@@ -116,6 +139,11 @@ impl ConnectorParams {
         tunnel_id: params.tunnel_id.as_deref(),
       }),
       Self::Redis(params) => Some(RemoteEndpoint {
+        host: &params.host,
+        port: params.port,
+        tunnel_id: params.tunnel_id.as_deref(),
+      }),
+      Self::Mongo(params) => Some(RemoteEndpoint {
         host: &params.host,
         port: params.port,
         tunnel_id: params.tunnel_id.as_deref(),

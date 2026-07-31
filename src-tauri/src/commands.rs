@@ -3,9 +3,10 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::connectors::{
-  connector_for, ApplyResult, Capability, Connection, KeyDetail, KeyScanPage, KvBrowse,
-  KvDatabases, LocalForward, QueryColumn, QueryResult, RowsChunk, SchemaSnapshot, SqlQuery,
-  SqlSession, StreamSummary, TableChanges, TableRowsRequest,
+  connector_for, ApplyResult, Capability, Connection, DocBrowse, DocCollection, DocCount,
+  DocDatabase, DocDetail, DocFindRequest, DocPage, DocQueryResult, IndexInfo, KeyDetail,
+  KeyScanPage, KvBrowse, KvDatabases, LocalForward, QueryColumn, QueryResult, RowsChunk,
+  SchemaSnapshot, SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
 };
 use crate::error::Error;
 use crate::export::{quote_ident, ExportFormat, ExportWriter};
@@ -404,6 +405,12 @@ fn kv_surface(connection: &Arc<dyn Connection>) -> Result<&dyn KvBrowse, Error> 
   })
 }
 
+fn doc_surface(connection: &Arc<dyn Connection>) -> Result<&dyn DocBrowse, Error> {
+  connection.doc().ok_or_else(|| Error::Unsupported {
+    message: "this connection does not browse documents".to_string(),
+  })
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn scan_keys(
@@ -524,6 +531,126 @@ impl AppState {
 #[specta::specta]
 pub async fn kv_select_db(state: State<'_, AppState>, id: String, db: u32) -> Result<(), Error> {
   state.select_kv_db(&id, db).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_databases(
+  state: State<'_, AppState>,
+  id: String,
+) -> Result<Vec<DocDatabase>, Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?.databases().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_collections(
+  state: State<'_, AppState>,
+  id: String,
+  db: String,
+) -> Result<Vec<DocCollection>, Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?.collections(&db).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_find(
+  state: State<'_, AppState>,
+  id: String,
+  request: DocFindRequest,
+) -> Result<DocPage, Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?.find_docs(&request).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_detail(
+  state: State<'_, AppState>,
+  id: String,
+  db: String,
+  collection: String,
+  doc_id: String,
+) -> Result<DocDetail, Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?
+    .doc_detail(&db, &collection, &doc_id)
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_replace(
+  state: State<'_, AppState>,
+  id: String,
+  db: String,
+  collection: String,
+  doc_id: String,
+  doc: String,
+) -> Result<(), Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?
+    .replace_doc(&db, &collection, &doc_id, &doc)
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_delete(
+  state: State<'_, AppState>,
+  id: String,
+  db: String,
+  collection: String,
+  doc_id: String,
+) -> Result<(), Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?
+    .delete_doc(&db, &collection, &doc_id)
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_indexes(
+  state: State<'_, AppState>,
+  id: String,
+  db: String,
+  collection: String,
+) -> Result<Vec<IndexInfo>, Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?.indexes(&db, &collection).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_count(
+  state: State<'_, AppState>,
+  id: String,
+  db: String,
+  collection: String,
+  filter: Option<String>,
+) -> Result<DocCount, Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?
+    .count_docs(&db, &collection, filter.as_deref())
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_run_query(
+  state: State<'_, AppState>,
+  id: String,
+  db: String,
+  collection: String,
+  source: String,
+) -> Result<DocQueryResult, Error> {
+  let connection = active(&state, &id).await?;
+  doc_surface(&connection)?
+    .run_query(&db, &collection, &source)
+    .await
 }
 
 #[tauri::command]

@@ -2,7 +2,8 @@
 # Port plan: postgres 5455, mysql 5456, redis 5457, sshd tunnel target 5458, postgres-tls 5459,
 # postgres-oldest 5460 (minimum supported major = oldest non-EOL; bump on postgres EOL dates),
 # sshd-reconnect 5461, mysql-oldest 5462 (8.0: upstream EOL but dominant via RDS/Aurora),
-# mariadb 5463 (LTS, same seed; TLS via scripts/test-tls so the ssl suite runs unchanged).
+# mariadb 5463 (LTS, same seed; TLS via scripts/test-tls so the ssl suite runs unchanged),
+# mongo 5464.
 name: soquel-test
 
 services:
@@ -145,6 +146,22 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+  mongo:
+    image: mongo:8
+    ports:
+      - '5464:27017'
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: soquel
+      MONGO_INITDB_ROOT_PASSWORD: soquel
+    # Throwaway data: tests create/drop their own soquel_test_* databases.
+    tmpfs:
+      - /data/db
+    healthcheck:
+      test: [CMD-SHELL, mongosh --quiet -u soquel -p soquel --eval "db.adminCommand('ping').ok" | grep 1]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   # Bastion for tunnel tests: forwards to the postgres service over the compose network.
   # tunnel = key-only; tunnelpw = password auth (set by the entrypoint.d script).

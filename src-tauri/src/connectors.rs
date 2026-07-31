@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::error::Error;
+use crate::mongo::MongoConnector;
 use crate::mysql::MysqlConnector;
 use crate::postgres::PostgresConnector;
 use crate::profiles::{ConnectionProfile, ConnectorKind};
@@ -14,6 +15,7 @@ pub enum Capability {
   SqlQuery,
   Introspection,
   KvBrowse,
+  DocBrowse,
 }
 
 /// Coarse type family for UI decisions (alignment, editors, viewers);
@@ -395,6 +397,129 @@ pub trait KvBrowse: Send + Sync {
   async fn run_command(&self, command: &str) -> Result<Vec<String>, Error>;
 }
 
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocDatabase {
+  pub name: String,
+  /// listDatabases sizeOnDisk; None when a restricted user forced the fallback path.
+  pub size_bytes: Option<f64>,
+  pub empty: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum DocCollectionKind {
+  Collection,
+  View,
+  Timeseries,
+  Other,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocCollection {
+  pub name: String,
+  pub kind: DocCollectionKind,
+  /// estimatedDocumentCount (collection metadata); None for views.
+  pub estimated_docs: Option<f64>,
+  pub capped: bool,
+}
+
+/// One document on the wire. `doc` is relaxed extended JSON (display); `id` is
+/// canonical extended JSON of the `_id` value alone - the lossless address for
+/// get/replace/delete (the display form must never double as the key).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocEntry {
+  /// None for documents without `_id`; edit/delete are unavailable then.
+  pub id: Option<String>,
+  pub doc: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocFindRequest {
+  pub db: String,
+  pub collection: String,
+  /// Extended JSON object (canonical or relaxed); None/empty = {}.
+  #[serde(default)]
+  pub filter: Option<String>,
+  /// Extended JSON object, e.g. {"age": -1}.
+  #[serde(default)]
+  pub sort: Option<String>,
+  /// Page size; clamped server-side.
+  pub limit: u32,
+  /// Opaque continuation from the previous page; None starts over.
+  #[serde(default)]
+  pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocPage {
+  pub docs: Vec<DocEntry>,
+  /// Opaque continuation cursor; None when the iteration completed.
+  pub cursor: Option<String>,
+}
+
+/// Both renderings of one document: relaxed for reading, canonical for a
+/// lossless edit round-trip (relaxed collapses Int32/Int64/Double).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocDetail {
+  pub id: Option<String>,
+  pub relaxed: String,
+  pub canonical: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocCount {
+  pub count: f64,
+  /// false when this is a metadata estimate or the exact count hit the cap.
+  pub exact: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocQueryResult {
+  /// Relaxed extended JSON strings; console results are read-only.
+  pub docs: Vec<String>,
+  /// true when results were cut at the sample cap.
+  pub truncated: bool,
+  pub duration_ms: f64,
+}
+
+/// Document capability surface, mirroring `Capability::DocBrowse`.
+#[async_trait::async_trait]
+pub trait DocBrowse: Send + Sync {
+  async fn databases(&self) -> Result<Vec<DocDatabase>, Error>;
+  async fn collections(&self, db: &str) -> Result<Vec<DocCollection>, Error>;
+  async fn find_docs(&self, request: &DocFindRequest) -> Result<DocPage, Error>;
+  /// `id` is the canonical extended JSON produced by `DocEntry.id`.
+  async fn doc_detail(&self, db: &str, collection: &str, id: &str) -> Result<DocDetail, Error>;
+  /// Edit = full replacement; a doc carrying a different `_id` is rejected server-side.
+  async fn replace_doc(&self, db: &str, collection: &str, id: &str, doc: &str)
+    -> Result<(), Error>;
+  async fn delete_doc(&self, db: &str, collection: &str, id: &str) -> Result<(), Error>;
+  async fn indexes(&self, db: &str, collection: &str) -> Result<Vec<IndexInfo>, Error>;
+  /// No filter -> estimatedDocumentCount; filter -> countDocuments, capped.
+  async fn count_docs(
+    &self,
+    db: &str,
+    collection: &str,
+    filter: Option<&str>,
+  ) -> Result<DocCount, Error>;
+  /// Console entry point: an object is a find filter, an array is an aggregate
+  /// pipeline ($out/$merge rejected). Results capped at the sample size.
+  async fn run_query(
+    &self,
+    db: &str,
+    collection: &str,
+    source: &str,
+  ) -> Result<DocQueryResult, Error>;
+}
+
 /// A live connection to a database, produced by a `Connector`.
 #[async_trait::async_trait]
 pub trait Connection: Send + Sync {
@@ -411,6 +536,9 @@ pub trait Connection: Send + Sync {
     None
   }
   fn kv(&self) -> Option<&dyn KvBrowse> {
+    None
+  }
+  fn doc(&self) -> Option<&dyn DocBrowse> {
     None
   }
 }
@@ -504,6 +632,7 @@ pub fn connector_for(kind: ConnectorKind) -> &'static dyn Connector {
     ConnectorKind::Mysql => &MysqlConnector,
     ConnectorKind::Sqlite => &SqliteConnector,
     ConnectorKind::Redis => &RedisConnector,
+    ConnectorKind::Mongo => &MongoConnector,
   }
 }
 
@@ -533,5 +662,14 @@ mod tests {
     assert!(caps.contains(&Capability::KvBrowse));
     assert!(!caps.contains(&Capability::SqlQuery));
     assert!(!caps.contains(&Capability::Introspection));
+  }
+
+  #[test]
+  fn mongo_declares_doc_only() {
+    let caps = connector_for(ConnectorKind::Mongo).capabilities();
+    assert!(caps.contains(&Capability::DocBrowse));
+    assert!(!caps.contains(&Capability::SqlQuery));
+    assert!(!caps.contains(&Capability::Introspection));
+    assert!(!caps.contains(&Capability::KvBrowse));
   }
 }

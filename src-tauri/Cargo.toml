@@ -62,6 +62,10 @@ redis = { version = "0.32.2", default-features = false, features = [
   "tokio-comp",
   "tokio-rustls-comp"
 ] }
+mongodb = { version = "3.8", default-features = false, features = [
+  "rustls-tls",
+  "compat-3-0-0"
+] }
 
 [dev-dependencies]
 tempfile = "3"

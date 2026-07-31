@@ -71,6 +71,17 @@ impl From<redis::RedisError> for Error {
   }
 }
 
+impl From<mongodb::error::Error> for Error {
+  fn from(err: mongodb::error::Error) -> Self {
+    // Command errors carry the server message; wrap the rest verbatim.
+    let message = match &*err.kind {
+      mongodb::error::ErrorKind::Command(command) => command.message.clone(),
+      _ => err.to_string(),
+    };
+    Error::Database { message }
+  }
+}
+
 impl From<rusqlite::Error> for Error {
   fn from(err: rusqlite::Error) -> Self {
     Error::Database {

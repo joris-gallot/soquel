@@ -720,6 +720,67 @@ mod tests {
     back.close().await.unwrap();
   }
 
+  /// The doc connector rides the same LocalForward plumbing. Also proves the
+  /// direct connection never redials the advertised address (the container
+  /// hostname is unreachable from the host).
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_ssh_mongo_through_tunnel() {
+    use crate::connectors::{Connector, LocalForward};
+    use crate::mongo::MongoConnector;
+    use crate::profiles::{ConnectionProfile, ConnectorParams, Env, MongoParams};
+
+    let Some(profile) = tunnel_from_env(TEST_KEY) else {
+      return;
+    };
+    if std::env::var("SOQUEL_TEST_MONGO").is_err() {
+      return;
+    }
+    let key = host_key(&profile).await;
+    let tunnel = SshTunnel::open(
+      &profile,
+      None,
+      Some(key),
+      TunnelTarget {
+        host: "mongo".to_string(),
+        port: 27017,
+      },
+    )
+    .await
+    .unwrap();
+
+    let connection = MongoConnector
+      .connect(
+        &ConnectionProfile {
+          id: String::new(),
+          name: String::new(),
+          env: Env::Dev,
+          group: None,
+          params: ConnectorParams::Mongo(MongoParams {
+            host: "mongo".to_string(),
+            port: 27017,
+            database: None,
+            username: Some("soquel".to_string()),
+            auth_source: Some("admin".to_string()),
+            tls: false,
+            tunnel_id: None,
+          }),
+        },
+        Some("soquel"),
+        Some(LocalForward {
+          port: tunnel.local_port,
+        }),
+      )
+      .await
+      .unwrap();
+    connection.health().await.unwrap();
+    let databases = connection.doc().unwrap().databases().await.unwrap();
+    assert!(
+      databases.iter().any(|db| db.name == "admin"),
+      "{databases:?}"
+    );
+    connection.close().await.unwrap();
+  }
+
   /// End-to-end optimistic proof of the SNI/hostname override: verify-full
   /// through the tunnel validates the profile's logical host, not 127.0.0.1.
   #[tokio::test(flavor = "multi_thread")]

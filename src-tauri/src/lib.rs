@@ -15,6 +15,7 @@ mod connectors;
 mod error;
 mod export;
 mod known_hosts;
+mod mongo;
 mod mysql;
 mod postgres;
 mod profiles;
@@ -77,6 +78,15 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::kv_run_command,
       commands::kv_databases,
       commands::kv_select_db,
+      commands::doc_databases,
+      commands::doc_collections,
+      commands::doc_find,
+      commands::doc_detail,
+      commands::doc_replace,
+      commands::doc_delete,
+      commands::doc_indexes,
+      commands::doc_count,
+      commands::doc_run_query,
       commands::open_sql_session,
       commands::run_session_query,
       commands::cancel_session_query,

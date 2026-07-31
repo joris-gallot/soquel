@@ -42,6 +42,15 @@ export const commands = {
 	kvRunCommand: (id: string, command: string) => typedError<string[], Error>(__TAURI_INVOKE("kv_run_command", { id, command })),
 	kvDatabases: (id: string) => typedError<KvDatabases, Error>(__TAURI_INVOKE("kv_databases", { id })),
 	kvSelectDb: (id: string, db: number) => typedError<null, Error>(__TAURI_INVOKE("kv_select_db", { id, db })),
+	docDatabases: (id: string) => typedError<DocDatabase[], Error>(__TAURI_INVOKE("doc_databases", { id })),
+	docCollections: (id: string, db: string) => typedError<DocCollection[], Error>(__TAURI_INVOKE("doc_collections", { id, db })),
+	docFind: (id: string, request: DocFindRequest) => typedError<DocPage, Error>(__TAURI_INVOKE("doc_find", { id, request })),
+	docDetail: (id: string, db: string, collection: string, docId: string) => typedError<DocDetail, Error>(__TAURI_INVOKE("doc_detail", { id, db, collection, docId })),
+	docReplace: (id: string, db: string, collection: string, docId: string, doc: string) => typedError<null, Error>(__TAURI_INVOKE("doc_replace", { id, db, collection, docId, doc })),
+	docDelete: (id: string, db: string, collection: string, docId: string) => typedError<null, Error>(__TAURI_INVOKE("doc_delete", { id, db, collection, docId })),
+	docIndexes: (id: string, db: string, collection: string) => typedError<IndexInfo[], Error>(__TAURI_INVOKE("doc_indexes", { id, db, collection })),
+	docCount: (id: string, db: string, collection: string, filter: string | null) => typedError<DocCount, Error>(__TAURI_INVOKE("doc_count", { id, db, collection, filter })),
+	docRunQuery: (id: string, db: string, collection: string, source: string) => typedError<DocQueryResult, Error>(__TAURI_INVOKE("doc_run_query", { id, db, collection, source })),
 	openSqlSession: (connectionId: string) => typedError<string, Error>(__TAURI_INVOKE("open_sql_session", { connectionId })),
 	runSessionQuery: (id: string, sql: string) => typedError<QueryResult, Error>(__TAURI_INVOKE("run_session_query", { id, sql })),
 	cancelSessionQuery: (id: string) => typedError<null, Error>(__TAURI_INVOKE("cancel_session_query", { id })),
@@ -68,7 +77,7 @@ export type ApplyResult = {
 	durationMs: number | null,
 };
 
-export type Capability = "sql-query" | "introspection" | "kv-browse";
+export type Capability = "sql-query" | "introspection" | "kv-browse" | "doc-browse";
 
 export type CellValue = {
 	column: string,
@@ -113,7 +122,7 @@ export type ConnectionProfile = {
 	params: ConnectorParams,
 };
 
-export type ConnectorKind = "postgres" | "mysql" | "sqlite" | "redis";
+export type ConnectorKind = "postgres" | "mysql" | "sqlite" | "redis" | "mongo";
 
 /**  Per-kind connection parameters; future kinds bring their own shapes. */
 export type ConnectorParams = {
@@ -122,7 +131,80 @@ export type ConnectorParams = {
 	kind: "mysql",
 } & SqlServerParams | { kind: "sqlite"; path: string } | {
 	kind: "redis",
-} & RedisParams;
+} & RedisParams | {
+	kind: "mongo",
+} & MongoParams;
+
+export type DocCollection = {
+	name: string,
+	kind: DocCollectionKind,
+	/**  estimatedDocumentCount (collection metadata); None for views. */
+	estimatedDocs: number | null,
+	capped: boolean,
+};
+
+export type DocCollectionKind = "collection" | "view" | "timeseries" | "other";
+
+export type DocCount = {
+	count: number | null,
+	/**  false when this is a metadata estimate or the exact count hit the cap. */
+	exact: boolean,
+};
+
+export type DocDatabase = {
+	name: string,
+	/**  listDatabases sizeOnDisk; None when a restricted user forced the fallback path. */
+	sizeBytes: number | null,
+	empty: boolean,
+};
+
+/**
+ *  Both renderings of one document: relaxed for reading, canonical for a
+ *  lossless edit round-trip (relaxed collapses Int32/Int64/Double).
+ */
+export type DocDetail = {
+	id: string | null,
+	relaxed: string,
+	canonical: string,
+};
+
+/**
+ *  One document on the wire. `doc` is relaxed extended JSON (display); `id` is
+ *  canonical extended JSON of the `_id` value alone - the lossless address for
+ *  get/replace/delete (the display form must never double as the key).
+ */
+export type DocEntry = {
+	/**  None for documents without `_id`; edit/delete are unavailable then. */
+	id: string | null,
+	doc: string,
+};
+
+export type DocFindRequest = {
+	db: string,
+	collection: string,
+	/**  Extended JSON object (canonical or relaxed); None/empty = {}. */
+	filter?: string | null,
+	/**  Extended JSON object, e.g. {"age": -1}. */
+	sort?: string | null,
+	/**  Page size; clamped server-side. */
+	limit: number,
+	/**  Opaque continuation from the previous page; None starts over. */
+	cursor?: string | null,
+};
+
+export type DocPage = {
+	docs: DocEntry[],
+	/**  Opaque continuation cursor; None when the iteration completed. */
+	cursor: string | null,
+};
+
+export type DocQueryResult = {
+	/**  Relaxed extended JSON strings; console results are read-only. */
+	docs: string[],
+	/**  true when results were cut at the sample cap. */
+	truncated: boolean,
+	durationMs: number | null,
+};
 
 export type Env = "dev" | "staging" | "prod";
 
@@ -193,6 +275,21 @@ export type KvDatabases = {
 	total: number,
 	/**  Non-empty databases with their key counts. */
 	used: KvDatabaseKeys[],
+};
+
+/**
+ *  MongoDB single node (v1); srv/replica-set discovery later. `database` is
+ *  the default db the UI opens; credentials validate against `auth_source`,
+ *  falling back to `database`, then the driver's "admin" (URI semantics).
+ */
+export type MongoParams = {
+	host: string,
+	port: number,
+	database?: string | null,
+	username?: string | null,
+	authSource?: string | null,
+	tls?: boolean,
+	tunnelId?: string | null,
 };
 
 export type QueryColumn = {

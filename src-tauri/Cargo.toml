@@ -75,7 +75,7 @@ rmcp = { version = "3.0", features = [
   "macros",
   "transport-streamable-http-server"
 ] }
-axum = { version = "0.8", default-features = false, features = [
+axum = { version = "0.8.9", default-features = false, features = [
   "http1",
   "tokio"
 ] }

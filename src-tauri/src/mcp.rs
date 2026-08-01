@@ -1683,6 +1683,26 @@ mod tests {
     }
   }
 
+  #[tokio::test]
+  async fn an_agent_cannot_answer_a_password_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = sqlite_state(&dir);
+    let mut profile = state.profiles.lock().unwrap().get(&id).unwrap();
+    profile.credential = crate::profiles::CredentialSource::Prompt;
+    state
+      .profiles
+      .lock()
+      .unwrap()
+      .replace_all(vec![profile])
+      .unwrap();
+
+    let Err(Error::Unsupported { message }) = agent_connection(&state, &id).await.map(|_| ())
+    else {
+      panic!("the agent must get a plain refusal, not a prompt");
+    };
+    assert!(message.contains("open it in soquel first"), "{message}");
+  }
+
   fn sqlite_state(dir: &tempfile::TempDir) -> (AppState, String) {
     let path = dir.path().join("agent.db");
     std::fs::write(&path, "").unwrap();

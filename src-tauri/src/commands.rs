@@ -696,6 +696,24 @@ pub fn get_connection(state: State<'_, AppState>, id: String) -> Result<Connecti
   state.profiles.lock().unwrap().get(&id)
 }
 
+/// Keeps the stores in step with the mode: only `keychain` stores a password,
+/// and leaving it wipes what was stored for a connection that no longer keeps one.
+pub(crate) fn persist_secret(
+  state: &AppState,
+  profile: &ConnectionProfile,
+  password: Option<&str>,
+) -> Result<(), Error> {
+  if profile.credential == CredentialSource::Keychain {
+    if let Some(password) = password {
+      state.secrets.set(&profile.id, password)?;
+    }
+    return Ok(());
+  }
+  state.secrets.delete(&profile.id)?;
+  state.session_secrets.clear(&profile.id);
+  Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn create_connection(
@@ -703,14 +721,10 @@ pub fn create_connection(
   input: ConnectionInput,
 ) -> Result<ConnectionProfile, Error> {
   let profile = state.profiles.lock().unwrap().create(&input)?;
-  if input.credential == CredentialSource::Keychain {
-    if let Some(password) = &input.password {
-      // No orphan profile when the keychain is unavailable.
-      if let Err(err) = state.secrets.set(&profile.id, password) {
-        let _ = state.profiles.lock().unwrap().delete(&profile.id);
-        return Err(err);
-      }
-    }
+  // No orphan profile when the keychain is unavailable.
+  if let Err(err) = persist_secret(state.inner(), &profile, input.password.as_deref()) {
+    let _ = state.profiles.lock().unwrap().delete(&profile.id);
+    return Err(err);
   }
   Ok(profile)
 }
@@ -723,15 +737,7 @@ pub fn update_connection(
   input: ConnectionInput,
 ) -> Result<ConnectionProfile, Error> {
   let profile = state.profiles.lock().unwrap().update(&id, &input)?;
-  // A connection that stopped storing its password must not leave one behind.
-  if profile.credential == CredentialSource::Keychain {
-    if let Some(password) = &input.password {
-      state.secrets.set(&profile.id, password)?;
-    }
-  } else {
-    state.secrets.delete(&profile.id)?;
-    state.session_secrets.clear(&profile.id);
-  }
+  persist_secret(state.inner(), &profile, input.password.as_deref())?;
   Ok(profile)
 }
 
@@ -966,4 +972,125 @@ pub async fn mcp_resolve_approval(
   approved: bool,
 ) -> Result<(), Error> {
   crate::mcp::resolve_approval(state.inner(), &id, approved).await
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::profiles::{Env, SqlServerParams, SslMode};
+  use crate::secrets::InMemoryStore;
+
+  fn input(credential: CredentialSource, password: Option<&str>) -> ConnectionInput {
+    ConnectionInput {
+      name: "db".to_string(),
+      env: Env::Dev,
+      group: None,
+      agent_access: Default::default(),
+      credential,
+      params: ConnectorParams::Postgres(SqlServerParams {
+        host: "localhost".to_string(),
+        port: 5432,
+        database: "app".to_string(),
+        user: "soquel".to_string(),
+        ssl_mode: SslMode::Prefer,
+        ssl_root_cert: None,
+        tunnel_id: None,
+      }),
+      password: password.map(str::to_string),
+    }
+  }
+
+  fn state(dir: &tempfile::TempDir) -> AppState {
+    AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()))
+  }
+
+  #[test]
+  fn leaving_the_keychain_mode_wipes_the_stored_password() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+
+    let stored = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&input(CredentialSource::Keychain, Some("s3cret")))
+      .unwrap();
+    persist_secret(&state, &stored, Some("s3cret")).unwrap();
+    state
+      .session_secrets
+      .set(&stored.id, "typed".to_string(), true);
+    assert_eq!(
+      state.secrets.get(&stored.id).unwrap(),
+      Some("s3cret".to_string())
+    );
+
+    // The user switches the connection to "ask every time".
+    let switched = state
+      .profiles
+      .lock()
+      .unwrap()
+      .update(&stored.id, &input(CredentialSource::Prompt, None))
+      .unwrap();
+    persist_secret(&state, &switched, None).unwrap();
+
+    assert_eq!(state.secrets.get(&stored.id).unwrap(), None);
+    assert_eq!(state.session_secrets.get(&stored.id), None);
+  }
+
+  #[test]
+  fn a_command_profile_never_writes_a_password_to_the_keychain() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+    let credential = CredentialSource::Command {
+      command: "printf %s token".to_string(),
+      refresh_after_secs: None,
+    };
+
+    let profile = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&input(credential, Some("typed-by-mistake")))
+      .unwrap();
+    persist_secret(&state, &profile, Some("typed-by-mistake")).unwrap();
+
+    assert_eq!(state.secrets.get(&profile.id).unwrap(), None);
+  }
+
+  #[tokio::test]
+  async fn a_one_shot_password_dies_with_the_connect_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+    let file = dir.path().join("app.db");
+    rusqlite::Connection::open(&file).unwrap();
+
+    let mut sqlite = input(CredentialSource::Prompt, None);
+    sqlite.params = ConnectorParams::Sqlite {
+      path: file.to_string_lossy().into_owned(),
+    };
+    let profile = state.profiles.lock().unwrap().create(&sqlite).unwrap();
+
+    // No password anywhere: the core asks for one instead of connecting.
+    let err = connect_impl(&state, profile.id.clone()).await.unwrap_err();
+    assert!(
+      matches!(&err, Error::SecretRequired { connection_name, .. } if connection_name == "db")
+    );
+
+    state
+      .session_secrets
+      .set(&profile.id, "typed".to_string(), false);
+    connect_impl(&state, profile.id.clone()).await.unwrap();
+    assert!(state.connections.lock().await.contains_key(&profile.id));
+    // Not remembered: the next connect asks again.
+    assert_eq!(state.session_secrets.get(&profile.id), None);
+
+    state
+      .session_secrets
+      .set(&profile.id, "typed".to_string(), true);
+    connect_impl(&state, profile.id.clone()).await.unwrap();
+    assert_eq!(
+      state.session_secrets.get(&profile.id),
+      Some("typed".to_string())
+    );
+  }
 }

@@ -36,6 +36,82 @@ fn profile_from_env() -> Option<ConnectionProfile> {
   profile_with_ssl(SslMode::Prefer)
 }
 
+/// Prints the password and records each run, so a test can tell how many times
+/// the pool asked for it.
+fn counting_password_script(dir: &tempfile::TempDir) -> (String, std::path::PathBuf) {
+  let runs = dir.path().join("runs");
+  let script = dir.path().join("password.sh");
+  std::fs::write(
+    &script,
+    format!(
+      "#!/bin/sh\necho run >> {}\nprintf %s soquel\n",
+      runs.display()
+    ),
+  )
+  .unwrap();
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+  }
+  (script.to_string_lossy().into_owned(), runs)
+}
+
+#[tokio::test]
+async fn integration_mysql_password_from_a_command() {
+  let Some(profile) = profile_from_env() else {
+    return;
+  };
+  let spec = crate::credentials::parse_command("printf %s soquel").unwrap();
+  let connection = MysqlConnector
+    .connect(
+      &profile,
+      Credentials::command(spec, std::time::Duration::from_secs(300)),
+      None,
+    )
+    .await
+    .unwrap();
+  connection.health().await.unwrap();
+  connection.close().await.unwrap();
+}
+
+/// mysql_async freezes the password inside the pool's Opts: an expired token
+/// means the pool itself has to be rebuilt.
+#[tokio::test]
+async fn integration_mysql_expired_command_password_rebuilds_the_pool() {
+  let Some(profile) = profile_from_env() else {
+    return;
+  };
+  let dir = tempfile::tempdir().unwrap();
+  let (script, runs) = counting_password_script(&dir);
+  let spec = crate::credentials::parse_command(&script).unwrap();
+  let connection = MysqlConnector
+    .connect(
+      &profile,
+      Credentials::command(spec, std::time::Duration::from_millis(1)),
+      None,
+    )
+    .await
+    .unwrap();
+
+  // Both a pooled checkout and a detached session must pick up a fresh token.
+  connection.health().await.unwrap();
+  let session = connection.sql().unwrap().open_session().await.unwrap();
+  session.run_query("SELECT 1").await.unwrap();
+  // The swap disconnects the stale pool: the live one still serves queries.
+  connection
+    .sql()
+    .unwrap()
+    .run_query("SELECT 1")
+    .await
+    .unwrap();
+
+  let count = std::fs::read_to_string(&runs).unwrap().lines().count();
+  assert!(count >= 3, "the command ran {count} time(s)");
+  session.close().await.unwrap();
+  connection.close().await.unwrap();
+}
+
 /// KILL QUERY on a SLEEP: mysql returns 1, mariadb raises ER_QUERY_INTERRUPTED.
 fn assert_interrupted_sleep(outcome: Result<QueryResult, Error>) {
   match outcome {

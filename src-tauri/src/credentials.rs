@@ -288,6 +288,32 @@ pub fn resolve_credentials(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::profiles::{Env, RedisParams, SqlServerParams, SslMode};
+  use crate::secrets::InMemoryStore;
+
+  fn profile(credential: CredentialSource, params: ConnectorParams) -> ConnectionProfile {
+    ConnectionProfile {
+      id: "c-1".to_string(),
+      name: "prod".to_string(),
+      env: Env::Prod,
+      group: None,
+      agent_access: Default::default(),
+      credential,
+      params,
+    }
+  }
+
+  fn pg_params() -> ConnectorParams {
+    ConnectorParams::Postgres(SqlServerParams {
+      host: "db.internal".to_string(),
+      port: 5432,
+      database: "shop".to_string(),
+      user: "app".to_string(),
+      ssl_mode: SslMode::Prefer,
+      ssl_root_cert: None,
+      tunnel_id: None,
+    })
+  }
 
   fn spec(program: &str, args: &[&str]) -> CommandSpec {
     CommandSpec {
@@ -417,6 +443,81 @@ mod tests {
     assert_eq!(expiring.resolve().await.unwrap(), Some("2".to_string()));
     tokio::time::sleep(Duration::from_millis(5)).await;
     assert_eq!(expiring.resolve().await.unwrap(), Some("3".to_string()));
+  }
+
+  #[tokio::test]
+  async fn a_command_gets_the_placeholders_of_its_own_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()));
+    let credential = CredentialSource::Command {
+      command: "printf %s {user}@{host}:{port}/{database}".to_string(),
+      refresh_after_secs: None,
+    };
+
+    let credentials = resolve_credentials(
+      &state,
+      &profile(credential.clone(), pg_params()),
+      "c-1",
+      None,
+    )
+    .unwrap();
+    assert_eq!(
+      credentials.resolve().await.unwrap(),
+      Some("app@db.internal:5432/shop".to_string())
+    );
+
+    // Every kind fills what it has; redis carries its numeric db.
+    let redis = ConnectorParams::Redis(RedisParams {
+      host: "cache".to_string(),
+      port: 6379,
+      db: 2,
+      username: None,
+      tls: false,
+      tunnel_id: None,
+    });
+    let credentials =
+      resolve_credentials(&state, &profile(credential, redis), "c-1", None).unwrap();
+    assert_eq!(
+      credentials.resolve().await.unwrap(),
+      // No ACL user: {user} is left alone rather than blanked.
+      Some("{user}@cache:6379/2".to_string())
+    );
+  }
+
+  #[tokio::test]
+  async fn each_mode_resolves_from_its_own_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()));
+    state.secrets.set("c-1", "from-keychain").unwrap();
+
+    let keychain = profile(CredentialSource::Keychain, pg_params());
+    let resolved = resolve_credentials(&state, &keychain, "c-1", None).unwrap();
+    assert_eq!(
+      resolved.resolve().await.unwrap(),
+      Some("from-keychain".to_string())
+    );
+
+    // The password typed in the form wins, whatever the profile says.
+    let resolved =
+      resolve_credentials(&state, &keychain, "c-1", Some("typed".to_string())).unwrap();
+    assert_eq!(resolved.resolve().await.unwrap(), Some("typed".to_string()));
+
+    // Prompt never reads the keychain, even with a password sitting there.
+    let prompt = profile(CredentialSource::Prompt, pg_params());
+    let Err(err) = resolve_credentials(&state, &prompt, "c-1", None) else {
+      panic!("prompt mode must ask instead of reading the keychain");
+    };
+    assert!(matches!(&err, Error::SecretRequired { connection_id, .. } if connection_id == "c-1"));
+
+    state.session_secrets.set("c-1", "typed".to_string(), true);
+    let resolved = resolve_credentials(&state, &prompt, "c-1", None).unwrap();
+    assert_eq!(resolved.resolve().await.unwrap(), Some("typed".to_string()));
+  }
+
+  #[tokio::test]
+  async fn a_command_waiting_on_stdin_gets_an_eof_not_a_hang() {
+    let credentials = Credentials::command(spec("cat", &[]), DEFAULT_REFRESH);
+    assert!(credentials.resolve().await.is_err());
   }
 
   #[test]

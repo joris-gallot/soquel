@@ -54,6 +54,26 @@ pub struct AppState {
   pub approvals: tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
 }
 
+#[cfg(test)]
+impl AppState {
+  /// Stores rooted in `dir`, nothing connected. Tests that need a live
+  /// connection go through the connectors themselves.
+  pub fn for_tests(dir: &std::path::Path, secrets: Box<dyn SecretStore>) -> Self {
+    Self {
+      profiles: Mutex::new(ProfileStore::load(dir.join("connections.json")).unwrap()),
+      tunnels: Mutex::new(TunnelStore::load(dir.join("tunnels.json")).unwrap()),
+      known_hosts: Mutex::new(KnownHostsStore::load(dir.join("known_hosts.json")).unwrap()),
+      secrets,
+      session_secrets: SessionSecrets::default(),
+      connections: tokio::sync::Mutex::new(HashMap::new()),
+      sessions: tokio::sync::Mutex::new(HashMap::new()),
+      data_dir: dir.to_path_buf(),
+      mcp: tokio::sync::Mutex::new(None),
+      approvals: tokio::sync::Mutex::new(HashMap::new()),
+    }
+  }
+}
+
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
   tauri_specta::Builder::new()
     .commands(tauri_specta::collect_commands![

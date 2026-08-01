@@ -398,6 +398,7 @@ mod tests {
       auth: SshAuth::KeyFile {
         path: key_path.to_string(),
       },
+      credential: Default::default(),
     })
   }
 
@@ -489,6 +490,48 @@ mod tests {
     let tunnel = SshTunnel::open(
       &profile,
       Some("soquel-pw"),
+      Some(key),
+      TunnelTarget {
+        host: TEST_TARGET.0.to_string(),
+        port: TEST_TARGET.1,
+      },
+    )
+    .await
+    .unwrap();
+    select_one_through(&tunnel).await;
+  }
+
+  /// The bastion's password comes out of a command, like an RDS IAM token.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn integration_ssh_password_from_a_command() {
+    use crate::credentials::{resolve_credentials, CredentialTarget};
+    use crate::profiles::CredentialSource;
+    use crate::secrets::InMemoryStore;
+    use crate::AppState;
+
+    let Some(mut profile) = tunnel_from_env(TEST_KEY) else {
+      return;
+    };
+    profile.user = "tunnelpw".to_string();
+    profile.auth = SshAuth::Password;
+    profile.credential = CredentialSource::Command {
+      command: "printf %s soquel-pw".to_string(),
+      refresh_after_secs: None,
+    };
+    let key = host_key(&profile).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()));
+    let secret = resolve_credentials(&state, &CredentialTarget::tunnel(&profile, "t-1"), None)
+      .unwrap()
+      .resolve()
+      .await
+      .unwrap();
+    assert_eq!(secret.as_deref(), Some("soquel-pw"));
+
+    let tunnel = SshTunnel::open(
+      &profile,
+      secret.as_deref(),
       Some(key),
       TunnelTarget {
         host: TEST_TARGET.0.to_string(),
@@ -685,7 +728,9 @@ mod tests {
       .unwrap();
 
     let secrets = InMemoryStore::default();
-    secrets.set(&id, "soquel").unwrap();
+    secrets
+      .set(&crate::secrets::SecretKey::Connection(id.clone()), "soquel")
+      .unwrap();
     let state = AppState {
       profiles: std::sync::Mutex::new(profiles),
       tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
@@ -885,6 +930,7 @@ mod tests {
       auth: SshAuth::KeyFile {
         path: TEST_KEY.to_string(),
       },
+      credential: Default::default(),
     };
     let key = host_key(&profile).await;
     let tunnel = SshTunnel::open(

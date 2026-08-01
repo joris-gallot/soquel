@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::error::Error;
+use crate::profiles::CredentialSource;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(
@@ -31,6 +32,10 @@ pub struct TunnelProfile {
   pub port: u16,
   pub user: String,
   pub auth: SshAuth,
+  /// Where the ssh password or the key passphrase comes from. Meaningless for
+  /// `Agent` and `None`, which send no credential of ours.
+  #[serde(default)]
+  pub credential: CredentialSource,
 }
 
 /// The secret (key passphrase or password) rides in on the input but is
@@ -43,6 +48,8 @@ pub struct TunnelInput {
   pub port: u16,
   pub user: String,
   pub auth: SshAuth,
+  #[serde(default)]
+  pub credential: CredentialSource,
   pub secret: Option<String>,
 }
 
@@ -92,6 +99,7 @@ impl TunnelStore {
       port: input.port,
       user: input.user.clone(),
       auth: input.auth.clone(),
+      credential: input.credential.clone(),
     };
     self.tunnels.push(tunnel.clone());
     self.save()?;
@@ -111,6 +119,7 @@ impl TunnelStore {
     tunnel.port = input.port;
     tunnel.user = input.user.clone();
     tunnel.auth = input.auth.clone();
+    tunnel.credential = input.credential.clone();
     let updated = tunnel.clone();
     self.save()?;
     Ok(updated)
@@ -147,6 +156,7 @@ mod tests {
       auth: SshAuth::KeyFile {
         path: "~/.ssh/id_ed25519".to_string(),
       },
+      credential: Default::default(),
       secret: None,
     }
   }
@@ -172,5 +182,42 @@ mod tests {
     store.delete(&created.id).unwrap();
     assert!(store.list().is_empty());
     assert!(matches!(store.get("nope"), Err(Error::NotFound { .. })));
+  }
+
+  #[test]
+  fn the_credential_mode_survives_a_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tunnels.json");
+    let mut store = TunnelStore::load(path.clone()).unwrap();
+
+    let mut asked = input("bastion");
+    asked.credential = CredentialSource::Prompt;
+    let created = store.create(&asked).unwrap();
+
+    let reloaded = TunnelStore::load(path).unwrap();
+    assert_eq!(
+      reloaded.get(&created.id).unwrap().credential,
+      CredentialSource::Prompt
+    );
+
+    let back = store.update(&created.id, &input("bastion")).unwrap();
+    assert_eq!(back.credential, CredentialSource::Keychain);
+  }
+
+  #[test]
+  fn a_tunnel_written_before_the_credential_modes_reads_as_keychain() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tunnels.json");
+    fs::write(
+      &path,
+      r#"[{"id":"t-1","name":"old","host":"h","port":22,"user":"deploy","auth":{"method":"agent"}}]"#,
+    )
+    .unwrap();
+
+    let store = TunnelStore::load(path).unwrap();
+    assert_eq!(
+      store.get("t-1").unwrap().credential,
+      CredentialSource::Keychain
+    );
   }
 }

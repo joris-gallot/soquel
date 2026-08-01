@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::connectors::TableRowsRequest;
 use crate::error::Error;
 use crate::profiles::{AgentAccess, ConnectionProfile, ConnectorKind};
+use crate::secrets::SecretKey;
 use crate::{commands, AppState};
 
 // Debug builds get their own port and agent-facing name, like the data dir
@@ -34,7 +35,6 @@ const SERVER_NAME: &str = if cfg!(debug_assertions) {
 } else {
   "soquel"
 };
-const TOKEN_SECRET_ID: &str = "soquel-mcp-token";
 /// Agents get capped result sets; the UI streams, agents paginate.
 const MAX_AGENT_ROWS: usize = 500;
 
@@ -133,11 +133,11 @@ fn new_token() -> String {
 }
 
 pub fn ensure_token(secrets: &dyn crate::secrets::SecretStore) -> Result<String, Error> {
-  if let Some(token) = secrets.get(TOKEN_SECRET_ID)? {
+  if let Some(token) = secrets.get(&SecretKey::McpToken)? {
     return Ok(token);
   }
   let token = new_token();
-  secrets.set(TOKEN_SECRET_ID, &token)?;
+  secrets.set(&SecretKey::McpToken, &token)?;
   Ok(token)
 }
 
@@ -149,7 +149,7 @@ pub async fn regenerate_token(state: &AppState) -> Result<String, Error> {
     });
   }
   let token = new_token();
-  state.secrets.set(TOKEN_SECRET_ID, &token)?;
+  state.secrets.set(&SecretKey::McpToken, &token)?;
   Ok(token)
 }
 
@@ -422,9 +422,9 @@ async fn ensure_connected(state: &AppState, id: &str) -> Result<(), Error> {
   commands::connect_impl(state, id.to_string()).await.map_err(
     // Nobody can answer a password prompt on this side.
     |err| match err {
-      Error::SecretRequired { connection_name, .. } => Error::Unsupported {
+      Error::SecretRequired { target_name, .. } => Error::Unsupported {
         message: format!(
-          "{connection_name} asks for its password at each connection: open it in soquel first, then retry"
+          "{target_name} asks for its password at each connection: open it in soquel first, then retry"
         ),
       },
       other => other,
@@ -1148,8 +1148,12 @@ mod tests {
       })
       .unwrap();
     let secrets = InMemoryStore::default();
-    secrets.set(&opted.id, "soquel").unwrap();
-    secrets.set(&hidden.id, "soquel").unwrap();
+    secrets
+      .set(&SecretKey::Connection(opted.id.clone()), "soquel")
+      .unwrap();
+    secrets
+      .set(&SecretKey::Connection(hidden.id.clone()), "soquel")
+      .unwrap();
     let state = AppState {
       profiles: std::sync::Mutex::new(profiles),
       tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
@@ -1836,7 +1840,9 @@ mod tests {
       })
       .unwrap();
     let secrets = InMemoryStore::default();
-    secrets.set(&profile.id, "soquel").unwrap();
+    secrets
+      .set(&SecretKey::Connection(profile.id.clone()), "soquel")
+      .unwrap();
     let state = AppState {
       profiles: std::sync::Mutex::new(profiles),
       tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),

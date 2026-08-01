@@ -1,4 +1,4 @@
-import type { Error as CoreError } from '@/lib/bindings'
+import type { Error as CoreError, SecretSubject } from '@/lib/bindings'
 import { computed, onScopeDispose, ref } from 'vue'
 import { commands } from '@/lib/bindings'
 import { CommandError, unwrap } from '@/lib/result'
@@ -6,8 +6,9 @@ import { CommandError, unwrap } from '@/lib/result'
 type SecretRequiredError = Extract<CoreError, { kind: 'secret-required' }>
 
 export interface PendingSecret {
-  connectionId: string
-  connectionName: string
+  subject: SecretSubject
+  targetId: string
+  targetName: string
   retry: () => Promise<void>
 }
 
@@ -22,8 +23,9 @@ export function useSecretPrompt() {
       return false
     const raw = error.raw as SecretRequiredError
     pending.value = {
-      connectionId: raw.connectionId,
-      connectionName: raw.connectionName,
+      subject: raw.subject,
+      targetId: raw.targetId,
+      targetName: raw.targetName,
       retry,
     }
     return true
@@ -33,7 +35,7 @@ export function useSecretPrompt() {
     const current = pending.value
     if (!current)
       return
-    unwrap(await commands.unlockConnection(current.connectionId, secret, remember))
+    unwrap(await commands.unlockSecret(current.subject, current.targetId, secret, remember))
     pending.value = null
     await current.retry()
   }

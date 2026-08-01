@@ -7,37 +7,58 @@ const SERVICE: &str = "dev.soquel.app.dev";
 #[cfg(not(debug_assertions))]
 const SERVICE: &str = "dev.soquel.app";
 
+/// What a stored secret belongs to. Typed rather than a prefixed string: the
+/// stores, the session cache and the prompt all key off the same thing.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SecretKey {
+  Connection(String),
+  Tunnel(String),
+  /// The bearer token the MCP server hands to agents.
+  McpToken,
+}
+
+impl SecretKey {
+  /// Entry name in the store, one namespace per kind.
+  pub fn storage_id(&self) -> String {
+    match self {
+      Self::Connection(id) => format!("connection:{id}"),
+      Self::Tunnel(id) => format!("tunnel:{id}"),
+      Self::McpToken => "mcp-token".to_string(),
+    }
+  }
+}
+
 pub trait SecretStore: Send + Sync {
-  fn set(&self, id: &str, secret: &str) -> Result<(), Error>;
-  fn get(&self, id: &str) -> Result<Option<String>, Error>;
-  fn delete(&self, id: &str) -> Result<(), Error>;
+  fn set(&self, key: &SecretKey, secret: &str) -> Result<(), Error>;
+  fn get(&self, key: &SecretKey) -> Result<Option<String>, Error>;
+  fn delete(&self, key: &SecretKey) -> Result<(), Error>;
 }
 
 /// OS keychain: Keychain (macOS), Credential Manager (Windows), Secret Service (Linux).
 pub struct KeyringStore;
 
 impl KeyringStore {
-  fn entry(id: &str) -> Result<keyring::Entry, Error> {
-    Ok(keyring::Entry::new(SERVICE, &format!("connection:{id}"))?)
+  fn entry(key: &SecretKey) -> Result<keyring::Entry, Error> {
+    Ok(keyring::Entry::new(SERVICE, &key.storage_id())?)
   }
 }
 
 impl SecretStore for KeyringStore {
-  fn set(&self, id: &str, secret: &str) -> Result<(), Error> {
-    Self::entry(id)?.set_password(secret)?;
+  fn set(&self, key: &SecretKey, secret: &str) -> Result<(), Error> {
+    Self::entry(key)?.set_password(secret)?;
     Ok(())
   }
 
-  fn get(&self, id: &str) -> Result<Option<String>, Error> {
-    match Self::entry(id)?.get_password() {
+  fn get(&self, key: &SecretKey) -> Result<Option<String>, Error> {
+    match Self::entry(key)?.get_password() {
       Ok(secret) => Ok(Some(secret)),
       Err(keyring::Error::NoEntry) => Ok(None),
       Err(err) => Err(err.into()),
     }
   }
 
-  fn delete(&self, id: &str) -> Result<(), Error> {
-    match Self::entry(id)?.delete_credential() {
+  fn delete(&self, key: &SecretKey) -> Result<(), Error> {
+    match Self::entry(key)?.delete_credential() {
       Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
       Err(err) => Err(err.into()),
     }
@@ -79,19 +100,19 @@ impl FileStore {
 }
 
 impl SecretStore for FileStore {
-  fn set(&self, id: &str, secret: &str) -> Result<(), Error> {
+  fn set(&self, key: &SecretKey, secret: &str) -> Result<(), Error> {
     let mut secrets = self.secrets.lock().unwrap();
-    secrets.insert(id.to_string(), secret.to_string());
+    secrets.insert(key.storage_id(), secret.to_string());
     self.save(&secrets)
   }
 
-  fn get(&self, id: &str) -> Result<Option<String>, Error> {
-    Ok(self.secrets.lock().unwrap().get(id).cloned())
+  fn get(&self, key: &SecretKey) -> Result<Option<String>, Error> {
+    Ok(self.secrets.lock().unwrap().get(&key.storage_id()).cloned())
   }
 
-  fn delete(&self, id: &str) -> Result<(), Error> {
+  fn delete(&self, key: &SecretKey) -> Result<(), Error> {
     let mut secrets = self.secrets.lock().unwrap();
-    secrets.remove(id);
+    secrets.remove(&key.storage_id());
     self.save(&secrets)
   }
 }
@@ -101,21 +122,21 @@ impl SecretStore for FileStore {
 pub struct InMemoryStore(std::sync::Mutex<std::collections::HashMap<String, String>>);
 
 impl SecretStore for InMemoryStore {
-  fn set(&self, id: &str, secret: &str) -> Result<(), Error> {
+  fn set(&self, key: &SecretKey, secret: &str) -> Result<(), Error> {
     self
       .0
       .lock()
       .unwrap()
-      .insert(id.to_string(), secret.to_string());
+      .insert(key.storage_id(), secret.to_string());
     Ok(())
   }
 
-  fn get(&self, id: &str) -> Result<Option<String>, Error> {
-    Ok(self.0.lock().unwrap().get(id).cloned())
+  fn get(&self, key: &SecretKey) -> Result<Option<String>, Error> {
+    Ok(self.0.lock().unwrap().get(&key.storage_id()).cloned())
   }
 
-  fn delete(&self, id: &str) -> Result<(), Error> {
-    self.0.lock().unwrap().remove(id);
+  fn delete(&self, key: &SecretKey) -> Result<(), Error> {
+    self.0.lock().unwrap().remove(&key.storage_id());
     Ok(())
   }
 }
@@ -124,29 +145,57 @@ impl SecretStore for InMemoryStore {
 mod tests {
   use super::*;
 
+  fn connection(id: &str) -> SecretKey {
+    SecretKey::Connection(id.to_string())
+  }
+
   #[test]
   fn set_get_delete_roundtrip() {
     let store = InMemoryStore::default();
-    assert_eq!(store.get("a").unwrap(), None);
-    store.set("a", "s3cret").unwrap();
-    assert_eq!(store.get("a").unwrap(), Some("s3cret".to_string()));
-    store.delete("a").unwrap();
-    assert_eq!(store.get("a").unwrap(), None);
+    let key = connection("a");
+    assert_eq!(store.get(&key).unwrap(), None);
+    store.set(&key, "s3cret").unwrap();
+    assert_eq!(store.get(&key).unwrap(), Some("s3cret".to_string()));
+    store.delete(&key).unwrap();
+    assert_eq!(store.get(&key).unwrap(), None);
+  }
+
+  #[test]
+  fn a_tunnel_and_a_connection_of_the_same_id_are_two_secrets() {
+    let store = InMemoryStore::default();
+    store.set(&connection("a"), "db").unwrap();
+    store
+      .set(&SecretKey::Tunnel("a".to_string()), "bastion")
+      .unwrap();
+
+    assert_eq!(store.get(&connection("a")).unwrap(), Some("db".to_string()));
+    assert_eq!(
+      store.get(&SecretKey::Tunnel("a".to_string())).unwrap(),
+      Some("bastion".to_string())
+    );
+  }
+
+  #[test]
+  fn each_kind_owns_its_namespace() {
+    assert_eq!(connection("a").storage_id(), "connection:a");
+    assert_eq!(SecretKey::Tunnel("a".to_string()).storage_id(), "tunnel:a");
+    assert_eq!(SecretKey::McpToken.storage_id(), "mcp-token");
   }
 
   #[test]
   fn file_store_survives_reload() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secrets.json");
+    let key = connection("a");
 
     let store = FileStore::load(path.clone()).unwrap();
-    store.set("a", "s3cret").unwrap();
+    store.set(&key, "s3cret").unwrap();
 
     let reloaded = FileStore::load(path.clone()).unwrap();
-    assert_eq!(reloaded.get("a").unwrap(), Some("s3cret".to_string()));
+    assert_eq!(reloaded.get(&key).unwrap(), Some("s3cret".to_string()));
 
-    reloaded.delete("a").unwrap();
+    reloaded.delete(&key).unwrap();
     let emptied = FileStore::load(path).unwrap();
-    assert_eq!(emptied.get("a").unwrap(), None);
+    assert_eq!(emptied.get(&key).unwrap(), None);
   }
 }

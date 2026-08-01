@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TunnelInput, TunnelProfile } from '@/lib/bindings'
 import type { TunnelFormValues } from '@/lib/tunnels'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import HostKeyTrustPanel from '@/components/HostKeyTrustPanel.vue'
 import { Button } from '@/components/ui/button'
@@ -24,8 +24,9 @@ import {
 } from '@/components/ui/select'
 import { useTunnels } from '@/composables/useTunnels'
 import { commands } from '@/lib/bindings'
+import { CREDENTIAL_MODE_HINTS, CREDENTIAL_MODE_LABELS, CREDENTIAL_MODES } from '@/lib/connections'
 import { CommandError, unwrap } from '@/lib/result'
-import { SSH_AUTH_HINTS, SSH_AUTH_LABELS, SSH_AUTH_METHODS, SSH_AUTH_NEEDS_SECRET, toTunnelInput, tunnelSchema } from '@/lib/tunnels'
+import { SSH_AUTH_HINTS, SSH_AUTH_LABELS, SSH_AUTH_METHODS, SSH_AUTH_NEEDS_SECRET, toTunnelInput, tunnelFormValues, tunnelSchema } from '@/lib/tunnels'
 import { zodFieldErrors } from '@/lib/validation'
 
 const props = defineProps<{ tunnel?: TunnelProfile | null }>()
@@ -35,10 +36,34 @@ const open = defineModel<boolean>('open', { required: true })
 const { create, update, test } = useTunnels()
 
 function emptyValues(): TunnelFormValues {
-  return { name: '', host: '', port: 22, user: '', method: 'agent', keyPath: '', secret: '' }
+  return { name: '', host: '', port: 22, user: '', method: 'agent', keyPath: '', secret: '', credentialMode: 'keychain', credentialCommand: '' }
 }
 
 const values = ref<TunnelFormValues>(emptyValues())
+const secretLabel = computed(() => values.value.method === 'key-file' ? 'Key passphrase' : 'Password')
+const secretPlaceholder = computed(() => {
+  if (values.value.credentialMode === 'prompt')
+    return 'not stored'
+  if (props.tunnel)
+    return 'unchanged'
+  return values.value.method === 'key-file' ? 'empty if none' : ''
+})
+
+const commandArgv = ref<string[]>([])
+const commandProblem = ref<string | null>(null)
+
+// The core owns the splitting rules; previewing them here would drift.
+watch(() => [values.value.credentialMode, values.value.credentialCommand] as const, async ([mode, command]) => {
+  if (mode !== 'command' || command.trim() === '') {
+    commandArgv.value = []
+    commandProblem.value = null
+    return
+  }
+  const result = await commands.parseCredentialCommand(command)
+  commandArgv.value = result.status === 'ok' ? result.data : []
+  commandProblem.value = result.status === 'ok' ? null : result.error.message
+})
+
 const errors = ref<Record<string, string>>({})
 const saving = ref(false)
 const testing = ref(false)
@@ -51,17 +76,7 @@ watch(open, async (isOpen) => {
   errors.value = {}
   testResult.value = null
   defaultKeys.value = unwrap(await commands.defaultSshKeys())
-  values.value = props.tunnel
-    ? {
-        name: props.tunnel.name,
-        host: props.tunnel.host,
-        port: props.tunnel.port,
-        user: props.tunnel.user,
-        method: props.tunnel.auth.method,
-        keyPath: props.tunnel.auth.method === 'key-file' ? props.tunnel.auth.path : '',
-        secret: '',
-      }
-    : emptyValues()
+  values.value = props.tunnel ? tunnelFormValues(props.tunnel) : emptyValues()
 })
 
 // Prefill the first identity OpenSSH itself would try, once the user asks for a key.
@@ -218,16 +233,66 @@ async function save() {
           </div>
         </div>
 
-        <div v-if="SSH_AUTH_NEEDS_SECRET[values.method]" class="space-y-1.5">
-          <Label for="tunnel-secret">{{ values.method === 'key-file' ? 'Key passphrase' : 'Password' }}</Label>
-          <Input
-            id="tunnel-secret"
-            v-model="values.secret"
-            data-testid="field-tunnel-secret"
-            type="password"
-            :placeholder="tunnel ? 'unchanged' : (values.method === 'key-file' ? 'empty if none' : '')"
-          />
-        </div>
+        <template v-if="SSH_AUTH_NEEDS_SECRET[values.method]">
+          <div class="space-y-1.5">
+            <Label>{{ secretLabel }} from</Label>
+            <Select v-model="values.credentialMode">
+              <SelectTrigger data-testid="field-tunnel-credential-mode" class="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="mode in CREDENTIAL_MODES"
+                  :key="mode"
+                  :value="mode"
+                  :data-testid="`tunnel-credential-mode-${mode}`"
+                >
+                  {{ CREDENTIAL_MODE_LABELS[mode] }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div class="space-y-1.5">
+            <template v-if="values.credentialMode === 'command'">
+              <Label for="tunnel-credential-command">Command</Label>
+              <Input
+                id="tunnel-credential-command"
+                v-model="values.credentialCommand"
+                data-testid="field-tunnel-credential-command"
+                class="font-mono text-xs"
+                placeholder="vault-ssh-password --host {host} --user {user}"
+              />
+              <p v-if="errors.credentialCommand" class="text-xs text-destructive">
+                {{ errors.credentialCommand }}
+              </p>
+              <p v-else-if="commandProblem" data-testid="tunnel-credential-command-problem" class="text-xs text-destructive">
+                {{ commandProblem }}
+              </p>
+              <p v-else-if="commandArgv.length" data-testid="tunnel-credential-command-argv" class="font-mono text-xs text-muted-foreground">
+                runs: <span v-for="(arg, index) in commandArgv" :key="index" class="mr-1 rounded bg-muted px-1 py-0.5">{{ arg }}</span>
+              </p>
+              <p class="text-xs text-muted-foreground">
+                No shell: {{ '{host}' }} {{ '{port}' }} {{ '{user}' }} are substituted, pipes and $(...) are not supported.
+              </p>
+            </template>
+            <template v-else>
+              <Label for="tunnel-secret">
+                {{ values.credentialMode === 'prompt' ? `${secretLabel} (for Test only)` : secretLabel }}
+              </Label>
+              <Input
+                id="tunnel-secret"
+                v-model="values.secret"
+                data-testid="field-tunnel-secret"
+                type="password"
+                :placeholder="secretPlaceholder"
+              />
+              <p class="text-xs text-muted-foreground">
+                {{ CREDENTIAL_MODE_HINTS[values.credentialMode] }}
+              </p>
+            </template>
+          </div>
+        </template>
 
         <HostKeyTrustPanel />
 

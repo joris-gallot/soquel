@@ -13,6 +13,7 @@ use specta::Type;
 
 use crate::error::Error;
 use crate::profiles::{AgentAccess, ConnectionProfile, ConnectorParams, CredentialSource, Env};
+use crate::secrets::SecretKey;
 use crate::tunnels::{SshAuth, TunnelProfile};
 use crate::AppState;
 
@@ -33,6 +34,7 @@ pub struct IncomingTunnel {
   /// Source-local key the connections' `tunnel_ref` points at.
   pub reference: String,
   pub name: String,
+  pub credential: CredentialSource,
   pub host: String,
   pub port: u16,
   pub user: String,
@@ -245,7 +247,7 @@ fn free_name(taken: &[String], name: &str) -> String {
 }
 
 struct PlannedSecret {
-  id: String,
+  key: SecretKey,
   secret: String,
 }
 
@@ -301,6 +303,7 @@ pub fn apply(
         taken.port = entry.port;
         taken.user = entry.user.clone();
         taken.auth = entry.auth.clone();
+        taken.credential = entry.credential.clone();
         id
       }
       (existing, _) => {
@@ -320,6 +323,7 @@ pub fn apply(
           port: entry.port,
           user: entry.user.clone(),
           auth: entry.auth.clone(),
+          credential: entry.credential.clone(),
         });
         outcome.tunnels_created += 1;
         id
@@ -329,7 +333,7 @@ pub fn apply(
       // Skipped duplicates keep the credential already stored here.
       if !(existing.is_some() && strategy == DuplicateStrategy::Skip) {
         secrets.push(PlannedSecret {
-          id: format!("tunnel:{id}"),
+          key: SecretKey::Tunnel(id.clone()),
           secret: secret.clone(),
         });
       }
@@ -397,7 +401,7 @@ pub fn apply(
     };
     if let Some(secret) = &entry.secret {
       secrets.push(PlannedSecret {
-        id,
+        key: SecretKey::Connection(id),
         secret: secret.clone(),
       });
     }
@@ -411,7 +415,7 @@ pub fn apply(
   for planned in &secrets {
     // A keychain that refuses halfway would leave profiles without their
     // password: unwind both stores instead.
-    if let Err(err) = state.secrets.set(&planned.id, &planned.secret) {
+    if let Err(err) = state.secrets.set(&planned.key, &planned.secret) {
       let _ = profiles.replace_all(profiles_before);
       let _ = tunnels.replace_all(tunnels_before);
       return Err(err);
@@ -438,7 +442,9 @@ pub fn export(
   let mut connection_entries = Vec::with_capacity(profiles.len());
   for profile in &profiles {
     let secret = match include_secrets {
-      true => state.secrets.get(&profile.id)?,
+      true => state
+        .secrets
+        .get(&SecretKey::Connection(profile.id.clone()))?,
       false => None,
     };
     secret_count += u32::from(secret.is_some());
@@ -447,7 +453,7 @@ pub fn export(
   let mut tunnel_entries = Vec::with_capacity(tunnels.len());
   for tunnel in &tunnels {
     let secret = match include_secrets {
-      true => state.secrets.get(&format!("tunnel:{}", tunnel.id))?,
+      true => state.secrets.get(&SecretKey::Tunnel(tunnel.id.clone()))?,
       false => None,
     };
     secret_count += u32::from(secret.is_some());

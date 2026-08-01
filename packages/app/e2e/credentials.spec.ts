@@ -35,8 +35,29 @@ describe('credential modes', () => {
     await waitForText('[data-testid="workspace-name"]', 'ask me')
   })
 
-  it('shows the argv a credential command would run', async () => {
+  // No sshd here: the form's own wiring, not a tunnel bring-up.
+  it('offers the same modes on a tunnel, and only where a secret is ours', async () => {
+    // The previous test left us in the workspace; tunnels live on the list.
     await $('[data-testid="workspace-back"]').click()
+    await $('[data-testid="new-tunnel"]').click()
+    await $('[data-testid="field-tunnel-name"]').waitForExist()
+    // Agent auth: the key never leaves the agent, so there is nothing to source.
+    await $('[data-testid="field-tunnel-credential-mode"]').waitForExist({ reverse: true })
+
+    await $('[data-testid="field-tunnel-auth"]').click()
+    await $('[role="option"]*=Key file').click()
+    await $('[data-testid="field-tunnel-credential-mode"]').click()
+    await $('[data-testid="tunnel-credential-mode-command"]').click()
+    await $('[data-testid="field-tunnel-credential-command"]').setValue('vault-ssh-password --host {host}')
+    // The placeholder reaches the core intact, braces included.
+    await waitForText('[data-testid="tunnel-credential-command-argv"]', '{host}')
+    await browser.saveScreenshot('./e2e/screenshots/credential-tunnel-command.png')
+
+    await browser.keys(['Escape'])
+    await $('[data-testid="field-tunnel-name"]').waitForExist({ reverse: true })
+  })
+
+  it('shows the argv a credential command would run', async () => {
     await $('[data-testid="row-menu"]').click()
     await $('[data-testid="row-edit"]').click()
 

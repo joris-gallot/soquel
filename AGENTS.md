@@ -26,7 +26,9 @@ No server/backend package: this is a desktop app. Data-layer conventions from th
 
 ### Credentials
 
-`CredentialSource` on the profile says where the password comes from: `keychain`, `prompt` (asked at connect, memory only, `unlock_connection` hands it over), or `command` (argv run without a shell, stdout is the password, cached with a TTL). `credentials.rs` owns resolution and hands connectors an `Arc<Credentials>` they resolve per connection, so a pool picks up a refreshed token. Only `keychain` writes to the OS keychain; switching away from it deletes what was stored.
+`CredentialSource` says where a password comes from: `keychain`, `prompt` (asked at connect, memory only, `unlock_secret` hands it over), or `command` (argv run without a shell, stdout is the password, cached with a TTL). It sits on both `ConnectionProfile` and `TunnelProfile` (ssh password, key passphrase). `credentials.rs` owns resolution: `CredentialTarget::{connection,tunnel}` names what is asking, and connectors get an `Arc<Credentials>` they resolve per connection so a pool picks up a refreshed token. Only `keychain` writes to the OS keychain; switching away from it deletes what was stored.
+
+Secrets are keyed by `SecretKey::{Connection,Tunnel,McpToken}` (`secrets.rs`), not by a raw string: `storage_id()` produces the strings already on disk, so the keychain entries stay as they are.
 
 ## Commands
 

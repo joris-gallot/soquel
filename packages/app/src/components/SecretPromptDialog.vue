@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { SecretSubject } from '@/lib/bindings'
 import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -16,6 +17,16 @@ import { Switch } from '@/components/ui/switch'
 import { useSecretPrompt } from '@/composables/useSecretPrompt'
 
 const { pending, showAsDialog, unlock, dismiss } = useSecretPrompt()
+
+const SUBJECT_TITLES: Record<SecretSubject, string> = {
+  connection: 'Password for',
+  tunnel: 'Credential for the tunnel',
+}
+
+const SUBJECT_HINTS: Record<SecretSubject, string> = {
+  connection: 'This connection asks for its password every time. Nothing is written to the keychain.',
+  tunnel: 'This tunnel asks for its ssh password or key passphrase every time. Nothing is written to the keychain.',
+}
 
 const secret = ref('')
 const remember = ref(false)
@@ -56,10 +67,10 @@ async function confirm() {
     <DialogContent class="sm:max-w-md" data-testid="secret-prompt-dialog">
       <DialogHeader>
         <DialogTitle class="font-mono font-medium">
-          Password for {{ pending?.connectionName }}
+          {{ pending ? SUBJECT_TITLES[pending.subject] : '' }} {{ pending?.targetName }}
         </DialogTitle>
         <DialogDescription>
-          This connection asks for its password every time. Nothing is written to the keychain.
+          {{ pending ? SUBJECT_HINTS[pending.subject] : '' }}
         </DialogDescription>
       </DialogHeader>
 

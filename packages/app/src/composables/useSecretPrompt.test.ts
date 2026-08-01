@@ -5,22 +5,23 @@ import { CommandError } from '@/lib/result'
 import { useSecretPrompt } from './useSecretPrompt'
 
 vi.mock('@/lib/bindings', () => ({
-  commands: { unlockConnection: vi.fn(async () => ({ status: 'ok', data: null })) },
+  commands: { unlockSecret: vi.fn(async () => ({ status: 'ok', data: null })) },
 }))
 
 function secretRequired() {
   return new CommandError({
     kind: 'secret-required',
     message: 'prod asks for its password at each connection',
-    connectionId: 'conn-1',
-    connectionName: 'prod',
+    subject: 'connection',
+    targetId: 'conn-1',
+    targetName: 'prod',
   })
 }
 
 describe('useSecretPrompt', () => {
   beforeEach(() => {
     useSecretPrompt().dismiss()
-    vi.mocked(commands.unlockConnection).mockClear()
+    vi.mocked(commands.unlockSecret).mockClear()
   })
 
   it('captures secret-required errors and ignores the rest', () => {
@@ -29,7 +30,7 @@ describe('useSecretPrompt', () => {
     expect(pending.value).toBeNull()
 
     expect(intercept(secretRequired(), async () => {})).toBe(true)
-    expect(pending.value).toMatchObject({ connectionId: 'conn-1', connectionName: 'prod' })
+    expect(pending.value).toMatchObject({ subject: 'connection', targetId: 'conn-1', targetName: 'prod' })
   })
 
   it('yields the dialog to an inline panel while one is mounted', () => {
@@ -51,7 +52,7 @@ describe('useSecretPrompt', () => {
     intercept(secretRequired(), retry)
 
     await unlock('s3cret', true)
-    expect(commands.unlockConnection).toHaveBeenCalledWith('conn-1', 's3cret', true)
+    expect(commands.unlockSecret).toHaveBeenCalledWith('connection', 'conn-1', 's3cret', true)
     expect(retry).toHaveBeenCalledOnce()
     expect(pending.value).toBeNull()
   })

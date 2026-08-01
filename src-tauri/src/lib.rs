@@ -88,7 +88,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::import_connections,
       commands::test_connection,
       commands::connect,
-      commands::unlock_connection,
+      commands::unlock_secret,
       commands::parse_credential_command,
       commands::disconnect,
       commands::active_connections,

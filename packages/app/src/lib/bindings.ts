@@ -23,11 +23,11 @@ export const commands = {
 	testConnection: (input: ConnectionInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_connection", { input, existingId })),
 	connect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("connect", { id })),
 	/**
-	 *  Hands the core a password for a connection that asks for one at connect
-	 *  time. Memory only: `remember` keeps it until disconnect, otherwise it dies
-	 *  with the next attempt.
+	 *  Hands the core a password for whatever asked for one at connect time.
+	 *  Memory only: `remember` keeps it until disconnect, otherwise it dies with
+	 *  the next attempt.
 	 */
-	unlockConnection: (id: string, secret: string, remember: boolean) => typedError<null, Error>(__TAURI_INVOKE("unlock_connection", { id, secret, remember })),
+	unlockSecret: (subject: SecretSubject, id: string, secret: string, remember: boolean) => typedError<null, Error>(__TAURI_INVOKE("unlock_secret", { subject, id, secret, remember })),
 	/**
 	 *  Splits a credential command the way the core will run it, so the form can
 	 *  show the argv instead of guessing at it.
@@ -269,8 +269,8 @@ export type Env = "dev" | "staging" | "prod";
 
 /**  Normalized error shape crossing the IPC boundary. */
 export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean } | 
-/**  The profile asks for the password interactively; the caller must supply one. */
-{ kind: "secret-required"; message: string; connectionId: string; connectionName: string } | { kind: "credential-command"; message: string; program: string; stderr: string };
+/**  The profile asks for its password interactively; the caller must supply one. */
+{ kind: "secret-required"; message: string; subject: SecretSubject; targetId: string; targetName: string } | { kind: "credential-command"; message: string; program: string; stderr: string };
 
 export type ExportFormat = "csv" | "json" | "sql" | "markdown";
 
@@ -455,6 +455,9 @@ export type SchemaSnapshot = {
 	schemas: SchemaInfo[],
 };
 
+/**  What a prompt is asking for; drives the dialog's wording. */
+export type SecretSubject = "connection" | "tunnel";
+
 export type ServerNotice = {
 	severity: string,
 	message: string,
@@ -551,6 +554,7 @@ export type TunnelInput = {
 	port: number,
 	user: string,
 	auth: SshAuth,
+	credential?: CredentialSource,
 	secret: string | null,
 };
 
@@ -561,6 +565,11 @@ export type TunnelProfile = {
 	port: number,
 	user: string,
 	auth: SshAuth,
+	/**
+	 *  Where the ssh password or the key passphrase comes from. Meaningless for
+	 *  `Agent` and `None`, which send no credential of ours.
+	 */
+	credential?: CredentialSource,
 };
 
 export type ZsetMember = {

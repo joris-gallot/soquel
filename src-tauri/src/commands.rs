@@ -8,20 +8,17 @@ use crate::connectors::{
   KeyScanPage, KvBrowse, KvDatabases, LocalForward, QueryColumn, QueryResult, RowsChunk,
   SchemaSnapshot, SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
 };
-use crate::credentials::{self, resolve_credentials};
-use crate::error::Error;
+use crate::credentials::{self, resolve_credentials, CredentialTarget};
+use crate::error::{Error, SecretSubject};
 use crate::export::{quote_ident, ExportFormat, ExportWriter};
 use crate::profiles::{
   ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams, CredentialSource,
 };
+use crate::secrets::SecretKey;
 use crate::ssh::{self, SshTunnel, TunnelTarget};
 use crate::transfer::{self, DuplicateStrategy, ExportSummary, ImportOutcome, ImportPreview};
 use crate::tunnels::{TunnelInput, TunnelProfile};
 use crate::{ActiveConnection, AppState, SessionEntry};
-
-fn tunnel_secret_id(tunnel_id: &str) -> String {
-  format!("tunnel:{tunnel_id}")
-}
 
 /// Resolve a profile's tunnel (if any); the returned forward tells the
 /// connector where TCP actually goes while the profile keeps the logical host.
@@ -36,7 +33,11 @@ async fn open_tunnel(
     return Ok(None);
   };
   let tunnel = state.tunnels.lock().unwrap().get(tunnel_id)?;
-  let secret = state.secrets.get(&tunnel_secret_id(tunnel_id))?;
+  // Opened once per connection: no pool to re-resolve for, so a command runs
+  // at each bring-up, which is what a short-lived token wants.
+  let secret = resolve_credentials(state, &CredentialTarget::tunnel(&tunnel, tunnel_id), None)?
+    .resolve()
+    .await?;
   let known_key = state
     .known_hosts
     .lock()
@@ -85,8 +86,7 @@ pub async fn test_connection(
   };
   let secret = resolve_credentials(
     state.inner(),
-    &profile,
-    existing_id.as_deref().unwrap_or_default(),
+    &CredentialTarget::connection(&profile, existing_id.as_deref().unwrap_or_default()),
     input.password.clone(),
   )?;
   let opened = open_tunnel(&state, &profile).await?;
@@ -105,14 +105,32 @@ pub async fn connect(state: State<'_, AppState>, id: String) -> Result<(), Error
 
 pub(crate) async fn connect_impl(state: &AppState, id: String) -> Result<(), Error> {
   let result = connect_attempt(state, &id).await;
-  // A password typed for this attempt only dies with it, success or failure.
-  state.session_secrets.clear_one_shot(&id);
+  // A password typed for this attempt only dies with it, success or failure,
+  // on both ends of the hop.
+  state
+    .session_secrets
+    .clear_one_shot(&SecretKey::Connection(id.clone()));
+  if let Some(tunnel_id) = tunnel_of(state, &id) {
+    state
+      .session_secrets
+      .clear_one_shot(&SecretKey::Tunnel(tunnel_id));
+  }
   result
+}
+
+/// The tunnel a connection rides on, if any.
+fn tunnel_of(state: &AppState, id: &str) -> Option<String> {
+  let profile = state.profiles.lock().unwrap().get(id).ok()?;
+  profile
+    .params
+    .remote()
+    .and_then(|remote| remote.tunnel_id)
+    .map(str::to_string)
 }
 
 async fn connect_attempt(state: &AppState, id: &str) -> Result<(), Error> {
   let profile = state.profiles.lock().unwrap().get(id)?;
-  let secret = resolve_credentials(state, &profile, id, None)?;
+  let secret = resolve_credentials(state, &CredentialTarget::connection(&profile, id), None)?;
   let opened = open_tunnel(state, &profile).await?;
   let forward = opened.as_ref().map(|(_, f)| *f);
   let connection = connector_for(profile.params.kind())
@@ -128,19 +146,29 @@ async fn connect_attempt(state: &AppState, id: &str) -> Result<(), Error> {
   Ok(())
 }
 
-/// Hands the core a password for a connection that asks for one at connect
-/// time. Memory only: `remember` keeps it until disconnect, otherwise it dies
-/// with the next attempt.
+/// Hands the core a password for whatever asked for one at connect time.
+/// Memory only: `remember` keeps it until disconnect, otherwise it dies with
+/// the next attempt.
 #[tauri::command]
 #[specta::specta]
-pub fn unlock_connection(
+pub fn unlock_secret(
   state: State<'_, AppState>,
+  subject: SecretSubject,
   id: String,
   secret: String,
   remember: bool,
 ) -> Result<(), Error> {
-  state.session_secrets.set(&id, secret, remember);
+  state
+    .session_secrets
+    .set(&key_for(subject, id), secret, remember);
   Ok(())
+}
+
+fn key_for(subject: SecretSubject, id: String) -> SecretKey {
+  match subject {
+    SecretSubject::Connection => SecretKey::Connection(id),
+    SecretSubject::Tunnel => SecretKey::Tunnel(id),
+  }
 }
 
 /// Splits a credential command the way the core will run it, so the form can
@@ -171,7 +199,22 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Er
   for session in orphaned {
     let _ = session.close().await;
   }
-  state.session_secrets.clear(&id);
+  state
+    .session_secrets
+    .clear(&SecretKey::Connection(id.clone()));
+  // The tunnel's password only outlives the hop while another connection still
+  // rides it.
+  if let Some(tunnel_id) = tunnel_of(&state, &id) {
+    let still_used = state
+      .connections
+      .lock()
+      .await
+      .keys()
+      .any(|other| other != &id && tunnel_of(&state, other).as_deref() == Some(&tunnel_id));
+    if !still_used {
+      state.session_secrets.clear(&SecretKey::Tunnel(tunnel_id));
+    }
+  }
   let active = state.connections.lock().await.remove(&id);
   match active {
     Some(active) => active.connection.close().await,
@@ -532,7 +575,7 @@ impl AppState {
       });
     };
     params.db = db;
-    let secret = resolve_credentials(self, &profile, id, None)?;
+    let secret = resolve_credentials(self, &CredentialTarget::connection(&profile, id), None)?;
     let forward = {
       let connections = self.connections.lock().await;
       let entry = connections.get(id).ok_or_else(|| Error::NotFound {
@@ -697,20 +740,21 @@ pub fn get_connection(state: State<'_, AppState>, id: String) -> Result<Connecti
 }
 
 /// Keeps the stores in step with the mode: only `keychain` stores a password,
-/// and leaving it wipes what was stored for a connection that no longer keeps one.
+/// and leaving it wipes what was stored for something that no longer keeps one.
 pub(crate) fn persist_secret(
   state: &AppState,
-  profile: &ConnectionProfile,
+  key: &SecretKey,
+  credential: &CredentialSource,
   password: Option<&str>,
 ) -> Result<(), Error> {
-  if profile.credential == CredentialSource::Keychain {
+  if credential == &CredentialSource::Keychain {
     if let Some(password) = password {
-      state.secrets.set(&profile.id, password)?;
+      state.secrets.set(key, password)?;
     }
     return Ok(());
   }
-  state.secrets.delete(&profile.id)?;
-  state.session_secrets.clear(&profile.id);
+  state.secrets.delete(key)?;
+  state.session_secrets.clear(key);
   Ok(())
 }
 
@@ -722,7 +766,13 @@ pub fn create_connection(
 ) -> Result<ConnectionProfile, Error> {
   let profile = state.profiles.lock().unwrap().create(&input)?;
   // No orphan profile when the keychain is unavailable.
-  if let Err(err) = persist_secret(state.inner(), &profile, input.password.as_deref()) {
+  let key = SecretKey::Connection(profile.id.clone());
+  if let Err(err) = persist_secret(
+    state.inner(),
+    &key,
+    &profile.credential,
+    input.password.as_deref(),
+  ) {
     let _ = state.profiles.lock().unwrap().delete(&profile.id);
     return Err(err);
   }
@@ -737,7 +787,12 @@ pub fn update_connection(
   input: ConnectionInput,
 ) -> Result<ConnectionProfile, Error> {
   let profile = state.profiles.lock().unwrap().update(&id, &input)?;
-  persist_secret(state.inner(), &profile, input.password.as_deref())?;
+  persist_secret(
+    state.inner(),
+    &SecretKey::Connection(profile.id.clone()),
+    &profile.credential,
+    input.password.as_deref(),
+  )?;
   Ok(profile)
 }
 
@@ -745,7 +800,7 @@ pub fn update_connection(
 #[specta::specta]
 pub fn delete_connection(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   state.profiles.lock().unwrap().delete(&id)?;
-  state.secrets.delete(&id)
+  state.secrets.delete(&SecretKey::Connection(id))
 }
 
 /// Writes every connection, tunnel and group to a file. Passwords ride along
@@ -816,12 +871,15 @@ pub fn create_tunnel(
   input: TunnelInput,
 ) -> Result<TunnelProfile, Error> {
   let tunnel = state.tunnels.lock().unwrap().create(&input)?;
-  if let Some(secret) = &input.secret {
-    // No orphan tunnel when the keychain is unavailable.
-    if let Err(err) = state.secrets.set(&tunnel_secret_id(&tunnel.id), secret) {
-      let _ = state.tunnels.lock().unwrap().delete(&tunnel.id);
-      return Err(err);
-    }
+  // No orphan tunnel when the keychain is unavailable.
+  if let Err(err) = persist_secret(
+    state.inner(),
+    &SecretKey::Tunnel(tunnel.id.clone()),
+    &tunnel.credential,
+    input.secret.as_deref(),
+  ) {
+    let _ = state.tunnels.lock().unwrap().delete(&tunnel.id);
+    return Err(err);
   }
   Ok(tunnel)
 }
@@ -834,9 +892,12 @@ pub fn update_tunnel(
   input: TunnelInput,
 ) -> Result<TunnelProfile, Error> {
   let tunnel = state.tunnels.lock().unwrap().update(&id, &input)?;
-  if let Some(secret) = &input.secret {
-    state.secrets.set(&tunnel_secret_id(&tunnel.id), secret)?;
-  }
+  persist_secret(
+    state.inner(),
+    &SecretKey::Tunnel(tunnel.id.clone()),
+    &tunnel.credential,
+    input.secret.as_deref(),
+  )?;
   Ok(tunnel)
 }
 
@@ -858,7 +919,7 @@ pub fn delete_tunnel(state: State<'_, AppState>, id: String) -> Result<(), Error
     });
   }
   state.tunnels.lock().unwrap().delete(&id)?;
-  state.secrets.delete(&tunnel_secret_id(&id))
+  state.secrets.delete(&SecretKey::Tunnel(id))
 }
 
 /// Ephemeral tunnel bring-up: validates the host key and the credentials
@@ -870,13 +931,6 @@ pub async fn test_tunnel(
   input: TunnelInput,
   existing_id: Option<String>,
 ) -> Result<(), Error> {
-  let secret = match &input.secret {
-    Some(secret) => Some(secret.clone()),
-    None => match &existing_id {
-      Some(id) => state.secrets.get(&tunnel_secret_id(id))?,
-      None => None,
-    },
-  };
   let tunnel = TunnelProfile {
     id: String::new(),
     name: input.name.clone(),
@@ -884,7 +938,15 @@ pub async fn test_tunnel(
     port: input.port,
     user: input.user.clone(),
     auth: input.auth.clone(),
+    credential: input.credential.clone(),
   };
+  let secret = resolve_credentials(
+    state.inner(),
+    &CredentialTarget::tunnel(&tunnel, existing_id.as_deref().unwrap_or_default()),
+    input.secret.clone(),
+  )?
+  .resolve()
+  .await?;
   let known_key = state
     .known_hosts
     .lock()
@@ -1000,6 +1062,10 @@ mod tests {
     }
   }
 
+  fn key(id: &str) -> SecretKey {
+    SecretKey::Connection(id.to_string())
+  }
+
   fn state(dir: &tempfile::TempDir) -> AppState {
     AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()))
   }
@@ -1015,12 +1081,12 @@ mod tests {
       .unwrap()
       .create(&input(CredentialSource::Keychain, Some("s3cret")))
       .unwrap();
-    persist_secret(&state, &stored, Some("s3cret")).unwrap();
+    persist_secret(&state, &key(&stored.id), &stored.credential, Some("s3cret")).unwrap();
     state
       .session_secrets
-      .set(&stored.id, "typed".to_string(), true);
+      .set(&key(&stored.id), "typed".to_string(), true);
     assert_eq!(
-      state.secrets.get(&stored.id).unwrap(),
+      state.secrets.get(&key(&stored.id)).unwrap(),
       Some("s3cret".to_string())
     );
 
@@ -1031,10 +1097,10 @@ mod tests {
       .unwrap()
       .update(&stored.id, &input(CredentialSource::Prompt, None))
       .unwrap();
-    persist_secret(&state, &switched, None).unwrap();
+    persist_secret(&state, &key(&switched.id), &switched.credential, None).unwrap();
 
-    assert_eq!(state.secrets.get(&stored.id).unwrap(), None);
-    assert_eq!(state.session_secrets.get(&stored.id), None);
+    assert_eq!(state.secrets.get(&key(&stored.id)).unwrap(), None);
+    assert_eq!(state.session_secrets.get(&key(&stored.id)), None);
   }
 
   #[test]
@@ -1052,9 +1118,64 @@ mod tests {
       .unwrap()
       .create(&input(credential, Some("typed-by-mistake")))
       .unwrap();
-    persist_secret(&state, &profile, Some("typed-by-mistake")).unwrap();
+    persist_secret(
+      &state,
+      &key(&profile.id),
+      &profile.credential,
+      Some("typed-by-mistake"),
+    )
+    .unwrap();
 
-    assert_eq!(state.secrets.get(&profile.id).unwrap(), None);
+    assert_eq!(state.secrets.get(&key(&profile.id)).unwrap(), None);
+  }
+
+  #[test]
+  fn a_tunnel_leaving_the_keychain_mode_wipes_its_own_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+    let stored = TunnelInput {
+      name: "bastion".to_string(),
+      host: "bastion.internal".to_string(),
+      port: 22,
+      user: "deploy".to_string(),
+      auth: crate::tunnels::SshAuth::Password,
+      credential: CredentialSource::Keychain,
+      secret: Some("s3cret".to_string()),
+    };
+    let tunnel = state.tunnels.lock().unwrap().create(&stored).unwrap();
+    let tunnel_key = SecretKey::Tunnel(tunnel.id.clone());
+    persist_secret(
+      &state,
+      &tunnel_key,
+      &tunnel.credential,
+      stored.secret.as_deref(),
+    )
+    .unwrap();
+    // A connection of the same id keeps its own secret: the keys differ.
+    state.secrets.set(&key(&tunnel.id), "db").unwrap();
+    state
+      .session_secrets
+      .set(&tunnel_key, "typed".to_string(), true);
+
+    let asked = TunnelInput {
+      credential: CredentialSource::Prompt,
+      secret: None,
+      ..stored
+    };
+    let switched = state
+      .tunnels
+      .lock()
+      .unwrap()
+      .update(&tunnel.id, &asked)
+      .unwrap();
+    persist_secret(&state, &tunnel_key, &switched.credential, None).unwrap();
+
+    assert_eq!(state.secrets.get(&tunnel_key).unwrap(), None);
+    assert_eq!(state.session_secrets.get(&tunnel_key), None);
+    assert_eq!(
+      state.secrets.get(&key(&tunnel.id)).unwrap(),
+      Some("db".to_string())
+    );
   }
 
   #[tokio::test]
@@ -1072,24 +1193,22 @@ mod tests {
 
     // No password anywhere: the core asks for one instead of connecting.
     let err = connect_impl(&state, profile.id.clone()).await.unwrap_err();
-    assert!(
-      matches!(&err, Error::SecretRequired { connection_name, .. } if connection_name == "db")
-    );
+    assert!(matches!(&err, Error::SecretRequired { target_name, .. } if target_name == "db"));
 
     state
       .session_secrets
-      .set(&profile.id, "typed".to_string(), false);
+      .set(&key(&profile.id), "typed".to_string(), false);
     connect_impl(&state, profile.id.clone()).await.unwrap();
     assert!(state.connections.lock().await.contains_key(&profile.id));
     // Not remembered: the next connect asks again.
-    assert_eq!(state.session_secrets.get(&profile.id), None);
+    assert_eq!(state.session_secrets.get(&key(&profile.id)), None);
 
     state
       .session_secrets
-      .set(&profile.id, "typed".to_string(), true);
+      .set(&key(&profile.id), "typed".to_string(), true);
     connect_impl(&state, profile.id.clone()).await.unwrap();
     assert_eq!(
-      state.session_secrets.get(&profile.id),
+      state.session_secrets.get(&key(&profile.id)),
       Some("typed".to_string())
     );
   }

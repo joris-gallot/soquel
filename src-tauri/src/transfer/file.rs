@@ -65,6 +65,9 @@ struct FileTunnel {
   port: u16,
   user: String,
   auth: SshAuth,
+  /// How the ssh password or key passphrase is obtained, never the secret itself.
+  #[serde(default)]
+  credential: CredentialSource,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   secret: Option<String>,
 }
@@ -109,6 +112,7 @@ pub fn write(
         port: entry.tunnel.port,
         user: entry.tunnel.user.clone(),
         auth: entry.tunnel.auth.clone(),
+        credential: entry.tunnel.credential.clone(),
         secret: entry.secret,
       })
       .collect(),
@@ -220,6 +224,7 @@ fn bundle_from(document: Document) -> ImportBundle {
         port: entry.port,
         user: entry.user,
         auth: entry.auth,
+        credential: entry.credential,
         secret: entry.secret,
       })
       .collect(),

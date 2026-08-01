@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use super::*;
 use crate::known_hosts::KnownHostsStore;
 use crate::profiles::{ConnectionInput, ProfileStore, RedisParams, SqlServerParams, SslMode};
-use crate::secrets::{InMemoryStore, SecretStore};
+use crate::secrets::{InMemoryStore, SecretKey, SecretStore};
 use crate::tunnels::{TunnelInput, TunnelStore};
 
 fn app_state(dir: &tempfile::TempDir) -> AppState {
@@ -51,6 +51,7 @@ fn tunnel_input() -> TunnelInput {
     auth: SshAuth::KeyFile {
       path: "~/.ssh/id_ed25519".to_string(),
     },
+    credential: Default::default(),
     secret: Some("key-passphrase".to_string()),
   }
 }
@@ -66,7 +67,7 @@ fn seeded(dir: &tempfile::TempDir) -> (AppState, String) {
     .unwrap();
   state
     .secrets
-    .set(&format!("tunnel:{}", tunnel.id), "key-passphrase")
+    .set(&SecretKey::Tunnel(tunnel.id.clone()), "key-passphrase")
     .unwrap();
   let tunneled = state
     .profiles
@@ -82,7 +83,10 @@ fn seeded(dir: &tempfile::TempDir) -> (AppState, String) {
       password: None,
     })
     .unwrap();
-  state.secrets.set(&tunneled.id, "pg-password").unwrap();
+  state
+    .secrets
+    .set(&SecretKey::Connection(tunneled.id.clone()), "pg-password")
+    .unwrap();
   state
     .profiles
     .lock()
@@ -158,7 +162,13 @@ fn plaintext_roundtrip_carries_connections_tunnels_and_groups() {
     }
   );
   // No secrets in the file: nothing lands in the keychain.
-  assert_eq!(target.secrets.get(&prod.id).unwrap(), None);
+  assert_eq!(
+    target
+      .secrets
+      .get(&SecretKey::Connection(prod.id.clone()))
+      .unwrap(),
+    None
+  );
 }
 
 #[test]
@@ -192,14 +202,18 @@ fn encrypted_roundtrip_restores_the_secrets() {
   let profiles = target.profiles.lock().unwrap().list();
   let prod = profiles.iter().find(|p| p.name == "prod").unwrap();
   assert_eq!(
-    target.secrets.get(&prod.id).unwrap().as_deref(),
+    target
+      .secrets
+      .get(&SecretKey::Connection(prod.id.clone()))
+      .unwrap()
+      .as_deref(),
     Some("pg-password")
   );
   let tunnel = &target.tunnels.lock().unwrap().list()[0];
   assert_eq!(
     target
       .secrets
-      .get(&format!("tunnel:{}", tunnel.id))
+      .get(&SecretKey::Tunnel(tunnel.id.clone()))
       .unwrap()
       .as_deref(),
     Some("key-passphrase")
@@ -426,7 +440,10 @@ fn skip_leaves_duplicates_and_their_passwords_alone() {
     .find(|p| p.name == "prod")
     .unwrap()
     .id;
-  state.secrets.set(&prod_id, "rotated-since").unwrap();
+  state
+    .secrets
+    .set(&SecretKey::Connection(prod_id.clone()), "rotated-since")
+    .unwrap();
 
   let outcome = import_file(&state, &path, Some("pass"), DuplicateStrategy::Skip).unwrap();
   assert_eq!(outcome.skipped, 2);
@@ -434,7 +451,11 @@ fn skip_leaves_duplicates_and_their_passwords_alone() {
   assert_eq!(outcome.tunnels_created, 0);
   assert_eq!(state.profiles.lock().unwrap().list().len(), 2);
   assert_eq!(
-    state.secrets.get(&prod_id).unwrap().as_deref(),
+    state
+      .secrets
+      .get(&SecretKey::Connection(prod_id.clone()))
+      .unwrap()
+      .as_deref(),
     Some("rotated-since")
   );
 }
@@ -604,7 +625,7 @@ struct FlakySecrets {
 }
 
 impl SecretStore for FlakySecrets {
-  fn set(&self, id: &str, secret: &str) -> Result<(), Error> {
+  fn set(&self, key: &SecretKey, secret: &str) -> Result<(), Error> {
     let mut writes = self.writes.lock().unwrap();
     *writes += 1;
     if *writes > self.allowed {
@@ -612,15 +633,15 @@ impl SecretStore for FlakySecrets {
         message: "keychain: locked".to_string(),
       });
     }
-    self.inner.set(id, secret)
+    self.inner.set(key, secret)
   }
 
-  fn get(&self, id: &str) -> Result<Option<String>, Error> {
-    self.inner.get(id)
+  fn get(&self, key: &SecretKey) -> Result<Option<String>, Error> {
+    self.inner.get(key)
   }
 
-  fn delete(&self, id: &str) -> Result<(), Error> {
-    self.inner.delete(id)
+  fn delete(&self, key: &SecretKey) -> Result<(), Error> {
+    self.inner.delete(key)
   }
 }
 

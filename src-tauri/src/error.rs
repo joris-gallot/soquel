@@ -1,5 +1,13 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
+
+/// What a prompt is asking for; drives the dialog's wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretSubject {
+  Connection,
+  Tunnel,
+}
 
 /// Normalized error shape crossing the IPC boundary.
 #[derive(Debug, thiserror::Error, Serialize, Type)]
@@ -30,12 +38,13 @@ pub enum Error {
     key: String,
     previously_trusted: bool,
   },
-  /// The profile asks for the password interactively; the caller must supply one.
+  /// The profile asks for its password interactively; the caller must supply one.
   #[error("{message}")]
   SecretRequired {
     message: String,
-    connection_id: String,
-    connection_name: String,
+    subject: SecretSubject,
+    target_id: String,
+    target_name: String,
   },
   #[error("{message}")]
   CredentialCommand {

@@ -373,6 +373,28 @@ fn the_credential_mode_survives_a_roundtrip_without_the_secret() {
 }
 
 #[test]
+fn a_tunnel_carries_its_credential_mode_across_a_roundtrip() {
+  let dir = tempfile::tempdir().unwrap();
+  let state = app_state(&dir);
+  let path = out(&dir);
+  let asked = TunnelInput {
+    credential: CredentialSource::Prompt,
+    ..tunnel_input()
+  };
+  state.tunnels.lock().unwrap().create(&asked).unwrap();
+
+  export(&state, &path, false, None).unwrap();
+
+  let target_dir = tempfile::tempdir().unwrap();
+  let target = app_state(&target_dir);
+  import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap();
+  assert_eq!(
+    target.tunnels.lock().unwrap().list()[0].credential,
+    CredentialSource::Prompt
+  );
+}
+
+#[test]
 fn a_file_without_a_credential_mode_reads_as_keychain() {
   let dir = tempfile::tempdir().unwrap();
   let state = app_state(&dir);

@@ -84,14 +84,22 @@ pub async fn test_connection(
     credential: input.credential.clone(),
     params: input.params.clone(),
   };
-  let secret = resolve_credentials(
-    state.inner(),
-    &CredentialTarget::connection(&profile, existing_id.as_deref().unwrap_or_default()),
-    input.password.clone(),
-  )?;
-  let opened = open_tunnel(&state, &profile).await?;
+  let target = CredentialTarget::connection(&profile, existing_id.as_deref().unwrap_or_default());
+  let secret = resolve_credentials(state.inner(), &target, input.password.clone())?;
+  let result = test_run(&state, &profile, secret).await;
+  // A password typed to test an unsaved profile has no connection to outlive.
+  state.session_secrets.clear_one_shot(&target.key);
+  result
+}
+
+async fn test_run(
+  state: &AppState,
+  profile: &ConnectionProfile,
+  secret: Arc<crate::credentials::Credentials>,
+) -> Result<(), Error> {
+  let opened = open_tunnel(state, profile).await?;
   let connection = connector_for(profile.params.kind())
-    .connect(&profile, secret, opened.as_ref().map(|(_, f)| *f))
+    .connect(profile, secret, opened.as_ref().map(|(_, f)| *f))
     .await?;
   connection.health().await?;
   connection.close().await
@@ -183,6 +191,10 @@ pub fn parse_credential_command(line: String) -> Result<Vec<String>, Error> {
 #[tauri::command]
 #[specta::specta]
 pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Error> {
+  disconnect_impl(state.inner(), &id).await
+}
+
+pub(crate) async fn disconnect_impl(state: &AppState, id: &str) -> Result<(), Error> {
   let orphaned: Vec<Arc<dyn SqlSession>> = {
     let mut sessions = state.sessions.lock().await;
     let ids: Vec<String> = sessions
@@ -201,21 +213,21 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Er
   }
   state
     .session_secrets
-    .clear(&SecretKey::Connection(id.clone()));
+    .clear(&SecretKey::Connection(id.to_string()));
   // The tunnel's password only outlives the hop while another connection still
   // rides it.
-  if let Some(tunnel_id) = tunnel_of(&state, &id) {
+  if let Some(tunnel_id) = tunnel_of(state, id) {
     let still_used = state
       .connections
       .lock()
       .await
       .keys()
-      .any(|other| other != &id && tunnel_of(&state, other).as_deref() == Some(&tunnel_id));
+      .any(|other| other != id && tunnel_of(state, other).as_deref() == Some(&tunnel_id));
     if !still_used {
       state.session_secrets.clear(&SecretKey::Tunnel(tunnel_id));
     }
   }
-  let active = state.connections.lock().await.remove(&id);
+  let active = state.connections.lock().await.remove(id);
   match active {
     Some(active) => active.connection.close().await,
     None => Ok(()),
@@ -940,13 +952,10 @@ pub async fn test_tunnel(
     auth: input.auth.clone(),
     credential: input.credential.clone(),
   };
-  let secret = resolve_credentials(
-    state.inner(),
-    &CredentialTarget::tunnel(&tunnel, existing_id.as_deref().unwrap_or_default()),
-    input.secret.clone(),
-  )?
-  .resolve()
-  .await?;
+  let target = CredentialTarget::tunnel(&tunnel, existing_id.as_deref().unwrap_or_default());
+  let secret = resolve_credentials(state.inner(), &target, input.secret.clone())?
+    .resolve()
+    .await?;
   let known_key = state
     .known_hosts
     .lock()
@@ -954,7 +963,7 @@ pub async fn test_tunnel(
     .get(&tunnel.host, tunnel.port)
     .map(|raw| ssh::parse_public_key(&raw))
     .transpose()?;
-  SshTunnel::open(
+  let result = SshTunnel::open(
     &tunnel,
     secret.as_deref(),
     known_key,
@@ -964,7 +973,10 @@ pub async fn test_tunnel(
     },
   )
   .await
-  .map(|_| ())
+  .map(|_| ());
+  // A password typed to test an unsaved tunnel has no tunnel to outlive.
+  state.session_secrets.clear_one_shot(&target.key);
+  result
 }
 
 #[tauri::command]
@@ -1068,6 +1080,38 @@ mod tests {
 
   fn state(dir: &tempfile::TempDir) -> AppState {
     AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()))
+  }
+
+  /// A live connection to park in the state: the tunnel bookkeeping only reads
+  /// which ids are active, not what they talk to.
+  async fn parked_connection(dir: &tempfile::TempDir) -> ActiveConnection {
+    let file = dir.path().join("parked.db");
+    rusqlite::Connection::open(&file).unwrap();
+    let profile = ConnectionProfile {
+      id: String::new(),
+      name: "parked".to_string(),
+      env: Env::Dev,
+      group: None,
+      agent_access: Default::default(),
+      credential: Default::default(),
+      params: ConnectorParams::Sqlite {
+        path: file.to_string_lossy().into_owned(),
+      },
+    };
+    let connection = connector_for(ConnectorKind::Sqlite)
+      .connect(&profile, crate::credentials::Credentials::fixed(None), None)
+      .await
+      .unwrap();
+    ActiveConnection {
+      connection: connection.into(),
+      _tunnel: None,
+    }
+  }
+
+  fn tunnelled_input(tunnel_id: &str) -> ConnectionInput {
+    let mut input = input(CredentialSource::Keychain, None);
+    input.params.set_tunnel_id(Some(tunnel_id.to_string()));
+    input
   }
 
   #[test]
@@ -1176,6 +1220,102 @@ mod tests {
       state.secrets.get(&key(&tunnel.id)).unwrap(),
       Some("db".to_string())
     );
+  }
+
+  #[tokio::test]
+  async fn a_shared_tunnel_keeps_its_password_until_the_last_connection_leaves() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+    let tunnel = state
+      .tunnels
+      .lock()
+      .unwrap()
+      .create(&TunnelInput {
+        name: "bastion".to_string(),
+        host: "bastion.internal".to_string(),
+        port: 22,
+        user: "deploy".to_string(),
+        auth: crate::tunnels::SshAuth::Password,
+        credential: CredentialSource::Prompt,
+        secret: None,
+      })
+      .unwrap();
+    let tunnel_key = SecretKey::Tunnel(tunnel.id.clone());
+
+    let first = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&tunnelled_input(&tunnel.id))
+      .unwrap();
+    let second = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&tunnelled_input(&tunnel.id))
+      .unwrap();
+    {
+      let mut connections = state.connections.lock().await;
+      connections.insert(first.id.clone(), parked_connection(&dir).await);
+      connections.insert(second.id.clone(), parked_connection(&dir).await);
+    }
+    state
+      .session_secrets
+      .set(&tunnel_key, "bastion-pw".to_string(), true);
+
+    disconnect_impl(&state, &first.id).await.unwrap();
+    assert_eq!(
+      state.session_secrets.get(&tunnel_key),
+      Some("bastion-pw".to_string()),
+      "the second connection still rides the tunnel"
+    );
+
+    disconnect_impl(&state, &second.id).await.unwrap();
+    assert_eq!(state.session_secrets.get(&tunnel_key), None);
+  }
+
+  #[tokio::test]
+  async fn a_failed_connect_forgets_the_tunnel_password_it_was_given_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+    let tunnel = state
+      .tunnels
+      .lock()
+      .unwrap()
+      .create(&TunnelInput {
+        name: "bastion".to_string(),
+        // Nothing listens here: the connect fails on the tunnel, which is the point.
+        host: "127.0.0.1".to_string(),
+        port: 1,
+        user: "deploy".to_string(),
+        auth: crate::tunnels::SshAuth::Password,
+        credential: CredentialSource::Prompt,
+        secret: None,
+      })
+      .unwrap();
+    let tunnel_key = SecretKey::Tunnel(tunnel.id.clone());
+    let profile = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&tunnelled_input(&tunnel.id))
+      .unwrap();
+
+    // No password for the tunnel: the core asks instead of dialling.
+    let Err(err) = connect_impl(&state, profile.id.clone()).await else {
+      panic!("the tunnel must ask for its password");
+    };
+    assert!(
+      matches!(&err, Error::SecretRequired { subject, target_id, .. }
+        if *subject == SecretSubject::Tunnel && target_id == &tunnel.id)
+    );
+
+    state
+      .session_secrets
+      .set(&tunnel_key, "one-off".to_string(), false);
+    assert!(connect_impl(&state, profile.id.clone()).await.is_err());
+    // Given for that attempt only: a failed connect must not keep it around.
+    assert_eq!(state.session_secrets.get(&tunnel_key), None);
   }
 
   #[tokio::test]

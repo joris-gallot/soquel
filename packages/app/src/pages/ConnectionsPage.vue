@@ -21,15 +21,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useConnections } from '@/composables/useConnections'
+import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { useTunnels } from '@/composables/useTunnels'
 import { connectionDsn, ENV_BADGE_CLASSES, groupConnections } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { pickImportFile } from '@/lib/transfer'
 import { SSH_AUTH_LABELS } from '@/lib/tunnels'
 
+const HANDLED_BY_A_DIALOG = ['host-key-untrusted', 'secret-required']
+
 const router = useRouter()
 const { connections, activeIds, refresh, remove, connect, disconnect } = useConnections()
 const { tunnels, refresh: refreshTunnels, remove: removeTunnel } = useTunnels()
+const { intercept: interceptSecret } = useSecretPrompt()
 
 const sections = computed(() => groupConnections(connections.value))
 const collapsed = useLocalStorage<string[]>('soquel:collapsed-groups', [])
@@ -89,8 +93,10 @@ async function toggle(profile: ConnectionProfile) {
     }
   }
   catch (error) {
-    // The host-key trust dialog owns this failure mode.
-    if (!(error instanceof CommandError && error.kind === 'host-key-untrusted'))
+    // Retry the whole gesture, navigation included, once the password lands.
+    interceptSecret(error, () => toggle(profile))
+    // The trust and password dialogs own these failure modes.
+    if (!(error instanceof CommandError && HANDLED_BY_A_DIALOG.includes(error.kind)))
       toast.error(error instanceof Error ? error.message : String(error))
   }
   finally {

@@ -111,6 +111,7 @@ fn profile_from_env(db: u32) -> Option<ConnectionProfile> {
     env: Env::Dev,
     group: None,
     agent_access: Default::default(),
+    credential: Default::default(),
     params: ConnectorParams::Redis(params_from_env(db)?),
   })
 }
@@ -119,7 +120,11 @@ async fn connection_from_env(db: u32) -> Option<Box<dyn Connection>> {
   let profile = profile_from_env(db)?;
   Some(
     RedisConnector
-      .connect(&profile, Some("soquel"), None)
+      .connect(
+        &profile,
+        Credentials::fixed(Some("soquel".to_string())),
+        None,
+      )
       .await
       .unwrap(),
   )
@@ -171,7 +176,13 @@ async fn integration_redis_wrong_password_fails() {
   let Some(profile) = profile_from_env(0) else {
     return;
   };
-  let outcome = RedisConnector.connect(&profile, Some("wrong"), None).await;
+  let outcome = RedisConnector
+    .connect(
+      &profile,
+      Credentials::fixed(Some("wrong".to_string())),
+      None,
+    )
+    .await;
   assert!(matches!(outcome, Err(Error::Database { .. })));
 }
 
@@ -535,13 +546,18 @@ async fn integration_redis_acl_user_auth() {
     env: Env::Dev,
     group: None,
     agent_access: Default::default(),
+    credential: Default::default(),
     params: ConnectorParams::Redis(RedisParams {
       username: Some("app".to_string()),
       ..params
     }),
   };
   let connection = RedisConnector
-    .connect(&profile, Some("acl-pw"), None)
+    .connect(
+      &profile,
+      Credentials::fixed(Some("acl-pw".to_string())),
+      None,
+    )
     .await
     .unwrap();
   connection.health().await.unwrap();
@@ -549,6 +565,8 @@ async fn integration_redis_acl_user_auth() {
   kv.set_string("soquel_test:acl:key", "v").await.unwrap();
   kv.delete_key("soquel_test:acl:key").await.unwrap();
 
-  let wrong = RedisConnector.connect(&profile, Some("nope"), None).await;
+  let wrong = RedisConnector
+    .connect(&profile, Credentials::fixed(Some("nope".to_string())), None)
+    .await;
   assert!(matches!(wrong, Err(Error::Database { .. })));
 }

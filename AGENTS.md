@@ -24,6 +24,10 @@ Commands are annotated `#[tauri::command] #[specta::specta]`, return `Result<T, 
 
 No server/backend package: this is a desktop app. Data-layer conventions from the profile (Hono/tRPC/Drizzle/knex) don't apply here.
 
+### Credentials
+
+`CredentialSource` on the profile says where the password comes from: `keychain`, `prompt` (asked at connect, memory only, `unlock_connection` hands it over), or `command` (argv run without a shell, stdout is the password, cached with a TTL). `credentials.rs` owns resolution and hands connectors an `Arc<Credentials>` they resolve per connection, so a pool picks up a refreshed token. Only `keychain` writes to the OS keychain; switching away from it deletes what was stored.
+
 ## Commands
 
 Run from the repo root.

@@ -19,6 +19,7 @@ fn profile_with_ssl(ssl_mode: SslMode) -> Option<ConnectionProfile> {
     env: Env::Dev,
     group: None,
     agent_access: Default::default(),
+    credential: Default::default(),
     params: ConnectorParams::Mysql(SqlServerParams {
       host: host.to_string(),
       port: port.parse().unwrap(),
@@ -56,7 +57,11 @@ async fn test_connection_from_env() -> Option<Box<dyn Connection>> {
   let profile = profile_from_env()?;
   Some(
     MysqlConnector
-      .connect(&profile, Some("soquel"), None)
+      .connect(
+        &profile,
+        Credentials::fixed(Some("soquel".to_string())),
+        None,
+      )
       .await
       .unwrap(),
   )
@@ -204,7 +209,11 @@ async fn integration_mysql_ssl_mode_controls_encryption() {
 
   // mysql 8 auto-generates certs: require must yield an encrypted session.
   let encrypted = MysqlConnector
-    .connect(&require, Some("soquel"), None)
+    .connect(
+      &require,
+      Credentials::fixed(Some("soquel".to_string())),
+      None,
+    )
     .await
     .unwrap();
   let status = encrypted
@@ -220,7 +229,11 @@ async fn integration_mysql_ssl_mode_controls_encryption() {
 
   let disable = profile_with_ssl(SslMode::Disable).unwrap();
   let plaintext = MysqlConnector
-    .connect(&disable, Some("soquel"), None)
+    .connect(
+      &disable,
+      Credentials::fixed(Some("soquel".to_string())),
+      None,
+    )
     .await
     .unwrap();
   let status = plaintext
@@ -747,7 +760,11 @@ async fn integration_mysql_read_only_query() {
     return;
   };
   let connection = MysqlConnector
-    .connect(&profile, Some("soquel"), None)
+    .connect(
+      &profile,
+      Credentials::fixed(Some("soquel".to_string())),
+      None,
+    )
     .await
     .unwrap();
   let sql = connection.sql().unwrap();

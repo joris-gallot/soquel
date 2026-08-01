@@ -1,6 +1,6 @@
 //! MySQL connector: mysql_async pool, text values rendered to strings.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use mysql_async::consts::ColumnType;
@@ -15,6 +15,7 @@ use crate::connectors::{
   SqlSession, StatementResult, StreamSummary, TableChanges, TableRowsRequest, CHUNK_ROWS,
   POOL_MAX_SIZE,
 };
+use crate::credentials::Credentials;
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SqlServerParams, SslMode};
 
@@ -39,7 +40,7 @@ impl Connector for MysqlConnector {
   async fn connect(
     &self,
     profile: &ConnectionProfile,
-    secret: Option<&str>,
+    secret: Arc<Credentials>,
     forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
     let params = profile
@@ -48,13 +49,13 @@ impl Connector for MysqlConnector {
       .ok_or_else(|| Error::Unsupported {
         message: "this connector needs a TCP SQL server profile".to_string(),
       })?;
-    let opts = build_opts(params, secret, forward, ssl_opts(params, forward));
-    let connection = match MysqlConnection::open(opts).await {
+    let opts = build_opts(params, forward, ssl_opts(params, forward));
+    let connection = match MysqlConnection::open(opts, secret.clone()).await {
       Ok(connection) => connection,
       // libpq-style prefer: retry in plaintext when the TLS attempt fails.
       Err(_) if params.ssl_mode == SslMode::Prefer => {
-        let opts = build_opts(params, secret, forward, None);
-        MysqlConnection::open(opts).await?
+        let opts = build_opts(params, forward, None);
+        MysqlConnection::open(opts, secret).await?
       }
       Err(err) => return Err(err),
     };
@@ -62,9 +63,9 @@ impl Connector for MysqlConnector {
   }
 }
 
+/// Password-less: the live pool stamps the resolved one in, so it can change.
 fn build_opts(
   params: &SqlServerParams,
-  secret: Option<&str>,
   forward: Option<LocalForward>,
   ssl: Option<SslOpts>,
 ) -> Opts {
@@ -77,7 +78,6 @@ fn build_opts(
     .tcp_port(port)
     .db_name(Some(params.database.clone()))
     .user(Some(params.user.clone()))
-    .pass(secret.map(str::to_string))
     .ssl_opts(ssl)
     .pool_opts(
       PoolOpts::default()
@@ -110,10 +110,66 @@ fn ssl_opts(params: &SqlServerParams, forward: Option<LocalForward>) -> Option<S
   }
 }
 
-pub struct MysqlConnection {
-  pub(super) pool: Pool,
-  /// Kept for sessions: dedicated conns live outside the pool.
+/// mysql_async bakes the password into the pool's `Opts`, so a refreshed token
+/// means a new pool: this owns that swap and hands out connections.
+pub(super) struct PoolHolder {
+  /// Password-less; the resolved secret is stamped on per pool.
   opts: Opts,
+  credentials: Arc<Credentials>,
+  live: tokio::sync::Mutex<LivePool>,
+}
+
+struct LivePool {
+  secret: Option<String>,
+  pool: Pool,
+}
+
+impl PoolHolder {
+  fn new(opts: Opts, credentials: Arc<Credentials>) -> Self {
+    let pool = Pool::new(opts.clone());
+    Self {
+      opts,
+      credentials,
+      live: tokio::sync::Mutex::new(LivePool { secret: None, pool }),
+    }
+  }
+
+  fn opts_with(&self, secret: &Option<String>) -> Opts {
+    OptsBuilder::from_opts(self.opts.clone())
+      .pass(secret.clone())
+      .into()
+  }
+
+  async fn pool(&self) -> Result<Pool, Error> {
+    let secret = self.credentials.resolve().await?;
+    let mut live = self.live.lock().await;
+    if live.secret != secret {
+      let stale = std::mem::replace(&mut live.pool, Pool::new(self.opts_with(&secret)));
+      live.secret = secret;
+      tauri::async_runtime::spawn(async move { stale.disconnect().await });
+    }
+    Ok(live.pool.clone())
+  }
+
+  pub(super) async fn conn(&self) -> Result<mysql_async::Conn, Error> {
+    Ok(self.pool().await?.get_conn().await?)
+  }
+
+  /// A client outside the pool, for sessions that must keep their state.
+  async fn detached_conn(&self) -> Result<mysql_async::Conn, Error> {
+    let secret = self.credentials.resolve().await?;
+    Ok(mysql_async::Conn::new(self.opts_with(&secret)).await?)
+  }
+
+  async fn disconnect(&self) -> Result<(), Error> {
+    let pool = self.live.lock().await.pool.clone();
+    pool.disconnect().await?;
+    Ok(())
+  }
+}
+
+pub struct MysqlConnection {
+  pub(super) pool: Arc<PoolHolder>,
   server_version: OnceLock<String>,
   /// Thread ids of in-flight queries, for KILL QUERY on a side connection.
   active_threads: CancelRegistry<u32>,
@@ -148,16 +204,14 @@ impl MysqlConnection {
     }
   }
 
-  async fn open(opts: Opts) -> Result<Self, Error> {
-    let pool = Pool::new(opts.clone());
+  async fn open(opts: Opts, credentials: Arc<Credentials>) -> Result<Self, Error> {
     let connection = Self {
-      pool,
-      opts,
+      pool: Arc::new(PoolHolder::new(opts, credentials)),
       server_version: OnceLock::new(),
       active_threads: CancelRegistry::default(),
     };
     // Surface auth/reachability/TLS errors now, not on the first query.
-    let mut conn = connection.pool.get_conn().await?;
+    let mut conn = connection.pool.conn().await?;
     let version: Option<String> = conn.query_first("SELECT VERSION()").await?;
     if let Some(version) = version {
       let _ = connection.server_version.set(version);
@@ -170,14 +224,13 @@ impl MysqlConnection {
 #[async_trait::async_trait]
 impl Connection for MysqlConnection {
   async fn health(&self) -> Result<(), Error> {
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
     conn.query_drop("SELECT 1").await?;
     Ok(())
   }
 
   async fn close(&self) -> Result<(), Error> {
-    self.pool.clone().disconnect().await?;
-    Ok(())
+    self.pool.disconnect().await
   }
 
   fn server_version(&self) -> Option<String> {
@@ -196,7 +249,7 @@ impl Connection for MysqlConnection {
 #[async_trait::async_trait]
 impl SqlQuery for MysqlConnection {
   async fn run_query(&self, sql: &str) -> Result<QueryResult, Error> {
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
     let _guard = self.active_threads.register(conn.id());
     run_script(&mut conn, sql).await
   }
@@ -205,7 +258,7 @@ impl SqlQuery for MysqlConnection {
     // READ ONLY transactions block DML, but DDL implicit-commits right out of
     // them: only read statement heads may pass.
     read_statement_guard(sql)?;
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
     let _guard = self.active_threads.register(conn.id());
     conn.query_drop("START TRANSACTION READ ONLY").await?;
     conn.query_drop(self.statement_timeout_sql()).await?;
@@ -221,7 +274,7 @@ impl SqlQuery for MysqlConnection {
   }
 
   async fn cancel(&self) -> Result<(), Error> {
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
     for thread in self.active_threads.tokens() {
       conn.query_drop(format!("KILL QUERY {thread}")).await?;
     }
@@ -229,7 +282,7 @@ impl SqlQuery for MysqlConnection {
   }
 
   async fn table_rows(&self, request: &TableRowsRequest) -> Result<QueryResult, Error> {
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
     let _guard = self.active_threads.register(conn.id());
     let start = Instant::now();
     let names = base_columns(&mut conn, &request.schema, &request.table).await?;
@@ -261,7 +314,7 @@ impl SqlQuery for MysqlConnection {
   ) -> Result<StreamSummary, Error> {
     use futures_util::TryStreamExt;
 
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
     let _guard = self.active_threads.register(conn.id());
     let start = Instant::now();
     let names = base_columns(&mut conn, &request.schema, &request.table).await?;
@@ -306,7 +359,7 @@ impl SqlQuery for MysqlConnection {
   }
 
   async fn apply_changes(&self, changes: &TableChanges) -> Result<ApplyResult, Error> {
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
     let names = base_columns(&mut conn, &changes.schema, &changes.table).await?;
     let statements = build_change_statements(&names, changes)?;
     if statements.is_empty() {
@@ -338,11 +391,11 @@ impl SqlQuery for MysqlConnection {
   }
 
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error> {
-    let conn = mysql_async::Conn::new(self.opts.clone()).await?;
+    let conn = self.pool.detached_conn().await?;
     let thread_id = conn.id();
     Ok(Box::new(MysqlSession {
       conn: tokio::sync::Mutex::new(conn),
-      pool: self.pool.clone(),
+      pool: Arc::clone(&self.pool),
       thread_id,
     }))
   }
@@ -433,7 +486,7 @@ async fn run_change_statements(
 /// sticks, and cancel targets only this session's thread.
 pub struct MysqlSession {
   conn: tokio::sync::Mutex<mysql_async::Conn>,
-  pool: Pool,
+  pool: Arc<PoolHolder>,
   thread_id: u32,
 }
 
@@ -445,7 +498,7 @@ impl SqlSession for MysqlSession {
   }
 
   async fn cancel(&self) -> Result<(), Error> {
-    let mut side = self.pool.get_conn().await?;
+    let mut side = self.pool.conn().await?;
     side
       .query_drop(format!("KILL QUERY {}", self.thread_id))
       .await?;

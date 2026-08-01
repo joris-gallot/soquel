@@ -146,6 +146,22 @@ describe('formValuesFromProfile', () => {
     const input = toConnectionInput(connectionSchema.parse({ ...values, agentAccess: 'read-only' }))
     expect(input.agentAccess).toBe('read-only')
   })
+
+  it('reads the credential mode back into the form; pre-field profiles read as keychain', () => {
+    expect(formValuesFromProfile(profile('bare', null))).toMatchObject({
+      credentialMode: 'keychain',
+      credentialCommand: '',
+    })
+
+    const stored: ConnectionProfile = {
+      ...profile('iam', null),
+      credential: { mode: 'command', command: 'aws rds token {host}', refreshAfterSecs: 60 },
+    }
+    expect(formValuesFromProfile(stored)).toMatchObject({
+      credentialMode: 'command',
+      credentialCommand: 'aws rds token {host}',
+    })
+  })
 })
 
 describe('serverBadge', () => {
@@ -187,6 +203,8 @@ describe('connectionSchema', () => {
     tunnelId: '',
     group: '',
     password: '',
+    credentialMode: 'keychain',
+    credentialCommand: '',
     path: '',
     dbIndex: 0,
     tls: false,
@@ -259,6 +277,28 @@ describe('connectionSchema', () => {
   it('trims the sqlite path', () => {
     const sqlite = { ...valid, kind: 'sqlite', path: ' /data/app.db ' }
     expect(toConnectionInput(connectionSchema.parse(sqlite)).params).toMatchObject({ path: '/data/app.db' })
+  })
+
+  it('maps the credential mode to the tagged core shape', () => {
+    expect(toConnectionInput(connectionSchema.parse(valid)).credential).toEqual({ mode: 'keychain' })
+    expect(toConnectionInput(connectionSchema.parse({ ...valid, credentialMode: 'prompt' })).credential)
+      .toEqual({ mode: 'prompt' })
+
+    const command = { ...valid, credentialMode: 'command', credentialCommand: '  aws rds token {host} ' }
+    expect(toConnectionInput(connectionSchema.parse(command)).credential)
+      .toEqual({ mode: 'command', command: 'aws rds token {host}', refreshAfterSecs: null })
+  })
+
+  it('requires a command in command mode', () => {
+    const result = connectionSchema.safeParse({ ...valid, credentialMode: 'command', credentialCommand: '  ' })
+    expect(result.success).toBe(false)
+    if (!result.success)
+      expect(zodFieldErrors(result.error).credentialCommand).toBe('Command is required')
+  })
+
+  it('keeps sqlite on the keychain mode whatever the form holds', () => {
+    const sqlite = { ...valid, kind: 'sqlite', path: '/data/app.db', credentialMode: 'command', credentialCommand: 'x' }
+    expect(toConnectionInput(connectionSchema.parse(sqlite)).credential).toEqual({ mode: 'keychain' })
   })
 })
 

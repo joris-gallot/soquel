@@ -7,6 +7,7 @@ import { ref } from 'vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import HostKeyDialog from '@/components/HostKeyDialog.vue'
 import McpApprovalDialog from '@/components/McpApprovalDialog.vue'
+import SecretPromptDialog from '@/components/SecretPromptDialog.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { useTheme } from '@/composables/useTheme'
 
@@ -49,6 +50,7 @@ const { state: version } = useAsyncState(getVersion, '')
       </footer>
       <CommandPalette ref="palette" />
       <HostKeyDialog />
+      <SecretPromptDialog />
       <McpApprovalDialog />
       <Toaster />
     </div>

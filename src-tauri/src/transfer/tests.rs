@@ -21,6 +21,7 @@ fn app_state_with(dir: &tempfile::TempDir, secrets: Box<dyn SecretStore>) -> App
       KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
     ),
     secrets,
+    session_secrets: Default::default(),
     connections: tokio::sync::Mutex::new(HashMap::new()),
     sessions: tokio::sync::Mutex::new(HashMap::new()),
     data_dir: dir.path().to_path_buf(),
@@ -76,6 +77,7 @@ fn seeded(dir: &tempfile::TempDir) -> (AppState, String) {
       env: Env::Prod,
       group: Some("clients".to_string()),
       agent_access: AgentAccess::ReadOnly,
+      credential: Default::default(),
       params: pg_params(Some(tunnel.id.clone())),
       password: None,
     })
@@ -90,6 +92,7 @@ fn seeded(dir: &tempfile::TempDir) -> (AppState, String) {
       env: Env::Dev,
       group: None,
       agent_access: AgentAccess::None,
+      credential: Default::default(),
       params: ConnectorParams::Redis(RedisParams {
         host: "localhost".to_string(),
         port: 6379,
@@ -318,6 +321,74 @@ fn agent_access_is_forced_off_whatever_the_file_says() {
 }
 
 #[test]
+fn the_credential_mode_survives_a_roundtrip_without_the_secret() {
+  let dir = tempfile::tempdir().unwrap();
+  let state = app_state(&dir);
+  let path = out(&dir);
+  state
+    .profiles
+    .lock()
+    .unwrap()
+    .create(&ConnectionInput {
+      name: "iam".to_string(),
+      env: Env::Prod,
+      group: None,
+      agent_access: AgentAccess::None,
+      credential: CredentialSource::Command {
+        command: "aws rds generate-db-auth-token --hostname {host}".to_string(),
+        refresh_after_secs: Some(60),
+      },
+      params: pg_params(None),
+      password: None,
+    })
+    .unwrap();
+
+  export(&state, &path, false, None).unwrap();
+
+  let target_dir = tempfile::tempdir().unwrap();
+  let target = app_state(&target_dir);
+  import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap();
+  let imported = &target.profiles.lock().unwrap().list()[0];
+  assert_eq!(
+    imported.credential,
+    CredentialSource::Command {
+      command: "aws rds generate-db-auth-token --hostname {host}".to_string(),
+      refresh_after_secs: Some(60),
+    }
+  );
+}
+
+#[test]
+fn a_file_without_a_credential_mode_reads_as_keychain() {
+  let dir = tempfile::tempdir().unwrap();
+  let state = app_state(&dir);
+  let path = out(&dir);
+  std::fs::write(
+    &path,
+    r#"{
+      "soquel": "soquel-connections",
+      "version": 1,
+      "document": {
+        "connections": [{
+          "name": "older",
+          "env": "dev",
+          "params": {
+            "kind": "postgres", "host": "db", "port": 5432,
+            "database": "app", "user": "soquel"
+          }
+        }],
+        "tunnels": []
+      }
+    }"#,
+  )
+  .unwrap();
+
+  import_file(&state, &path, None, DuplicateStrategy::Skip).unwrap();
+  let imported = &state.profiles.lock().unwrap().list()[0];
+  assert_eq!(imported.credential, CredentialSource::Keychain);
+}
+
+#[test]
 fn replacing_a_duplicate_also_revokes_its_agent_access() {
   let dir = tempfile::tempdir().unwrap();
   let (state, _) = seeded(&dir);
@@ -507,6 +578,7 @@ fn a_sqlite_only_export_needs_no_tunnel() {
       env: Env::Dev,
       group: None,
       agent_access: AgentAccess::WriteWithApproval,
+      credential: Default::default(),
       params: ConnectorParams::Sqlite {
         path: "/tmp/app.db".to_string(),
       },
@@ -578,6 +650,7 @@ fn a_keychain_that_refuses_midway_unwinds_both_stores() {
       env: Env::Dev,
       group: None,
       agent_access: AgentAccess::None,
+      credential: Default::default(),
       params: ConnectorParams::Sqlite {
         path: "/tmp/kept.db".to_string(),
       },

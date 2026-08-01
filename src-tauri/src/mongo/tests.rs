@@ -90,7 +90,11 @@ async fn tls_through_tunnel_is_refused() {
   });
   profile.name = String::new();
   let Err(err) = MongoConnector
-    .connect(&profile, None, Some(LocalForward { port: 1 }))
+    .connect(
+      &profile,
+      Credentials::fixed(None),
+      Some(LocalForward { port: 1 }),
+    )
     .await
   else {
     panic!("tls + tunnel must be refused");
@@ -107,6 +111,7 @@ fn test_profile(params: MongoParams) -> ConnectionProfile {
     env: Env::Dev,
     group: None,
     agent_access: Default::default(),
+    credential: Default::default(),
     params: ConnectorParams::Mongo(params),
   }
 }
@@ -131,7 +136,11 @@ async fn connection_from_env() -> Option<Box<dyn Connection>> {
   let profile = test_profile(params_from_env()?);
   Some(
     MongoConnector
-      .connect(&profile, Some("soquel"), None)
+      .connect(
+        &profile,
+        Credentials::fixed(Some("soquel".to_string())),
+        None,
+      )
       .await
       .unwrap(),
   )
@@ -175,7 +184,11 @@ async fn integration_mongo_wrong_password_fails() {
     return;
   };
   let Err(err) = MongoConnector
-    .connect(&test_profile(params), Some("wrong"), None)
+    .connect(
+      &test_profile(params),
+      Credentials::fixed(Some("wrong".to_string())),
+      None,
+    )
     .await
   else {
     panic!("wrong password must fail at connect");
@@ -423,7 +436,11 @@ async fn integration_mongo_scoped_user() {
     ..params
   });
   let connection = MongoConnector
-    .connect(&profile, Some("scoped-pw"), None)
+    .connect(
+      &profile,
+      Credentials::fixed(Some("scoped-pw".to_string())),
+      None,
+    )
     .await
     .unwrap();
   let surface = connection.doc().unwrap();

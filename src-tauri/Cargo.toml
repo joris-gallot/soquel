@@ -41,9 +41,11 @@ tokio = { version = "1", features = [
   "sync",
   "net",
   "io-util",
+  "process",
   "rt",
   "time"
 ] }
+shell-words = "1"
 russh = { version = "0.61", default-features = false, features = [ "ring" ] }
 deadpool = "0.13"
 rustls = { version = "0.23", default-features = false, features = [

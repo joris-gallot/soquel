@@ -8,9 +8,12 @@ use crate::connectors::{
   KeyScanPage, KvBrowse, KvDatabases, LocalForward, QueryColumn, QueryResult, RowsChunk,
   SchemaSnapshot, SqlQuery, SqlSession, StreamSummary, TableChanges, TableRowsRequest,
 };
+use crate::credentials::{self, resolve_credentials};
 use crate::error::Error;
 use crate::export::{quote_ident, ExportFormat, ExportWriter};
-use crate::profiles::{ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams};
+use crate::profiles::{
+  ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams, CredentialSource,
+};
 use crate::ssh::{self, SshTunnel, TunnelTarget};
 use crate::transfer::{self, DuplicateStrategy, ExportSummary, ImportOutcome, ImportPreview};
 use crate::tunnels::{TunnelInput, TunnelProfile};
@@ -71,28 +74,24 @@ pub async fn test_connection(
   input: ConnectionInput,
   existing_id: Option<String>,
 ) -> Result<(), Error> {
-  let secret = match &input.password {
-    Some(password) => Some(password.clone()),
-    None => match &existing_id {
-      Some(id) => state.secrets.get(id)?,
-      None => None,
-    },
-  };
   let profile = ConnectionProfile {
     id: String::new(),
     name: input.name.clone(),
     env: input.env,
     group: input.group.clone(),
     agent_access: input.agent_access,
+    credential: input.credential.clone(),
     params: input.params.clone(),
   };
+  let secret = resolve_credentials(
+    state.inner(),
+    &profile,
+    existing_id.as_deref().unwrap_or_default(),
+    input.password.clone(),
+  )?;
   let opened = open_tunnel(&state, &profile).await?;
   let connection = connector_for(profile.params.kind())
-    .connect(
-      &profile,
-      secret.as_deref(),
-      opened.as_ref().map(|(_, f)| *f),
-    )
+    .connect(&profile, secret, opened.as_ref().map(|(_, f)| *f))
     .await?;
   connection.health().await?;
   connection.close().await
@@ -105,21 +104,52 @@ pub async fn connect(state: State<'_, AppState>, id: String) -> Result<(), Error
 }
 
 pub(crate) async fn connect_impl(state: &AppState, id: String) -> Result<(), Error> {
-  let profile = state.profiles.lock().unwrap().get(&id)?;
-  let secret = state.secrets.get(&id)?;
+  let result = connect_attempt(state, &id).await;
+  // A password typed for this attempt only dies with it, success or failure.
+  state.session_secrets.clear_one_shot(&id);
+  result
+}
+
+async fn connect_attempt(state: &AppState, id: &str) -> Result<(), Error> {
+  let profile = state.profiles.lock().unwrap().get(id)?;
+  let secret = resolve_credentials(state, &profile, id, None)?;
   let opened = open_tunnel(state, &profile).await?;
   let forward = opened.as_ref().map(|(_, f)| *f);
   let connection = connector_for(profile.params.kind())
-    .connect(&profile, secret.as_deref(), forward)
+    .connect(&profile, secret, forward)
     .await?;
   state.connections.lock().await.insert(
-    id,
+    id.to_string(),
     ActiveConnection {
       connection: connection.into(),
       _tunnel: opened.map(|(tunnel, _)| tunnel),
     },
   );
   Ok(())
+}
+
+/// Hands the core a password for a connection that asks for one at connect
+/// time. Memory only: `remember` keeps it until disconnect, otherwise it dies
+/// with the next attempt.
+#[tauri::command]
+#[specta::specta]
+pub fn unlock_connection(
+  state: State<'_, AppState>,
+  id: String,
+  secret: String,
+  remember: bool,
+) -> Result<(), Error> {
+  state.session_secrets.set(&id, secret, remember);
+  Ok(())
+}
+
+/// Splits a credential command the way the core will run it, so the form can
+/// show the argv instead of guessing at it.
+#[tauri::command]
+#[specta::specta]
+pub fn parse_credential_command(line: String) -> Result<Vec<String>, Error> {
+  let spec = credentials::parse_command(&line)?;
+  Ok(std::iter::once(spec.program).chain(spec.args).collect())
 }
 
 #[tauri::command]
@@ -141,6 +171,7 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Er
   for session in orphaned {
     let _ = session.close().await;
   }
+  state.session_secrets.clear(&id);
   let active = state.connections.lock().await.remove(&id);
   match active {
     Some(active) => active.connection.close().await,
@@ -501,7 +532,7 @@ impl AppState {
       });
     };
     params.db = db;
-    let secret = self.secrets.get(id)?;
+    let secret = resolve_credentials(self, &profile, id, None)?;
     let forward = {
       let connections = self.connections.lock().await;
       let entry = connections.get(id).ok_or_else(|| Error::NotFound {
@@ -512,7 +543,7 @@ impl AppState {
       })
     };
     let connection = connector_for(profile.params.kind())
-      .connect(&profile, secret.as_deref(), forward)
+      .connect(&profile, secret, forward)
       .await?;
     let mut connections = self.connections.lock().await;
     let Some(entry) = connections.get_mut(id) else {
@@ -672,11 +703,13 @@ pub fn create_connection(
   input: ConnectionInput,
 ) -> Result<ConnectionProfile, Error> {
   let profile = state.profiles.lock().unwrap().create(&input)?;
-  if let Some(password) = &input.password {
-    // No orphan profile when the keychain is unavailable.
-    if let Err(err) = state.secrets.set(&profile.id, password) {
-      let _ = state.profiles.lock().unwrap().delete(&profile.id);
-      return Err(err);
+  if input.credential == CredentialSource::Keychain {
+    if let Some(password) = &input.password {
+      // No orphan profile when the keychain is unavailable.
+      if let Err(err) = state.secrets.set(&profile.id, password) {
+        let _ = state.profiles.lock().unwrap().delete(&profile.id);
+        return Err(err);
+      }
     }
   }
   Ok(profile)
@@ -690,8 +723,14 @@ pub fn update_connection(
   input: ConnectionInput,
 ) -> Result<ConnectionProfile, Error> {
   let profile = state.profiles.lock().unwrap().update(&id, &input)?;
-  if let Some(password) = &input.password {
-    state.secrets.set(&profile.id, password)?;
+  // A connection that stopped storing its password must not leave one behind.
+  if profile.credential == CredentialSource::Keychain {
+    if let Some(password) = &input.password {
+      state.secrets.set(&profile.id, password)?;
+    }
+  } else {
+    state.secrets.delete(&profile.id)?;
+    state.session_secrets.clear(&profile.id);
   }
   Ok(profile)
 }

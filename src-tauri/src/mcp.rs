@@ -419,7 +419,17 @@ async fn ensure_connected(state: &AppState, id: &str) -> Result<(), Error> {
   if state.connections.lock().await.contains_key(id) {
     return Ok(());
   }
-  commands::connect_impl(state, id.to_string()).await
+  commands::connect_impl(state, id.to_string()).await.map_err(
+    // Nobody can answer a password prompt on this side.
+    |err| match err {
+      Error::SecretRequired { connection_name, .. } => Error::Unsupported {
+        message: format!(
+          "{connection_name} asks for its password at each connection: open it in soquel first, then retry"
+        ),
+      },
+      other => other,
+    },
+  )
 }
 
 fn audit(
@@ -1019,6 +1029,7 @@ mod tests {
       env: Env::Dev,
       group: None,
       agent_access: access,
+      credential: Default::default(),
       params: ConnectorParams::Sqlite {
         path: "app.db".to_string(),
       },
@@ -1120,6 +1131,7 @@ mod tests {
         env: Env::Dev,
         group: None,
         agent_access: AgentAccess::ReadOnly,
+        credential: Default::default(),
         params: pg_params(url),
         password: None,
       })
@@ -1130,6 +1142,7 @@ mod tests {
         env: Env::Dev,
         group: None,
         agent_access: AgentAccess::None,
+        credential: Default::default(),
         params: pg_params(url),
         password: None,
       })
@@ -1144,6 +1157,7 @@ mod tests {
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
       ),
       secrets: Box::new(secrets),
+      session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
       sessions: tokio::sync::Mutex::new(HashMap::new()),
       data_dir: dir.path().to_path_buf(),
@@ -1486,6 +1500,7 @@ mod tests {
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
       ),
       secrets: Box::new(InMemoryStore::default()),
+      session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
       sessions: tokio::sync::Mutex::new(HashMap::new()),
       data_dir: dir.path().to_path_buf(),
@@ -1678,6 +1693,7 @@ mod tests {
         env: Env::Dev,
         group: None,
         agent_access: AgentAccess::WriteWithApproval,
+        credential: Default::default(),
         params: ConnectorParams::Sqlite {
           path: path.to_string_lossy().into_owned(),
         },
@@ -1691,6 +1707,7 @@ mod tests {
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
       ),
       secrets: Box::new(InMemoryStore::default()),
+      session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
       sessions: tokio::sync::Mutex::new(HashMap::new()),
       data_dir: dir.path().to_path_buf(),
@@ -1793,6 +1810,7 @@ mod tests {
         env: Env::Dev,
         group: None,
         agent_access: AgentAccess::ReadOnly,
+        credential: Default::default(),
         params,
         password: None,
       })
@@ -1806,6 +1824,7 @@ mod tests {
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
       ),
       secrets: Box::new(secrets),
+      session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
       sessions: tokio::sync::Mutex::new(HashMap::new()),
       data_dir: dir.path().to_path_buf(),
@@ -2032,6 +2051,7 @@ mod tests {
         env: Env::Dev,
         group: None,
         agent_access: AgentAccess::WriteWithApproval,
+        credential: Default::default(),
         params: pg_params(&url),
         password: None,
       };

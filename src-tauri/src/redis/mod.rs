@@ -1,5 +1,7 @@
 //! Redis connector: multiplexed async connection, key-value browse surface.
 
+use std::sync::Arc;
+
 use redis::aio::MultiplexedConnection;
 use redis::{AsyncCommands, ConnectionAddr, ConnectionInfo, RedisConnectionInfo, Value};
 
@@ -7,6 +9,7 @@ use crate::connectors::{
   Capability, Connection, Connector, HashField, KeyDetail, KeyEntry, KeyKind, KeyScanPage,
   KeyValue, KvBrowse, KvDatabaseKeys, KvDatabases, LocalForward, StreamEntry, ZsetMember,
 };
+use crate::credentials::Credentials;
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, ConnectorParams};
 
@@ -24,7 +27,7 @@ impl Connector for RedisConnector {
   async fn connect(
     &self,
     profile: &ConnectionProfile,
-    secret: Option<&str>,
+    secret: Arc<Credentials>,
     forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
     let ConnectorParams::Redis(params) = &profile.params else {
@@ -52,7 +55,8 @@ impl Connector for RedisConnector {
       redis: RedisConnectionInfo {
         db: i64::from(params.db),
         username: params.username.clone(),
-        password: secret.map(str::to_string),
+        // One multiplexed socket, authenticated once: nothing to refresh later.
+        password: secret.resolve().await?,
         ..Default::default()
       },
     };

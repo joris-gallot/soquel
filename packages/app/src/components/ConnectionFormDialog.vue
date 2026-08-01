@@ -26,7 +26,8 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
-import { AGENT_ACCESS_CHOICES, AGENT_ACCESS_LABELS, connectionSchema, ENGINE_CHOICES, engineChoiceForKind, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { commands } from '@/lib/bindings'
+import { AGENT_ACCESS_CHOICES, AGENT_ACCESS_LABELS, connectionSchema, CREDENTIAL_MODE_HINTS, CREDENTIAL_MODE_LABELS, CREDENTIAL_MODES, ENGINE_CHOICES, engineChoiceForKind, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -53,7 +54,7 @@ function groupValue(): string {
 }
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', agentAccess: 'none', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', path: '', dbIndex: 0, tls: false, authSource: '' }
+  return { name: '', env: 'dev', kind: 'postgres', agentAccess: 'none', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', credentialMode: 'keychain', credentialCommand: '', path: '', dbIndex: 0, tls: false, authSource: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -83,6 +84,21 @@ async function browsePath() {
   if (typeof selected === 'string')
     values.value.path = selected
 }
+
+const commandArgv = ref<string[]>([])
+const commandProblem = ref<string | null>(null)
+
+// The core owns the splitting rules; previewing them here would drift.
+watch(() => [values.value.credentialMode, values.value.credentialCommand] as const, async ([mode, command]) => {
+  if (mode !== 'command' || command.trim() === '') {
+    commandArgv.value = []
+    commandProblem.value = null
+    return
+  }
+  const result = await commands.parseCredentialCommand(command)
+  commandArgv.value = result.status === 'ok' ? result.data : []
+  commandProblem.value = result.status === 'ok' ? null : result.error.message
+})
 
 const errors = ref<Record<string, string>>({})
 const importUrl = ref('')
@@ -351,15 +367,63 @@ async function save() {
               </p>
             </div>
             <div class="space-y-1.5">
-              <Label for="conn-password">Password</Label>
-              <Input
-                id="conn-password"
-                v-model="values.password"
-                data-testid="field-password"
-                type="password"
-                :placeholder="profile ? 'unchanged' : ''"
-              />
+              <Label>Password from</Label>
+              <Select v-model="values.credentialMode">
+                <SelectTrigger data-testid="field-credential-mode" class="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    v-for="mode in CREDENTIAL_MODES"
+                    :key="mode"
+                    :value="mode"
+                    :data-testid="`credential-mode-${mode}`"
+                  >
+                    {{ CREDENTIAL_MODE_LABELS[mode] }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
+          </div>
+
+          <div v-if="!isSqlite" class="space-y-1.5">
+            <Label v-if="values.credentialMode !== 'command'" for="conn-password">
+              {{ values.credentialMode === 'prompt' ? 'Password (for Test only)' : 'Password' }}
+            </Label>
+            <Input
+              v-if="values.credentialMode !== 'command'"
+              id="conn-password"
+              v-model="values.password"
+              data-testid="field-password"
+              type="password"
+              :placeholder="values.credentialMode === 'prompt' ? 'not stored' : profile ? 'unchanged' : ''"
+            />
+
+            <template v-if="values.credentialMode === 'command'">
+              <Label for="conn-credential-command">Command</Label>
+              <Input
+                id="conn-credential-command"
+                v-model="values.credentialCommand"
+                data-testid="field-credential-command"
+                class="font-mono text-xs"
+                placeholder="aws rds generate-db-auth-token --hostname {host} --port {port} --username {user}"
+              />
+              <p v-if="errors.credentialCommand" class="text-xs text-destructive">
+                {{ errors.credentialCommand }}
+              </p>
+              <p v-else-if="commandProblem" data-testid="credential-command-problem" class="text-xs text-destructive">
+                {{ commandProblem }}
+              </p>
+              <p v-else-if="commandArgv.length" data-testid="credential-command-argv" class="font-mono text-xs text-muted-foreground">
+                runs: <span v-for="(arg, index) in commandArgv" :key="index" class="mr-1 rounded bg-muted px-1 py-0.5">{{ arg }}</span>
+              </p>
+              <p class="text-xs text-muted-foreground">
+                No shell: {{ '{host}' }} {{ '{port}' }} {{ '{user}' }} {{ '{database}' }} are substituted, pipes and $(...) are not supported.
+              </p>
+            </template>
+            <p v-else class="text-xs text-muted-foreground">
+              {{ CREDENTIAL_MODE_HINTS[values.credentialMode] }}
+            </p>
           </div>
 
           <div class="grid grid-cols-2 gap-3">

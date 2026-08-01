@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::error::Error;
-use crate::profiles::{AgentAccess, ConnectionProfile, ConnectorParams, Env};
+use crate::profiles::{AgentAccess, ConnectionProfile, ConnectorParams, CredentialSource, Env};
 use crate::tunnels::{SshAuth, TunnelProfile};
 use crate::AppState;
 
@@ -22,6 +22,7 @@ pub struct IncomingConnection {
   pub name: String,
   pub env: Env,
   pub group: Option<String>,
+  pub credential: CredentialSource,
   /// `tunnel_id` is always empty here: `tunnel_ref` is the link.
   pub params: ConnectorParams,
   pub tunnel_ref: Option<String>,
@@ -362,6 +363,7 @@ pub fn apply(
         taken.name = entry.name.clone();
         taken.env = entry.env;
         taken.group = entry.group.clone();
+        taken.credential = entry.credential.clone();
         taken.params = params;
         // Replacing must not silently keep an agent grant either.
         taken.agent_access = AgentAccess::None;
@@ -386,6 +388,7 @@ pub fn apply(
           // An imported file never grants agent access: opting in stays a
           // deliberate gesture in the app.
           agent_access: AgentAccess::None,
+          credential: entry.credential.clone(),
           params,
         });
         outcome.created += 1;

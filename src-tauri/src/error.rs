@@ -30,6 +30,19 @@ pub enum Error {
     key: String,
     previously_trusted: bool,
   },
+  /// The profile asks for the password interactively; the caller must supply one.
+  #[error("{message}")]
+  SecretRequired {
+    message: String,
+    connection_id: String,
+    connection_name: String,
+  },
+  #[error("{message}")]
+  CredentialCommand {
+    message: String,
+    program: String,
+    stderr: String,
+  },
 }
 
 impl From<tokio_postgres::Error> for Error {

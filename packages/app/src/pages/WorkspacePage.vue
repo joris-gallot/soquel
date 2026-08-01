@@ -27,6 +27,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useConnections } from '@/composables/useConnections'
 import { useSchema } from '@/composables/useSchema'
+import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { useSqlSessions } from '@/composables/useSqlSessions'
 import { useWorkspaceTabs } from '@/composables/useWorkspaceTabs'
 import { commands } from '@/lib/bindings'
@@ -36,6 +37,7 @@ import { unwrap } from '@/lib/result'
 const route = useRoute()
 const router = useRouter()
 const { connections, activeIds, refresh, connect, disconnect } = useConnections()
+const { intercept: interceptSecret } = useSecretPrompt()
 const { snapshots, pending, load, evict } = useSchema()
 const sessions = useSqlSessions()
 
@@ -157,8 +159,7 @@ useEventListener('keydown', (event) => {
   }
 })
 
-onMounted(async () => {
-  await refresh()
+async function boot() {
   if (!profile.value) {
     router.push({ name: 'connections' })
     return
@@ -174,9 +175,17 @@ onMounted(async () => {
       await load(id.value)
   }
   catch (error) {
+    // The prompt replays the whole boot, not just the connect.
+    if (interceptSecret(error, boot))
+      return
     toast.error(error instanceof Error ? error.message : String(error))
     router.push({ name: 'connections' })
   }
+}
+
+onMounted(async () => {
+  await refresh()
+  await boot()
 })
 
 async function refreshSchema() {

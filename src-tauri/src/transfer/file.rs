@@ -4,7 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::profiles::{ConnectionProfile, ConnectorParams, Env};
+use crate::profiles::{ConnectionProfile, ConnectorParams, CredentialSource, Env};
 use crate::transfer::crypto::{self, Encryption};
 use crate::transfer::{ImportBundle, IncomingConnection, IncomingTunnel};
 use crate::tunnels::{SshAuth, TunnelProfile};
@@ -46,6 +46,10 @@ struct FileConnection {
   env: Env,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   group: Option<String>,
+  /// How the password is obtained, never the password itself. Absent in files
+  /// written before the modes existed: those connections read from the keychain.
+  #[serde(default)]
+  credential: CredentialSource,
   params: ConnectorParams,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   secret: Option<String>,
@@ -91,6 +95,7 @@ pub fn write(
         name: entry.profile.name.clone(),
         env: entry.profile.env,
         group: entry.profile.group.clone(),
+        credential: entry.profile.credential.clone(),
         params: entry.profile.params.clone(),
         secret: entry.secret,
       })
@@ -198,6 +203,7 @@ fn bundle_from(document: Document) -> ImportBundle {
           name: entry.name,
           env: entry.env,
           group: entry.group,
+          credential: entry.credential,
           params,
           tunnel_ref,
           secret: entry.secret,

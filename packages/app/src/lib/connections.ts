@@ -1,4 +1,4 @@
-import type { AgentAccess, ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams, Env, SslMode } from '@/lib/bindings'
+import type { AgentAccess, ConnectionInput, ConnectionProfile, ConnectorKind, ConnectorParams, CredentialSource, Env, SslMode } from '@/lib/bindings'
 import { z } from 'zod'
 
 export const ENVS = ['dev', 'staging', 'prod'] as const satisfies readonly Env[]
@@ -48,6 +48,22 @@ export function engineChoiceForKind(kind: ConnectorKind): EngineChoice {
 }
 
 export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-full'] as const satisfies readonly SslMode[]
+
+export type CredentialMode = CredentialSource['mode']
+
+export const CREDENTIAL_MODES = ['keychain', 'prompt', 'command'] as const satisfies readonly CredentialMode[]
+
+export const CREDENTIAL_MODE_LABELS: Record<CredentialMode, string> = {
+  keychain: 'Saved in the keychain',
+  prompt: 'Ask every time',
+  command: 'From a command',
+}
+
+export const CREDENTIAL_MODE_HINTS: Record<CredentialMode, string> = {
+  keychain: 'Stored in the OS keychain and reused on every connection.',
+  prompt: 'Nothing is stored: soquel asks when you connect.',
+  command: 'Runs the command and uses its output. For short-lived tokens (RDS IAM, Vault, 1Password).',
+}
 
 export const NO_TUNNEL = 'none'
 
@@ -120,6 +136,8 @@ export const connectionSchema = z.object({
   tunnelId: z.string().catch(NO_TUNNEL),
   group: z.string(),
   password: z.string(),
+  credentialMode: z.enum(CREDENTIAL_MODES),
+  credentialCommand: z.string(),
   path: z.string(),
   dbIndex: z.coerce.number().int('DB index must be a whole number').min(0, 'DB index must be positive').catch(0),
   tls: z.boolean(),
@@ -132,6 +150,8 @@ export const connectionSchema = z.object({
       ctx.addIssue({ code: 'custom', path: ['path'], message: 'Database file is required' })
     return
   }
+  if (values.credentialMode === 'command' && values.credentialCommand.trim() === '')
+    ctx.addIssue({ code: 'custom', path: ['credentialCommand'], message: 'Command is required' })
   if (values.host === '')
     ctx.addIssue({ code: 'custom', path: ['host'], message: 'Host is required' })
   if (values.port < 1)
@@ -159,6 +179,10 @@ export interface ConnectionFormValues {
   tunnelId: string
   group: string
   password: string
+  credentialMode: CredentialMode
+  // Only read in 'command' mode; kept around so switching modes back and forth
+  // does not lose what was typed.
+  credentialCommand: string
   path: string
   // Redis only: numeric database index. TLS toggle shared with mongo.
   dbIndex: number | string
@@ -167,16 +191,25 @@ export interface ConnectionFormValues {
   authSource: string
 }
 
+export function credentialSourceFromValues(values: Pick<ConnectionFormValues, 'credentialMode' | 'credentialCommand'>): CredentialSource {
+  if (values.credentialMode === 'command')
+    return { mode: 'command', command: values.credentialCommand.trim(), refreshAfterSecs: null }
+  return { mode: values.credentialMode }
+}
+
 export function toConnectionInput(values: z.output<typeof connectionSchema>): ConnectionInput {
+  const credential = credentialSourceFromValues(values)
   const base = {
     name: values.name,
     env: values.env,
     group: values.group.trim() === '' ? null : values.group.trim(),
     agentAccess: values.agentAccess,
+    credential,
+    // Only the keychain mode stores one; the others send it for a test at most.
     password: values.password === '' ? null : values.password,
   }
   if (values.kind === 'sqlite')
-    return { ...base, password: null, params: { kind: 'sqlite', path: values.path.trim() } }
+    return { ...base, credential: { mode: 'keychain' }, password: null, params: { kind: 'sqlite', path: values.path.trim() } }
   if (values.kind === 'redis') {
     return {
       ...base,
@@ -236,6 +269,8 @@ export function formValuesFromProfile(profile: ConnectionProfile): ConnectionFor
     group: profile.group ?? '',
     agentAccess: profile.agentAccess ?? 'none',
     password: '',
+    credentialMode: profile.credential?.mode ?? 'keychain',
+    credentialCommand: profile.credential?.mode === 'command' ? profile.credential.command : '',
   }
   const defaults = {
     host: 'localhost',

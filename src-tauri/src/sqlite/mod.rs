@@ -12,6 +12,7 @@ use crate::connectors::{
   LocalForward, QueryColumn, QueryResult, RowsChunk, SqlQuery, SqlSession, StatementResult,
   StreamSummary, TableChanges, TableRowsRequest, CHUNK_ROWS,
 };
+use crate::credentials::Credentials;
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, ConnectorParams};
 
@@ -36,7 +37,7 @@ impl Connector for SqliteConnector {
   async fn connect(
     &self,
     profile: &ConnectionProfile,
-    _secret: Option<&str>,
+    _secret: Arc<Credentials>,
     _forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
     let ConnectorParams::Sqlite { path } = &profile.params else {

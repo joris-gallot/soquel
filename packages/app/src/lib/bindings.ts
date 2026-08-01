@@ -22,6 +22,17 @@ export const commands = {
 	/**  Ephemeral connect + health check; never touches the active connections. */
 	testConnection: (input: ConnectionInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_connection", { input, existingId })),
 	connect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("connect", { id })),
+	/**
+	 *  Hands the core a password for a connection that asks for one at connect
+	 *  time. Memory only: `remember` keeps it until disconnect, otherwise it dies
+	 *  with the next attempt.
+	 */
+	unlockConnection: (id: string, secret: string, remember: boolean) => typedError<null, Error>(__TAURI_INVOKE("unlock_connection", { id, secret, remember })),
+	/**
+	 *  Splits a credential command the way the core will run it, so the form can
+	 *  show the argv instead of guessing at it.
+	 */
+	parseCredentialCommand: (line: string) => typedError<string[], Error>(__TAURI_INVOKE("parse_credential_command", { line })),
 	disconnect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("disconnect", { id })),
 	activeConnections: () => typedError<string[], Error>(__TAURI_INVOKE("active_connections")),
 	serverVersion: (id: string) => typedError<string | null, Error>(__TAURI_INVOKE("server_version", { id })),
@@ -144,6 +155,7 @@ export type ConnectionInput = {
 	env: Env,
 	group?: string | null,
 	agentAccess?: AgentAccess,
+	credential?: CredentialSource,
 	params: ConnectorParams,
 	password: string | null,
 };
@@ -154,6 +166,7 @@ export type ConnectionProfile = {
 	env: Env,
 	group?: string | null,
 	agentAccess?: AgentAccess,
+	credential?: CredentialSource,
 	params: ConnectorParams,
 };
 
@@ -169,6 +182,14 @@ export type ConnectorParams = {
 } & RedisParams | {
 	kind: "mongo",
 } & MongoParams;
+
+/**
+ *  Where the password comes from at connect time. Configuration, not a secret:
+ *  it lives in the profile, the password itself never does.
+ */
+export type CredentialSource = { mode: "keychain" } | { mode: "prompt" } | { mode: "command"; 
+/**  The line as typed; split into argv at run time, never run through a shell. */
+command: string; refreshAfterSecs?: number | null };
 
 export type DocCollection = {
 	name: string,
@@ -247,7 +268,9 @@ export type DuplicateStrategy = "replace" | "keep-both" | "skip";
 export type Env = "dev" | "staging" | "prod";
 
 /**  Normalized error shape crossing the IPC boundary. */
-export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean };
+export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean } | 
+/**  The profile asks for the password interactively; the caller must supply one. */
+{ kind: "secret-required"; message: string; connectionId: string; connectionName: string } | { kind: "credential-command"; message: string; program: string; stderr: string };
 
 export type ExportFormat = "csv" | "json" | "sql" | "markdown";
 

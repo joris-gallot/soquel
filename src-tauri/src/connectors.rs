@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::credentials::Credentials;
 use crate::error::Error;
 use crate::mongo::MongoConnector;
 use crate::mysql::MysqlConnector;
@@ -657,10 +660,12 @@ pub struct LocalForward {
 #[async_trait::async_trait]
 pub trait Connector: Send + Sync {
   fn capabilities(&self) -> &'static [Capability];
+  /// `secret` is resolved lazily: a pooling connector keeps it and asks again
+  /// when it builds a connection, so a short-lived token can be refreshed.
   async fn connect(
     &self,
     profile: &ConnectionProfile,
-    secret: Option<&str>,
+    secret: Arc<Credentials>,
     forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error>;
 }

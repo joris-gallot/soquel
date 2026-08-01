@@ -17,7 +17,7 @@ const USER_SCHEMAS: &str =
 #[async_trait::async_trait]
 impl Introspect for MysqlConnection {
   async fn schema_snapshot(&self) -> Result<SchemaSnapshot, Error> {
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
 
     let tables: Vec<(String, String, String, Option<u64>)> = conn
       .query(format!(
@@ -184,7 +184,7 @@ impl Introspect for MysqlConnection {
   }
 
   async fn table_ddl(&self, schema: &str, table: &str) -> Result<String, Error> {
-    let mut conn = self.pool.get_conn().await?;
+    let mut conn = self.pool.conn().await?;
     // Works for views too: the definition always sits in the second column.
     let row: Option<mysql_async::Row> = conn
       .query_first(format!(

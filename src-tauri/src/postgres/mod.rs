@@ -11,6 +11,7 @@ use crate::connectors::{
   SqlSession, StatementResult, StreamSummary, TableChanges, TableRowsRequest, CHUNK_ROWS,
   POOL_MAX_SIZE,
 };
+use crate::credentials::Credentials;
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, SqlServerParams, SslMode};
 
@@ -31,7 +32,7 @@ impl Connector for PostgresConnector {
   async fn connect(
     &self,
     profile: &ConnectionProfile,
-    secret: Option<&str>,
+    secret: Arc<Credentials>,
     forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
     let params = profile
@@ -40,12 +41,13 @@ impl Connector for PostgresConnector {
       .ok_or_else(|| Error::Unsupported {
         message: "this connector needs a TCP SQL server profile".to_string(),
       })?;
-    let mut config = build_config(params, forward);
-    if let Some(secret) = secret {
-      config.password(secret);
-    }
-    let connection =
-      PostgresConnection::new(config, params.ssl_mode, params.ssl_root_cert.clone())?;
+    let config = build_config(params, forward);
+    let connection = PostgresConnection::new(
+      config,
+      secret,
+      params.ssl_mode,
+      params.ssl_root_cert.clone(),
+    )?;
     // Surface auth/reachability/TLS errors now, not on the first query.
     drop(connection.checkout().await?);
     Ok(Box::new(connection))
@@ -84,9 +86,22 @@ pub(super) struct PooledPg {
 
 pub(super) struct PgManager {
   config: Config,
+  credentials: Arc<Credentials>,
   ssl_mode: SslMode,
   ssl_root_cert: Option<String>,
   server_version: Arc<std::sync::OnceLock<String>>,
+}
+
+impl PgManager {
+  /// Resolves the password per connection: a token that expired since the
+  /// pool was built must not be reused.
+  async fn connect(&self) -> Result<PooledPg, Error> {
+    let mut config = self.config.clone();
+    if let Some(secret) = self.credentials.resolve().await? {
+      config.password(secret);
+    }
+    connect_pg(&config, self.ssl_mode, self.ssl_root_cert.as_deref()).await
+  }
 }
 
 async fn connect_pg(
@@ -152,7 +167,7 @@ impl managed::Manager for PgManager {
   type Error = Error;
 
   async fn create(&self) -> Result<PooledPg, Error> {
-    let pg = connect_pg(&self.config, self.ssl_mode, self.ssl_root_cert.as_deref()).await?;
+    let pg = self.connect().await?;
     if let Some(version) = &pg.server_version {
       let _ = self.server_version.set(version.clone());
     }
@@ -176,10 +191,16 @@ pub struct PostgresConnection {
 }
 
 impl PostgresConnection {
-  fn new(config: Config, ssl_mode: SslMode, ssl_root_cert: Option<String>) -> Result<Self, Error> {
+  fn new(
+    config: Config,
+    credentials: Arc<Credentials>,
+    ssl_mode: SslMode,
+    ssl_root_cert: Option<String>,
+  ) -> Result<Self, Error> {
     let server_version = Arc::new(std::sync::OnceLock::new());
     let pool = Pool::builder(PgManager {
       config,
+      credentials,
       ssl_mode,
       ssl_root_cert: ssl_root_cert.clone(),
       server_version: server_version.clone(),
@@ -427,12 +448,7 @@ impl SqlQuery for PostgresConnection {
 
   async fn open_session(&self) -> Result<Box<dyn SqlSession>, Error> {
     let manager = self.pool.manager();
-    let pg = connect_pg(
-      &manager.config,
-      manager.ssl_mode,
-      manager.ssl_root_cert.as_deref(),
-    )
-    .await?;
+    let pg = manager.connect().await?;
     Ok(Box::new(PostgresSession {
       cancel: pg.client.cancel_token(),
       ssl_mode: manager.ssl_mode,

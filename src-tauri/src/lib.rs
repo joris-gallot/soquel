@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 use crate::connectors::{Connection, SqlSession};
+use crate::credentials::SessionSecrets;
 use crate::known_hosts::KnownHostsStore;
 use crate::profiles::ProfileStore;
 use crate::secrets::{FileStore, InMemoryStore, KeyringStore, SecretStore};
@@ -12,6 +13,7 @@ use crate::tunnels::TunnelStore;
 
 mod commands;
 mod connectors;
+mod credentials;
 mod error;
 mod export;
 mod known_hosts;
@@ -43,6 +45,7 @@ pub struct AppState {
   pub tunnels: Mutex<TunnelStore>,
   pub known_hosts: Mutex<KnownHostsStore>,
   pub secrets: Box<dyn SecretStore>,
+  pub session_secrets: SessionSecrets,
   pub connections: tokio::sync::Mutex<HashMap<String, ActiveConnection>>,
   pub sessions: tokio::sync::Mutex<HashMap<String, SessionEntry>>,
   pub data_dir: std::path::PathBuf,
@@ -65,6 +68,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::import_connections,
       commands::test_connection,
       commands::connect,
+      commands::unlock_connection,
+      commands::parse_credential_command,
       commands::disconnect,
       commands::active_connections,
       commands::server_version,
@@ -171,6 +176,7 @@ pub fn run() {
         tunnels: Mutex::new(tunnels),
         known_hosts: Mutex::new(known_hosts),
         secrets,
+        session_secrets: SessionSecrets::default(),
         connections: tokio::sync::Mutex::new(HashMap::new()),
         sessions: tokio::sync::Mutex::new(HashMap::new()),
         data_dir,

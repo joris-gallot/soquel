@@ -15,11 +15,13 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import { useConnections } from '@/composables/useConnections'
+import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { useTheme } from '@/composables/useTheme'
 import { connectionTarget, groupConnections } from '@/lib/connections'
 
 const router = useRouter()
 const { connections, connect, activeIds } = useConnections()
+const { intercept: interceptSecret } = useSecretPrompt()
 const { mode, toggle } = useTheme()
 
 const sections = computed(() => groupConnections(connections.value))
@@ -48,6 +50,8 @@ async function quickConnect(id: string) {
     router.push({ name: 'workspace', params: { id } })
   }
   catch (error) {
+    if (interceptSecret(error, () => quickConnect(id)))
+      return
     toast.error(error instanceof Error ? error.message : String(error))
   }
 }

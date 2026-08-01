@@ -183,6 +183,26 @@ pub enum AgentAccess {
   WriteWithApproval,
 }
 
+/// Where the password comes from at connect time. Configuration, not a secret:
+/// it lives in the profile, the password itself never does.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(
+  tag = "mode",
+  rename_all = "kebab-case",
+  rename_all_fields = "camelCase"
+)]
+pub enum CredentialSource {
+  #[default]
+  Keychain,
+  Prompt,
+  Command {
+    /// The line as typed; split into argv at run time, never run through a shell.
+    command: String,
+    #[serde(default)]
+    refresh_after_secs: Option<u32>,
+  },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
@@ -193,6 +213,8 @@ pub struct ConnectionProfile {
   pub group: Option<String>,
   #[serde(default)]
   pub agent_access: AgentAccess,
+  #[serde(default)]
+  pub credential: CredentialSource,
   pub params: ConnectorParams,
 }
 
@@ -206,6 +228,8 @@ pub struct ConnectionInput {
   pub group: Option<String>,
   #[serde(default)]
   pub agent_access: AgentAccess,
+  #[serde(default)]
+  pub credential: CredentialSource,
   pub params: ConnectorParams,
   pub password: Option<String>,
 }
@@ -264,6 +288,7 @@ impl ProfileStore {
       env: input.env,
       group: input.group.clone(),
       agent_access: input.agent_access,
+      credential: input.credential.clone(),
       params: input.params.clone(),
     };
     self.profiles.push(profile.clone());
@@ -283,6 +308,7 @@ impl ProfileStore {
     profile.env = input.env;
     profile.group = input.group.clone();
     profile.agent_access = input.agent_access;
+    profile.credential = input.credential.clone();
     profile.params = input.params.clone();
     let updated = profile.clone();
     self.save()?;
@@ -317,6 +343,7 @@ mod tests {
       env: Env::Dev,
       group: None,
       agent_access: Default::default(),
+      credential: Default::default(),
       params: ConnectorParams::Postgres(SqlServerParams {
         host: "localhost".to_string(),
         port: 5432,
@@ -409,6 +436,47 @@ mod tests {
     // The tag lives inside params: the discriminated union the frontend sees.
     assert!(raw.contains(r#""kind": "postgres""#), "{raw}");
     assert!(!raw.contains(r#""params": null"#), "{raw}");
+  }
+
+  #[test]
+  fn a_profile_written_before_the_credential_modes_reads_as_keychain() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("connections.json");
+    fs::write(
+      &path,
+      r#"[{"id":"1","name":"old","env":"dev","params":{"kind":"postgres","host":"h","port":5432,"database":"db","user":"u"}}]"#,
+    )
+    .unwrap();
+
+    let store = ProfileStore::load(path).unwrap();
+    assert_eq!(
+      store.get("1").unwrap().credential,
+      CredentialSource::Keychain
+    );
+  }
+
+  #[test]
+  fn the_credential_mode_survives_a_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("connections.json");
+    let mut store = ProfileStore::load(path.clone()).unwrap();
+
+    let mut with_command = input("iam");
+    with_command.credential = CredentialSource::Command {
+      command: "aws rds generate-db-auth-token --hostname {host}".to_string(),
+      refresh_after_secs: None,
+    };
+    let created = store.create(&with_command).unwrap();
+
+    let reloaded = ProfileStore::load(path).unwrap();
+    assert_eq!(
+      reloaded.get(&created.id).unwrap().credential,
+      with_command.credential
+    );
+
+    // Switching back is a plain update, no leftover command.
+    let back = store.update(&created.id, &input("iam")).unwrap();
+    assert_eq!(back.credential, CredentialSource::Keychain);
   }
 
   #[test]

@@ -354,6 +354,7 @@ impl client::Handler for TunnelHandler {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::credentials::Credentials;
   use tokio_postgres::NoTls;
 
   const TEST_USER: &str = "tunnel";
@@ -531,6 +532,7 @@ mod tests {
           env: Env::Dev,
           group: None,
           agent_access: Default::default(),
+          credential: Default::default(),
           params: ConnectorParams::Postgres(SqlServerParams {
             host: "postgres-tls".to_string(),
             port: 5432,
@@ -541,7 +543,7 @@ mod tests {
             tunnel_id: None,
           }),
         },
-        Some("soquel"),
+        Credentials::fixed(Some("soquel".to_string())),
         Some(LocalForward {
           port: tunnel.local_port,
         }),
@@ -586,6 +588,7 @@ mod tests {
           env: Env::Dev,
           group: None,
           agent_access: Default::default(),
+          credential: Default::default(),
           params: ConnectorParams::Redis(RedisParams {
             host: "redis".to_string(),
             port: 6379,
@@ -595,7 +598,7 @@ mod tests {
             tunnel_id: None,
           }),
         },
-        Some("soquel"),
+        Credentials::fixed(Some("soquel".to_string())),
         Some(LocalForward {
           port: tunnel.local_port,
         }),
@@ -649,6 +652,7 @@ mod tests {
         env: Env::Dev,
         group: None,
         agent_access: Default::default(),
+        credential: Default::default(),
         params: ConnectorParams::Redis(RedisParams {
           host: "redis".to_string(),
           port: 6379,
@@ -665,7 +669,7 @@ mod tests {
     let connection = RedisConnector
       .connect(
         &profile,
-        Some("soquel"),
+        Credentials::fixed(Some("soquel".to_string())),
         Some(LocalForward {
           port: tunnel.local_port,
         }),
@@ -689,6 +693,7 @@ mod tests {
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
       ),
       secrets: Box::new(secrets),
+      session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::from([(
         id.clone(),
         ActiveConnection {
@@ -762,6 +767,7 @@ mod tests {
           env: Env::Dev,
           group: None,
           agent_access: Default::default(),
+          credential: Default::default(),
           params: ConnectorParams::Mongo(MongoParams {
             host: "mongo".to_string(),
             port: 27017,
@@ -772,7 +778,7 @@ mod tests {
             tunnel_id: None,
           }),
         },
-        Some("soquel"),
+        Credentials::fixed(Some("soquel".to_string())),
         Some(LocalForward {
           port: tunnel.local_port,
         }),
@@ -822,6 +828,7 @@ mod tests {
       env: Env::Dev,
       group: None,
       agent_access: Default::default(),
+      credential: Default::default(),
       params: ConnectorParams::Postgres(SqlServerParams {
         host: host.to_string(),
         port: 5432,
@@ -840,7 +847,7 @@ mod tests {
     let connection = PostgresConnector
       .connect(
         &connection_profile("localhost"),
-        Some("soquel"),
+        Credentials::fixed(Some("soquel".to_string())),
         Some(forward),
       )
       .await
@@ -853,7 +860,7 @@ mod tests {
     let rejected = PostgresConnector
       .connect(
         &connection_profile("postgres-tls"),
-        Some("soquel"),
+        Credentials::fixed(Some("soquel".to_string())),
         Some(forward),
       )
       .await;

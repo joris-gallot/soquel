@@ -313,7 +313,7 @@ fn build_config_keeps_logical_host_behind_a_forward() {
 fn connection_from_url(url: &str, ssl_mode: SslMode) -> PostgresConnection {
   let mut config: Config = url.parse().unwrap();
   config.ssl_mode(tls::config_ssl_mode(ssl_mode));
-  PostgresConnection::new(config, ssl_mode, None).unwrap()
+  PostgresConnection::new(config, Credentials::fixed(None), ssl_mode, None).unwrap()
 }
 
 pub async fn test_connection_from_env() -> Option<PostgresConnection> {
@@ -526,6 +526,7 @@ async fn integration_postgres_tls_verify_full_passes_with_root_cert() {
   // The compose URL points at localhost, which the cert SAN carries.
   let pg = PostgresConnection::new(
     config,
+    Credentials::fixed(None),
     SslMode::VerifyFull,
     Some(TEST_ROOT_CERT.to_string()),
   )
@@ -1330,6 +1331,7 @@ fn profile_from_env_url(url: &str) -> ConnectionProfile {
     env: crate::profiles::Env::Dev,
     group: None,
     agent_access: Default::default(),
+    credential: Default::default(),
     params: crate::profiles::ConnectorParams::Postgres(SqlServerParams {
       host: host.clone(),
       port: config.get_ports()[0],
@@ -1349,7 +1351,11 @@ async fn integration_postgres_auth_failure_maps_to_database_error() {
   };
   let profile = profile_from_env_url(&url);
   let result = PostgresConnector
-    .connect(&profile, Some("definitely-wrong"), None)
+    .connect(
+      &profile,
+      Credentials::fixed(Some("definitely-wrong".to_string())),
+      None,
+    )
     .await;
   let Err(Error::Database { message }) = result.map(|_| ()) else {
     panic!("expected a database error");
@@ -1370,11 +1376,88 @@ async fn integration_postgres_unreachable_maps_to_database_error() {
     crate::profiles::ConnectorParams::Postgres(params) => params.port = 59999,
     _ => unreachable!(),
   }
-  let result = PostgresConnector.connect(&profile, None, None).await;
+  let result = PostgresConnector
+    .connect(&profile, Credentials::fixed(None), None)
+    .await;
   let Err(Error::Database { message }) = result.map(|_| ()) else {
     panic!("expected a database error");
   };
   assert!(!message.is_empty());
+}
+
+/// A script that prints the password and records each run, so a test can tell
+/// how many times the core asked for it.
+fn counting_password_script(
+  dir: &tempfile::TempDir,
+  password: &str,
+) -> (String, std::path::PathBuf) {
+  let runs = dir.path().join("runs");
+  let script = dir.path().join("password.sh");
+  std::fs::write(
+    &script,
+    format!(
+      "#!/bin/sh\necho run >> {runs}\nprintf %s '{password}'\n",
+      runs = runs.display()
+    ),
+  )
+  .unwrap();
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+  }
+  (script.to_string_lossy().into_owned(), runs)
+}
+
+fn env_password(url: &str) -> String {
+  let config: Config = url.parse().unwrap();
+  String::from_utf8(config.get_password().unwrap().to_vec()).unwrap()
+}
+
+#[tokio::test]
+async fn integration_postgres_password_from_a_command() {
+  let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
+    return;
+  };
+  let spec =
+    crate::credentials::parse_command(&format!("printf %s {}", env_password(&url))).unwrap();
+  let connection = PostgresConnector
+    .connect(
+      &profile_from_env_url(&url),
+      Credentials::command(spec, Duration::from_secs(300)),
+      None,
+    )
+    .await
+    .unwrap();
+  connection.health().await.unwrap();
+  connection.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn integration_postgres_expired_command_password_is_resolved_again() {
+  let Ok(url) = std::env::var("SOQUEL_TEST_PG") else {
+    return;
+  };
+  let dir = tempfile::tempdir().unwrap();
+  let (script, runs) = counting_password_script(&dir, &env_password(&url));
+  let spec = crate::credentials::parse_command(&script).unwrap();
+  let connection = PostgresConnector
+    .connect(
+      &profile_from_env_url(&url),
+      // Expired by the time the next connection is built.
+      Credentials::command(spec, Duration::from_millis(1)),
+      None,
+    )
+    .await
+    .unwrap();
+  // A session is a fresh connection: the pool must ask the command again.
+  let session = connection.sql().unwrap().open_session().await.unwrap();
+  session.run_query("SELECT 1").await.unwrap();
+
+  let count = std::fs::read_to_string(&runs).unwrap().lines().count();
+  assert!(count >= 2, "the command ran {count} time(s)");
+  session.close().await.unwrap();
+  connection.close().await.unwrap();
 }
 
 #[tokio::test]

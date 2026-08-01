@@ -1,5 +1,6 @@
 //! MongoDB connector: single-node client (direct connection), document browse surface.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use mongodb::bson::doc;
@@ -7,6 +8,7 @@ use mongodb::options::{ClientOptions, Credential, ServerAddress, Tls, TlsOptions
 use mongodb::Client;
 
 use crate::connectors::{Capability, Connection, Connector, DocBrowse, LocalForward};
+use crate::credentials::Credentials;
 use crate::error::Error;
 use crate::profiles::{ConnectionProfile, ConnectorParams};
 
@@ -30,7 +32,7 @@ impl Connector for MongoConnector {
   async fn connect(
     &self,
     profile: &ConnectionProfile,
-    secret: Option<&str>,
+    secret: Arc<Credentials>,
     forward: Option<LocalForward>,
   ) -> Result<Box<dyn Connection>, Error> {
     let ConnectorParams::Mongo(params) = &profile.params else {
@@ -66,7 +68,8 @@ impl Connector for MongoConnector {
     }
     if let Some(username) = &params.username {
       let mut credential = Credential::builder().username(username.clone()).build();
-      credential.password = secret.map(str::to_string);
+      // The driver keeps the credential for the client's life: no refresh hook.
+      credential.password = secret.resolve().await?;
       // URI semantics: authSource > path database > driver default (admin).
       credential.source = params
         .auth_source

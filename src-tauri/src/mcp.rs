@@ -30,6 +30,9 @@ use crate::{commands, AppState};
 pub const DEFAULT_PORT: u16 = if cfg!(debug_assertions) { 52701 } else { 52700 };
 /// A write nobody answers is a write nobody wanted.
 const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// How long "allow for a while" lasts. Short on purpose: long enough for one
+/// batch of writes, too short to forget it is open.
+const TRUST_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 const SERVER_NAME: &str = if cfg!(debug_assertions) {
   "soquel-dev"
 } else {
@@ -97,6 +100,9 @@ pub struct AuditEntry {
   /// Milliseconds since the epoch; f64 because specta forbids u64 in bindings.
   pub ts: f64,
   pub tool: String,
+  /// How a write got its yes; None on reads, which never ask.
+  #[serde(default)]
+  pub approval: Option<Approval>,
   pub connection: Option<String>,
   pub detail: Option<String>,
   pub ok: bool,
@@ -228,6 +234,8 @@ pub async fn stop(state: &AppState) -> Result<(), Error> {
   if let Some(running) = state.mcp.lock().await.take() {
     running.cancel.cancel();
   }
+  // The sessions those windows were scoped to are gone with the server.
+  state.trust_windows.lock().await.clear();
   save_settings(
     state,
     McpSettings {
@@ -256,9 +264,12 @@ async fn require_bearer(
   }
 }
 
+/// One instance per MCP session: rmcp builds it once at initialize and hands
+/// it to the session worker, so `session` identifies the agent for its lifetime.
 #[derive(Clone)]
 pub struct SoquelMcp {
   app: AppHandle,
+  session: String,
 }
 
 #[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -486,6 +497,7 @@ async fn ensure_connected(state: &AppState, id: &str) -> Result<(), Error> {
 fn audit(
   state: &AppState,
   tool: &str,
+  approval: Option<Approval>,
   connection: Option<&str>,
   detail: Option<&str>,
   outcome: &Result<serde_json::Value, Error>,
@@ -496,6 +508,7 @@ fn audit(
       .duration_since(UNIX_EPOCH)
       .map_or(0.0, |since| since.as_millis() as f64),
     tool: tool.to_string(),
+    approval,
     connection: connection.map(str::to_string),
     detail: detail.map(str::to_string),
     ok: outcome.is_ok(),
@@ -534,11 +547,15 @@ pub fn audit_log(state: &AppState, limit: usize) -> Result<Vec<AuditEntry>, Erro
 }
 
 /// Answer a pending write request; unknown ids are stale (timed out) requests.
-pub async fn resolve_approval(state: &AppState, id: &str, approved: bool) -> Result<(), Error> {
+pub async fn resolve_approval(
+  state: &AppState,
+  id: &str,
+  answer: ApprovalAnswer,
+) -> Result<(), Error> {
   let waiting = state.approvals.lock().await.remove(id);
   match waiting {
     Some(sender) => {
-      let _ = sender.send(approved);
+      let _ = sender.send(answer);
       Ok(())
     }
     None => Err(Error::NotFound {
@@ -547,10 +564,28 @@ pub async fn resolve_approval(state: &AppState, id: &str, approved: bool) -> Res
   }
 }
 
+/// What the user answered. `ForWindow` also opens a trust window on the
+/// connection; every other value, including silence, refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalAnswer {
+  Deny,
+  Once,
+  ForWindow,
+}
+
+/// How a write got its yes; recorded so the log cannot imply a dialog nobody saw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum Approval {
+  Asked,
+  Covered,
+}
+
 /// How a pending write gets an answer; the app asks the user, tests decide.
 #[async_trait::async_trait]
 pub trait Approver: Send + Sync {
-  async fn request(&self, state: &AppState, request: McpApprovalRequest) -> bool;
+  async fn request(&self, state: &AppState, request: McpApprovalRequest) -> ApprovalAnswer;
 }
 
 /// Emits to the webview and waits for the dialog; a silent UI denies by timeout.
@@ -560,18 +595,21 @@ pub struct DialogApprover {
 
 #[async_trait::async_trait]
 impl Approver for DialogApprover {
-  async fn request(&self, state: &AppState, request: McpApprovalRequest) -> bool {
+  async fn request(&self, state: &AppState, request: McpApprovalRequest) -> ApprovalAnswer {
     let id = request.id.clone();
     let receiver = register_approval(state, &id).await;
     if request.emit(&self.app).is_err() {
       state.approvals.lock().await.remove(&id);
-      return false;
+      return ApprovalAnswer::Deny;
     }
     await_approval(state, &id, receiver, APPROVAL_TIMEOUT).await
   }
 }
 
-async fn register_approval(state: &AppState, id: &str) -> tokio::sync::oneshot::Receiver<bool> {
+async fn register_approval(
+  state: &AppState,
+  id: &str,
+) -> tokio::sync::oneshot::Receiver<ApprovalAnswer> {
   let (sender, receiver) = tokio::sync::oneshot::channel();
   state.approvals.lock().await.insert(id.to_string(), sender);
   receiver
@@ -581,12 +619,58 @@ async fn register_approval(state: &AppState, id: &str) -> tokio::sync::oneshot::
 async fn await_approval(
   state: &AppState,
   id: &str,
-  receiver: tokio::sync::oneshot::Receiver<bool>,
+  receiver: tokio::sync::oneshot::Receiver<ApprovalAnswer>,
   timeout: std::time::Duration,
-) -> bool {
+) -> ApprovalAnswer {
   let answer = tokio::time::timeout(timeout, receiver).await;
   state.approvals.lock().await.remove(id);
-  matches!(answer, Ok(Ok(true)))
+  match answer {
+    Ok(Ok(given)) => given,
+    _ => ApprovalAnswer::Deny,
+  }
+}
+
+/// A live "allow writes for a while" grant. Memory only: it dies with the
+/// server, and nothing persists it to disk.
+pub struct TrustWindow {
+  /// Authority for "still live": monotonic, so a clock change cannot extend it.
+  expires: Instant,
+  /// The same moment as epoch millis, for the panel countdown only.
+  expires_at_ms: f64,
+  connection_name: String,
+}
+
+/// One row of the panel's "currently covered" list.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustWindowInfo {
+  pub session: String,
+  pub connection_id: String,
+  pub connection_name: String,
+  pub expires_at_ms: f64,
+}
+
+pub async fn trust_windows(state: &AppState) -> Vec<TrustWindowInfo> {
+  let mut windows = state.trust_windows.lock().await;
+  let now = Instant::now();
+  windows.retain(|_, window| window.expires > now);
+  windows
+    .iter()
+    .map(|((session, connection_id), window)| TrustWindowInfo {
+      session: session.clone(),
+      connection_id: connection_id.clone(),
+      connection_name: window.connection_name.clone(),
+      expires_at_ms: window.expires_at_ms,
+    })
+    .collect()
+}
+
+pub async fn revoke_trust(state: &AppState, session: &str, connection_id: &str) {
+  state
+    .trust_windows
+    .lock()
+    .await
+    .remove(&(session.to_string(), connection_id.to_string()));
 }
 
 async fn list_connections_impl(state: &AppState) -> Result<serde_json::Value, Error> {
@@ -637,7 +721,7 @@ async fn get_table_ddl_impl(
 
 async fn run_query_impl(
   state: &AppState,
-  approver: &dyn Approver,
+  call: &mut AgentCall<'_>,
   args: &QueryArgs,
 ) -> Result<serde_json::Value, Error> {
   let profile = opted_in(state, &args.connection_id)?;
@@ -650,23 +734,49 @@ async fn run_query_impl(
   if crate::connectors::is_read_statement(&args.sql) {
     return Ok(capped(sql.run_read_only_query(&args.sql).await?));
   }
-  approve_write(state, approver, &profile, args.sql.clone(), None).await?;
+  approve_write(state, call, &profile, args.sql.clone(), None).await?;
   Ok(capped(sql.run_query(&args.sql).await?))
 }
 
-/// The only door to a write: opted in to writes, then approved by the user.
+/// One agent request. Carries who is asking, so a trust window is scoped to a
+/// single MCP session, and reports back how the write got its yes.
+pub struct AgentCall<'a> {
+  session: &'a str,
+  approver: &'a dyn Approver,
+  approval: Option<Approval>,
+}
+
+impl<'a> AgentCall<'a> {
+  pub fn new(session: &'a str, approver: &'a dyn Approver) -> Self {
+    Self {
+      session,
+      approver,
+      approval: None,
+    }
+  }
+}
+
+/// The only door to a write: opted in to writes, then either covered by a live
+/// trust window or approved by the user.
 async fn approve_write(
   state: &AppState,
-  approver: &dyn Approver,
+  call: &mut AgentCall<'_>,
   profile: &ConnectionProfile,
   operation: String,
   payload: Option<String>,
 ) -> Result<(), Error> {
+  // First, and before the window: a connection downgraded since the grant is
+  // refused, so revoking access never has to hunt down open windows.
   if profile.agent_access != AgentAccess::WriteWithApproval {
     return Err(Error::Unsupported {
       message: "this connection is read-only for agents".to_string(),
     });
   }
+  if window_covers(state, call.session, &profile.id).await {
+    call.approval = Some(Approval::Covered);
+    return Ok(());
+  }
+  call.approval = Some(Approval::Asked);
   let request = McpApprovalRequest {
     id: uuid::Uuid::new_v4().to_string(),
     connection_id: profile.id.clone(),
@@ -674,12 +784,44 @@ async fn approve_write(
     operation,
     payload,
   };
-  if !approver.request(state, request).await {
-    return Err(Error::Unsupported {
+  match call.approver.request(state, request).await {
+    ApprovalAnswer::Deny => Err(Error::Unsupported {
       message: "the write was not approved".to_string(),
-    });
+    }),
+    ApprovalAnswer::Once => Ok(()),
+    ApprovalAnswer::ForWindow => {
+      open_window(state, call.session, profile).await;
+      Ok(())
+    }
   }
-  Ok(())
+}
+
+async fn window_covers(state: &AppState, session: &str, connection_id: &str) -> bool {
+  let mut windows = state.trust_windows.lock().await;
+  let key = (session.to_string(), connection_id.to_string());
+  match windows.get(&key) {
+    Some(window) if window.expires > Instant::now() => true,
+    Some(_) => {
+      windows.remove(&key);
+      false
+    }
+    None => false,
+  }
+}
+
+async fn open_window(state: &AppState, session: &str, profile: &ConnectionProfile) {
+  let expires_at_ms = SystemTime::now()
+    .checked_add(TRUST_WINDOW)
+    .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
+    .map_or(0.0, |since| since.as_millis() as f64);
+  state.trust_windows.lock().await.insert(
+    (session.to_string(), profile.id.clone()),
+    TrustWindow {
+      expires: Instant::now() + TRUST_WINDOW,
+      expires_at_ms,
+      connection_name: profile.name.clone(),
+    },
+  );
 }
 
 async fn sample_rows_impl(state: &AppState, args: &SampleArgs) -> Result<serde_json::Value, Error> {
@@ -729,41 +871,34 @@ async fn get_key_impl(state: &AppState, args: &KeyArgs) -> Result<serde_json::Va
 
 async fn set_key_impl(
   state: &AppState,
-  approver: &dyn Approver,
+  call: &mut AgentCall<'_>,
   args: &KeySetArgs,
 ) -> Result<serde_json::Value, Error> {
   let profile = opted_in(state, &args.connection_id)?;
   let connection = agent_connection(state, &args.connection_id).await?;
   let kv = kv_surface(&connection)?;
   let operation = format!("SET {}", args.key);
-  approve_write(
-    state,
-    approver,
-    &profile,
-    operation,
-    Some(args.value.clone()),
-  )
-  .await?;
+  approve_write(state, call, &profile, operation, Some(args.value.clone())).await?;
   kv.set_string(&args.key, &args.value).await?;
   Ok(serde_json::Value::Null)
 }
 
 async fn delete_key_impl(
   state: &AppState,
-  approver: &dyn Approver,
+  call: &mut AgentCall<'_>,
   args: &KeyArgs,
 ) -> Result<serde_json::Value, Error> {
   let profile = opted_in(state, &args.connection_id)?;
   let connection = agent_connection(state, &args.connection_id).await?;
   let kv = kv_surface(&connection)?;
-  approve_write(state, approver, &profile, format!("DEL {}", args.key), None).await?;
+  approve_write(state, call, &profile, format!("DEL {}", args.key), None).await?;
   kv.delete_key(&args.key).await?;
   Ok(serde_json::Value::Null)
 }
 
 async fn set_ttl_impl(
   state: &AppState,
-  approver: &dyn Approver,
+  call: &mut AgentCall<'_>,
   args: &KeyTtlArgs,
 ) -> Result<serde_json::Value, Error> {
   let profile = opted_in(state, &args.connection_id)?;
@@ -773,7 +908,7 @@ async fn set_ttl_impl(
     Some(ttl) => format!("PEXPIRE {} {ttl}", args.key),
     None => format!("PERSIST {}", args.key),
   };
-  approve_write(state, approver, &profile, operation, None).await?;
+  approve_write(state, call, &profile, operation, None).await?;
   kv.set_ttl(&args.key, args.ttl_ms).await?;
   Ok(serde_json::Value::Null)
 }
@@ -856,7 +991,7 @@ async fn list_indexes_impl(
 
 async fn replace_document_impl(
   state: &AppState,
-  approver: &dyn Approver,
+  call: &mut AgentCall<'_>,
   args: &DocReplaceArgs,
 ) -> Result<serde_json::Value, Error> {
   let profile = opted_in(state, &args.connection_id)?;
@@ -865,7 +1000,7 @@ async fn replace_document_impl(
   let operation = format!("replace {}.{} {}", args.database, args.collection, args.id);
   approve_write(
     state,
-    approver,
+    call,
     &profile,
     operation,
     Some(args.document.clone()),
@@ -879,14 +1014,14 @@ async fn replace_document_impl(
 
 async fn delete_document_impl(
   state: &AppState,
-  approver: &dyn Approver,
+  call: &mut AgentCall<'_>,
   args: &DocIdArgs,
 ) -> Result<serde_json::Value, Error> {
   let profile = opted_in(state, &args.connection_id)?;
   let connection = agent_connection(state, &args.connection_id).await?;
   let doc = doc_surface(&connection)?;
   let operation = format!("delete {}.{} {}", args.database, args.collection, args.id);
-  approve_write(state, approver, &profile, operation, None).await?;
+  approve_write(state, call, &profile, operation, None).await?;
   doc
     .delete_doc(&args.database, &args.collection, &args.id)
     .await?;
@@ -904,7 +1039,10 @@ fn doc_surface(
 #[tool_router]
 impl SoquelMcp {
   pub fn new(app: AppHandle) -> Self {
-    Self { app }
+    Self {
+      app,
+      session: uuid::Uuid::new_v4().to_string(),
+    }
   }
 
   fn state(&self) -> State<'_, AppState> {
@@ -918,7 +1056,15 @@ impl SoquelMcp {
     let started = Instant::now();
     let state = self.state();
     let outcome = list_connections_impl(&state).await;
-    audit(&state, "list_connections", None, None, &outcome, started);
+    audit(
+      &state,
+      "list_connections",
+      None,
+      None,
+      None,
+      &outcome,
+      started,
+    );
     respond(outcome)
   }
 
@@ -935,6 +1081,7 @@ impl SoquelMcp {
     audit(
       &state,
       "get_schema",
+      None,
       Some(&args.connection_id),
       None,
       &outcome,
@@ -954,6 +1101,7 @@ impl SoquelMcp {
     audit(
       &state,
       "get_table_ddl",
+      None,
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.schema, args.table)),
       &outcome,
@@ -974,10 +1122,12 @@ impl SoquelMcp {
     let approver = DialogApprover {
       app: self.app.clone(),
     };
-    let outcome = run_query_impl(&state, &approver, &args).await;
+    let mut call = AgentCall::new(&self.session, &approver);
+    let outcome = run_query_impl(&state, &mut call, &args).await;
     audit(
       &state,
       "run_query",
+      call.approval,
       Some(&args.connection_id),
       Some(&args.sql),
       &outcome,
@@ -997,6 +1147,7 @@ impl SoquelMcp {
     audit(
       &state,
       "sample_rows",
+      None,
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.schema, args.table)),
       &outcome,
@@ -1017,6 +1168,7 @@ impl SoquelMcp {
     audit(
       &state,
       "list_databases",
+      None,
       Some(&args.connection_id),
       None,
       &outcome,
@@ -1038,6 +1190,7 @@ impl SoquelMcp {
     audit(
       &state,
       "list_keys",
+      None,
       Some(&args.connection_id),
       args.pattern.as_deref(),
       &outcome,
@@ -1057,6 +1210,7 @@ impl SoquelMcp {
     audit(
       &state,
       "get_key",
+      None,
       Some(&args.connection_id),
       Some(&args.key),
       &outcome,
@@ -1077,10 +1231,12 @@ impl SoquelMcp {
     let approver = DialogApprover {
       app: self.app.clone(),
     };
-    let outcome = set_key_impl(&state, &approver, &args).await;
+    let mut call = AgentCall::new(&self.session, &approver);
+    let outcome = set_key_impl(&state, &mut call, &args).await;
     audit(
       &state,
       "set_key",
+      call.approval,
       Some(&args.connection_id),
       Some(&args.key),
       &outcome,
@@ -1101,10 +1257,12 @@ impl SoquelMcp {
     let approver = DialogApprover {
       app: self.app.clone(),
     };
-    let outcome = delete_key_impl(&state, &approver, &args).await;
+    let mut call = AgentCall::new(&self.session, &approver);
+    let outcome = delete_key_impl(&state, &mut call, &args).await;
     audit(
       &state,
       "delete_key",
+      call.approval,
       Some(&args.connection_id),
       Some(&args.key),
       &outcome,
@@ -1125,10 +1283,12 @@ impl SoquelMcp {
     let approver = DialogApprover {
       app: self.app.clone(),
     };
-    let outcome = set_ttl_impl(&state, &approver, &args).await;
+    let mut call = AgentCall::new(&self.session, &approver);
+    let outcome = set_ttl_impl(&state, &mut call, &args).await;
     audit(
       &state,
       "set_ttl",
+      call.approval,
       Some(&args.connection_id),
       Some(&args.key),
       &outcome,
@@ -1148,6 +1308,7 @@ impl SoquelMcp {
     audit(
       &state,
       "list_collections",
+      None,
       Some(&args.connection_id),
       Some(&args.database),
       &outcome,
@@ -1169,6 +1330,7 @@ impl SoquelMcp {
     audit(
       &state,
       "find_documents",
+      None,
       Some(&args.connection_id),
       Some(&format!(
         "{}.{} {}",
@@ -1193,6 +1355,7 @@ impl SoquelMcp {
     audit(
       &state,
       "count_documents",
+      None,
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.database, args.collection)),
       &outcome,
@@ -1212,6 +1375,7 @@ impl SoquelMcp {
     audit(
       &state,
       "list_indexes",
+      None,
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.database, args.collection)),
       &outcome,
@@ -1232,10 +1396,12 @@ impl SoquelMcp {
     let approver = DialogApprover {
       app: self.app.clone(),
     };
-    let outcome = replace_document_impl(&state, &approver, &args).await;
+    let mut call = AgentCall::new(&self.session, &approver);
+    let outcome = replace_document_impl(&state, &mut call, &args).await;
     audit(
       &state,
       "replace_document",
+      call.approval,
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.database, args.collection)),
       &outcome,
@@ -1256,10 +1422,12 @@ impl SoquelMcp {
     let approver = DialogApprover {
       app: self.app.clone(),
     };
-    let outcome = delete_document_impl(&state, &approver, &args).await;
+    let mut call = AgentCall::new(&self.session, &approver);
+    let outcome = delete_document_impl(&state, &mut call, &args).await;
     audit(
       &state,
       "delete_document",
+      call.approval,
       Some(&args.connection_id),
       Some(&format!("{}.{}", args.database, args.collection)),
       &outcome,
@@ -1451,6 +1619,7 @@ mod tests {
       data_dir: dir.path().to_path_buf(),
       mcp: tokio::sync::Mutex::new(None),
       approvals: tokio::sync::Mutex::new(HashMap::new()),
+      trust_windows: tokio::sync::Mutex::new(HashMap::new()),
     };
     (state, opted.id, hidden.id)
   }
@@ -1516,7 +1685,7 @@ mod tests {
     assert_hidden(
       run_query_impl(
         &state,
-        &FixedApprover(true),
+        &mut call(&FixedApprover(true)),
         &QueryArgs {
           connection_id: hidden.clone(),
           sql: "SELECT 1".to_string(),
@@ -1654,7 +1823,7 @@ mod tests {
     assert_hidden(
       set_key_impl(
         &state,
-        &FixedApprover(true),
+        &mut call(&FixedApprover(true)),
         &KeySetArgs {
           connection_id: hidden.clone(),
           key: "any".to_string(),
@@ -1667,7 +1836,7 @@ mod tests {
     assert_hidden(
       delete_key_impl(
         &state,
-        &FixedApprover(true),
+        &mut call(&FixedApprover(true)),
         &KeyArgs {
           connection_id: hidden.clone(),
           key: "any".to_string(),
@@ -1679,7 +1848,7 @@ mod tests {
     assert_hidden(
       set_ttl_impl(
         &state,
-        &FixedApprover(true),
+        &mut call(&FixedApprover(true)),
         &KeyTtlArgs {
           connection_id: hidden.clone(),
           key: "any".to_string(),
@@ -1692,7 +1861,7 @@ mod tests {
     assert_hidden(
       replace_document_impl(
         &state,
-        &FixedApprover(true),
+        &mut call(&FixedApprover(true)),
         &DocReplaceArgs {
           connection_id: hidden.clone(),
           database: "app".to_string(),
@@ -1707,7 +1876,7 @@ mod tests {
     assert_hidden(
       delete_document_impl(
         &state,
-        &FixedApprover(true),
+        &mut call(&FixedApprover(true)),
         &DocIdArgs {
           connection_id: hidden.clone(),
           database: "app".to_string(),
@@ -1724,7 +1893,7 @@ mod tests {
     // Same code path lets the opted-in profile through (auto-connect included).
     let value = run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &QueryArgs {
         connection_id: opted.clone(),
         sql: "SELECT 1 AS one".to_string(),
@@ -1746,7 +1915,7 @@ mod tests {
 
     let err = run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &QueryArgs {
         connection_id: opted.clone(),
         sql: "UPDATE app.customers SET name = name".to_string(),
@@ -1763,7 +1932,7 @@ mod tests {
     // the engine's read-only transaction, not on the guard.
     let leaked = run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &QueryArgs {
         connection_id: opted.clone(),
         sql: "WITH touched AS (UPDATE app.customers SET name = name RETURNING id) SELECT * FROM touched"
@@ -1779,7 +1948,7 @@ mod tests {
 
     let value = run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &QueryArgs {
         connection_id: opted.clone(),
         sql: "SELECT generate_series(1, 600)".to_string(),
@@ -1840,6 +2009,7 @@ mod tests {
     audit(
       &state,
       "run_query",
+      Some(Approval::Asked),
       Some(&opted),
       Some("SELECT 1"),
       &Ok(serde_json::Value::Null),
@@ -1874,6 +2044,7 @@ mod tests {
       data_dir: dir.path().to_path_buf(),
       mcp: tokio::sync::Mutex::new(None),
       approvals: tokio::sync::Mutex::new(HashMap::new()),
+      trust_windows: tokio::sync::Mutex::new(HashMap::new()),
     }
   }
 
@@ -1917,13 +2088,22 @@ mod tests {
     assert_eq!(loaded.port, 4242);
   }
 
+  /// One agent call from the default test session.
+  fn call(approver: &dyn Approver) -> AgentCall<'_> {
+    AgentCall::new("session-a", approver)
+  }
+
   /// Answers without a dialog: the decision under test, not the transport.
   struct FixedApprover(bool);
 
   #[async_trait::async_trait]
   impl Approver for FixedApprover {
-    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> bool {
-      self.0
+    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> ApprovalAnswer {
+      if self.0 {
+        ApprovalAnswer::Once
+      } else {
+        ApprovalAnswer::Deny
+      }
     }
   }
 
@@ -1931,8 +2111,28 @@ mod tests {
 
   #[async_trait::async_trait]
   impl Approver for DenyingApprover {
-    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> bool {
-      false
+    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> ApprovalAnswer {
+      ApprovalAnswer::Deny
+    }
+  }
+
+  /// Grants a trust window, and counts how often the user was actually asked.
+  #[derive(Default)]
+  struct WindowApprover {
+    asked: std::sync::atomic::AtomicUsize,
+  }
+
+  impl WindowApprover {
+    fn asked(&self) -> usize {
+      self.asked.load(std::sync::atomic::Ordering::SeqCst)
+    }
+  }
+
+  #[async_trait::async_trait]
+  impl Approver for WindowApprover {
+    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> ApprovalAnswer {
+      self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+      ApprovalAnswer::ForWindow
     }
   }
 
@@ -1971,10 +2171,14 @@ mod tests {
       .await
       .insert("req-1".to_string(), sender);
 
-    resolve_approval(&state, "req-1", true).await.unwrap();
-    assert!(receiver.await.unwrap());
+    resolve_approval(&state, "req-1", ApprovalAnswer::Once)
+      .await
+      .unwrap();
+    assert_eq!(receiver.await.unwrap(), ApprovalAnswer::Once);
     // The slot is consumed: answering twice is a stale request.
-    let err = resolve_approval(&state, "req-1", true).await.unwrap_err();
+    let err = resolve_approval(&state, "req-1", ApprovalAnswer::Once)
+      .await
+      .unwrap_err();
     assert!(matches!(err, Error::NotFound { .. }), "{err:?}");
   }
 
@@ -1985,14 +2189,14 @@ mod tests {
     let receiver = register_approval(&state, "req-quiet").await;
 
     // Nobody answers: the default must be no, and the slot must not leak.
-    let approved = await_approval(
+    let answer = await_approval(
       &state,
       "req-quiet",
       receiver,
       std::time::Duration::from_millis(30),
     )
     .await;
-    assert!(!approved);
+    assert_eq!(answer, ApprovalAnswer::Deny);
     assert!(state.approvals.lock().await.is_empty());
   }
 
@@ -2004,14 +2208,15 @@ mod tests {
     // Dropping the sender is what a vanished webview looks like.
     state.approvals.lock().await.remove("req-gone");
 
-    assert!(
-      !await_approval(
+    assert_eq!(
+      await_approval(
         &state,
         "req-gone",
         receiver,
         std::time::Duration::from_secs(5)
       )
-      .await
+      .await,
+      ApprovalAnswer::Deny
     );
   }
 
@@ -2023,12 +2228,22 @@ mod tests {
     let second = register_approval(&state, "req-b").await;
 
     // Answering out of order must not cross the wires.
-    resolve_approval(&state, "req-b", true).await.unwrap();
-    resolve_approval(&state, "req-a", false).await.unwrap();
+    resolve_approval(&state, "req-b", ApprovalAnswer::Once)
+      .await
+      .unwrap();
+    resolve_approval(&state, "req-a", ApprovalAnswer::Deny)
+      .await
+      .unwrap();
 
     let timeout = std::time::Duration::from_secs(5);
-    assert!(!await_approval(&state, "req-a", first, timeout).await);
-    assert!(await_approval(&state, "req-b", second, timeout).await);
+    assert_eq!(
+      await_approval(&state, "req-a", first, timeout).await,
+      ApprovalAnswer::Deny
+    );
+    assert_eq!(
+      await_approval(&state, "req-b", second, timeout).await,
+      ApprovalAnswer::Once
+    );
     assert!(state.approvals.lock().await.is_empty());
   }
 
@@ -2041,13 +2256,13 @@ mod tests {
 
   #[async_trait::async_trait]
   impl Approver for CountingApprover {
-    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> bool {
+    async fn request(&self, _state: &AppState, _request: McpApprovalRequest) -> ApprovalAnswer {
       use std::sync::atomic::Ordering;
       let now = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
       self.peak.fetch_max(now, Ordering::SeqCst);
       self.release.notified().await;
       self.inside.fetch_sub(1, Ordering::SeqCst);
-      true
+      ApprovalAnswer::Once
     }
   }
 
@@ -2130,8 +2345,230 @@ mod tests {
       data_dir: dir.path().to_path_buf(),
       mcp: tokio::sync::Mutex::new(None),
       approvals: tokio::sync::Mutex::new(HashMap::new()),
+      trust_windows: tokio::sync::Mutex::new(HashMap::new()),
     };
     (state, profile.id)
+  }
+
+  fn sql(id: &str, sql: &str) -> QueryArgs {
+    QueryArgs {
+      connection_id: id.to_string(),
+      sql: sql.to_string(),
+    }
+  }
+
+  /// A second sqlite connection in the same store, also opted in for writes.
+  fn second_connection(state: &AppState, dir: &tempfile::TempDir) -> String {
+    let path = dir.path().join("other.db");
+    std::fs::write(&path, "").unwrap();
+    state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&ConnectionInput {
+        name: "other sqlite".to_string(),
+        env: Env::Dev,
+        group: None,
+        agent_access: AgentAccess::WriteWithApproval,
+        credential: Default::default(),
+        params: ConnectorParams::Sqlite {
+          path: path.to_string_lossy().into_owned(),
+        },
+        password: None,
+      })
+      .unwrap()
+      .id
+  }
+
+  #[tokio::test]
+  async fn a_trust_window_covers_later_writes_on_the_same_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = sqlite_state(&dir);
+    let approver = WindowApprover::default();
+
+    let mut first = AgentCall::new("session-a", &approver);
+    run_query_impl(
+      &state,
+      &mut first,
+      &sql(&id, "CREATE TABLE one (id integer)"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.approval, Some(Approval::Asked));
+    assert_eq!(approver.asked(), 1);
+
+    let mut second = AgentCall::new("session-a", &approver);
+    run_query_impl(
+      &state,
+      &mut second,
+      &sql(&id, "CREATE TABLE two (id integer)"),
+    )
+    .await
+    .unwrap();
+    // The point of the whole feature: no second dialog, and the log says so.
+    assert_eq!(approver.asked(), 1);
+    assert_eq!(second.approval, Some(Approval::Covered));
+  }
+
+  #[tokio::test]
+  async fn a_trust_window_covers_neither_another_connection_nor_another_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = sqlite_state(&dir);
+    let other = second_connection(&state, &dir);
+    let approver = WindowApprover::default();
+
+    let mut opening = AgentCall::new("session-a", &approver);
+    run_query_impl(
+      &state,
+      &mut opening,
+      &sql(&id, "CREATE TABLE one (id integer)"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(approver.asked(), 1);
+
+    // Same session, another connection: staging must not cover prod.
+    let mut across = AgentCall::new("session-a", &approver);
+    run_query_impl(
+      &state,
+      &mut across,
+      &sql(&other, "CREATE TABLE two (id integer)"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(approver.asked(), 2);
+    assert_eq!(across.approval, Some(Approval::Asked));
+
+    // Another agent on the same connection inherits nothing.
+    let mut stranger = AgentCall::new("session-b", &approver);
+    run_query_impl(
+      &state,
+      &mut stranger,
+      &sql(&id, "CREATE TABLE three (id integer)"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(approver.asked(), 3);
+    assert_eq!(stranger.approval, Some(Approval::Asked));
+  }
+
+  #[tokio::test]
+  async fn an_expired_window_asks_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = sqlite_state(&dir);
+    let past = Instant::now()
+      .checked_sub(std::time::Duration::from_secs(1))
+      .expect("a monotonic clock a second past boot");
+    state.trust_windows.lock().await.insert(
+      ("session-a".to_string(), id.clone()),
+      TrustWindow {
+        expires: past,
+        expires_at_ms: 0.0,
+        connection_name: "agent sqlite".to_string(),
+      },
+    );
+
+    // Answers once without re-opening a window, so the stale entry is the only
+    // thing that could have covered this write.
+    let approver = FixedApprover(true);
+    let mut call = AgentCall::new("session-a", &approver);
+    run_query_impl(
+      &state,
+      &mut call,
+      &sql(&id, "CREATE TABLE one (id integer)"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(call.approval, Some(Approval::Asked));
+    // And it is dropped rather than lingering in the panel.
+    assert!(trust_windows(&state).await.is_empty());
+  }
+
+  #[tokio::test]
+  async fn losing_write_access_beats_a_live_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = sqlite_state(&dir);
+    let approver = WindowApprover::default();
+
+    let mut opening = AgentCall::new("session-a", &approver);
+    run_query_impl(
+      &state,
+      &mut opening,
+      &sql(&id, "CREATE TABLE one (id integer)"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(trust_windows(&state).await.len(), 1);
+
+    {
+      let mut profiles = state.profiles.lock().unwrap();
+      let profile = profiles.get(&id).unwrap();
+      let input = ConnectionInput {
+        name: profile.name.clone(),
+        env: profile.env,
+        group: profile.group.clone(),
+        agent_access: AgentAccess::ReadOnly,
+        credential: profile.credential.clone(),
+        params: profile.params.clone(),
+        password: None,
+      };
+      profiles.update(&id, &input).unwrap();
+    }
+
+    // The access check runs before the window, so a downgrade takes effect at
+    // once and revoking access never has to hunt down open windows.
+    let mut after = AgentCall::new("session-a", &approver);
+    let err = run_query_impl(
+      &state,
+      &mut after,
+      &sql(&id, "CREATE TABLE two (id integer)"),
+    )
+    .await
+    .unwrap_err();
+    let Error::Unsupported { message } = err else {
+      panic!("expected unsupported: {err:?}");
+    };
+    assert!(message.contains("read-only for agents"), "{message}");
+  }
+
+  #[tokio::test]
+  async fn a_window_is_revocable_and_dies_with_the_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = sqlite_state(&dir);
+    let approver = WindowApprover::default();
+    let open = |session: &'static str| {
+      let approver = &approver;
+      let state = &state;
+      let id = id.clone();
+      async move {
+        let mut call = AgentCall::new(session, approver);
+        run_query_impl(state, &mut call, &sql(&id, "SELECT 1"))
+          .await
+          .unwrap();
+        let mut call = AgentCall::new(session, approver);
+        run_query_impl(
+          state,
+          &mut call,
+          &sql(&id, &format!("CREATE TABLE t_{session} (id integer)")),
+        )
+        .await
+        .unwrap();
+      }
+    };
+    open("a").await;
+    open("b").await;
+    let listed = trust_windows(&state).await;
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|w| w.connection_name == "agent sqlite"));
+
+    revoke_trust(&state, "a", &id).await;
+    let left = trust_windows(&state).await;
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].session, "b");
+
+    // The sessions those windows belonged to end with the server.
+    stop(&state).await.unwrap();
+    assert!(trust_windows(&state).await.is_empty());
   }
 
   #[tokio::test(flavor = "multi_thread")]
@@ -2155,21 +2592,26 @@ mod tests {
     };
 
     // Nothing in the request path may hold a lock across the approval await.
-    let both = tokio::join!(run_query_impl(&state, &approver, &first_args), async {
-      while approver.inside.load(Ordering::SeqCst) == 0 {
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-      }
-      let second = run_query_impl(&state, &approver, &second_args);
-      let releaser = async {
-        while approver.inside.load(Ordering::SeqCst) < 2 {
+    let mut first_call = call(&approver);
+    let mut second_call = call(&approver);
+    let both = tokio::join!(
+      run_query_impl(&state, &mut first_call, &first_args),
+      async {
+        while approver.inside.load(Ordering::SeqCst) == 0 {
           tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        approver.release.notify_waiters();
-        approver.release.notify_waiters();
-      };
-      let (result, ()) = tokio::join!(second, releaser);
-      result
-    });
+        let second = run_query_impl(&state, &mut second_call, &second_args);
+        let releaser = async {
+          while approver.inside.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+          }
+          approver.release.notify_waiters();
+          approver.release.notify_waiters();
+        };
+        let (result, ()) = tokio::join!(second, releaser);
+        result
+      }
+    );
     assert_eq!(approver.peak.load(Ordering::SeqCst), 2);
     both.0.unwrap();
     both.1.unwrap();
@@ -2185,6 +2627,7 @@ mod tests {
       audit(
         &state,
         tool,
+        None,
         Some("conn"),
         Some("SELECT 1"),
         &Ok(serde_json::Value::Null),
@@ -2199,6 +2642,7 @@ mod tests {
     audit(
       &state,
       "third",
+      None,
       None,
       None,
       &Err(Error::Unsupported {
@@ -2259,6 +2703,7 @@ mod tests {
       data_dir: dir.path().to_path_buf(),
       mcp: tokio::sync::Mutex::new(None),
       approvals: tokio::sync::Mutex::new(HashMap::new()),
+      trust_windows: tokio::sync::Mutex::new(HashMap::new()),
     };
     (state, profile.id)
   }
@@ -2414,7 +2859,7 @@ mod tests {
     };
 
     // read-only never reaches the approver, whatever it would answer.
-    let err = set_key_impl(&state, &FixedApprover(true), &set("leak"))
+    let err = set_key_impl(&state, &mut call(&FixedApprover(true)), &set("leak"))
       .await
       .unwrap_err();
     let Error::Unsupported { message } = err else {
@@ -2424,7 +2869,7 @@ mod tests {
 
     allow_writes(&state, &id);
 
-    let denied = set_key_impl(&state, &DenyingApprover, &set("denied"))
+    let denied = set_key_impl(&state, &mut call(&DenyingApprover), &set("denied"))
       .await
       .unwrap_err();
     let Error::Unsupported { message } = denied else {
@@ -2434,7 +2879,7 @@ mod tests {
     // Denial means nothing ran: the key was never created.
     assert_eq!(read_back().await, None);
 
-    set_key_impl(&state, &FixedApprover(true), &set("approved"))
+    set_key_impl(&state, &mut call(&FixedApprover(true)), &set("approved"))
       .await
       .unwrap();
     assert_eq!(read_back().await.as_deref(), Some("approved"));
@@ -2442,7 +2887,7 @@ mod tests {
     // A TTL is a write of its own, and it is approved on its own.
     set_ttl_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &KeyTtlArgs {
         connection_id: id.clone(),
         key: key.to_string(),
@@ -2464,7 +2909,7 @@ mod tests {
 
     let refused = delete_key_impl(
       &state,
-      &DenyingApprover,
+      &mut call(&DenyingApprover),
       &KeyArgs {
         connection_id: id.clone(),
         key: key.to_string(),
@@ -2477,7 +2922,7 @@ mod tests {
 
     delete_key_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &KeyArgs {
         connection_id: id.clone(),
         key: key.to_string(),
@@ -2648,7 +3093,7 @@ mod tests {
     // read-only never reaches the approver, whatever it would answer.
     let err = replace_document_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &replace(r#"{"_id":"probe","state":"leak"}"#),
     )
     .await
@@ -2662,7 +3107,7 @@ mod tests {
 
     let denied = replace_document_impl(
       &state,
-      &DenyingApprover,
+      &mut call(&DenyingApprover),
       &replace(r#"{"_id":"probe","state":"denied"}"#),
     )
     .await
@@ -2681,7 +3126,7 @@ mod tests {
 
     replace_document_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &replace(r#"{"_id":"probe","state":"after"}"#),
     )
     .await
@@ -2697,13 +3142,13 @@ mod tests {
       collection: "docs".to_string(),
       id: doc_id.clone(),
     };
-    let refused = delete_document_impl(&state, &DenyingApprover, &delete)
+    let refused = delete_document_impl(&state, &mut call(&DenyingApprover), &delete)
       .await
       .unwrap_err();
     assert!(matches!(refused, Error::Unsupported { .. }), "{refused:?}");
     assert_eq!(find().await["docs"].as_array().unwrap().len(), 1);
 
-    delete_document_impl(&state, &FixedApprover(true), &delete)
+    delete_document_impl(&state, &mut call(&FixedApprover(true)), &delete)
       .await
       .unwrap();
     assert!(find().await["docs"].as_array().unwrap().is_empty());
@@ -2726,7 +3171,7 @@ mod tests {
     // read-only never reaches the approver, whatever it would answer.
     let err = run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &write("CREATE TABLE app.leak (id int)"),
     )
     .await
@@ -2753,7 +3198,7 @@ mod tests {
 
     let denied = run_query_impl(
       &state,
-      &DenyingApprover,
+      &mut call(&DenyingApprover),
       &write("CREATE TABLE app.denied (id int)"),
     )
     .await
@@ -2765,7 +3210,7 @@ mod tests {
     // Denial means nothing ran.
     let missing = run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &write("SELECT to_regclass('app.denied') IS NULL AS absent"),
     )
     .await
@@ -2775,14 +3220,14 @@ mod tests {
     // Approved: the write lands, outside the read-only path.
     run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &write("CREATE TABLE app.approved_probe (id int)"),
     )
     .await
     .unwrap();
     let exists = run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &write("SELECT to_regclass('app.approved_probe') IS NOT NULL AS there"),
     )
     .await
@@ -2790,7 +3235,7 @@ mod tests {
     assert_eq!(exists["result"]["statements"][0]["rows"][0][0], "t");
     run_query_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &write("DROP TABLE app.approved_probe"),
     )
     .await
@@ -2801,7 +3246,7 @@ mod tests {
     // an operation this connection cannot run.
     let wrong_kind = set_key_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &KeySetArgs {
         connection_id: read_only.clone(),
         key: "app:probe".to_string(),
@@ -2817,7 +3262,7 @@ mod tests {
 
     let wrong_doc = delete_document_impl(
       &state,
-      &FixedApprover(true),
+      &mut call(&FixedApprover(true)),
       &DocIdArgs {
         connection_id: read_only.clone(),
         database: "app".to_string(),

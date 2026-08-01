@@ -54,7 +54,10 @@ pub struct AppState {
   pub data_dir: std::path::PathBuf,
   pub mcp: tokio::sync::Mutex<Option<mcp::McpRunning>>,
   /// Agent write requests waiting on the approval dialog.
-  pub approvals: tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+  pub approvals:
+    tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<mcp::ApprovalAnswer>>>,
+  /// Live "allow writes for a while" grants, keyed by (mcp session, connection).
+  pub trust_windows: tokio::sync::Mutex<HashMap<(String, String), mcp::TrustWindow>>,
 }
 
 #[cfg(test)]
@@ -76,6 +79,7 @@ impl AppState {
       data_dir: dir.to_path_buf(),
       mcp: tokio::sync::Mutex::new(None),
       approvals: tokio::sync::Mutex::new(HashMap::new()),
+      trust_windows: tokio::sync::Mutex::new(HashMap::new()),
     }
   }
 }
@@ -147,6 +151,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_regenerate_token,
       commands::mcp_audit_log,
       commands::mcp_resolve_approval,
+      commands::mcp_trust_windows,
+      commands::mcp_revoke_trust,
     ])
     .events(tauri_specta::collect_events![
       mcp::McpApprovalRequest,
@@ -216,6 +222,7 @@ pub fn run() {
         data_dir,
         mcp: tokio::sync::Mutex::new(None),
         approvals: tokio::sync::Mutex::new(HashMap::new()),
+        trust_windows: tokio::sync::Mutex::new(HashMap::new()),
       });
       mcp::autostart(app.handle());
       Ok(())

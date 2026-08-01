@@ -33,6 +33,7 @@ fn app_state_with(dir: &tempfile::TempDir, secrets: Box<dyn SecretStore>) -> App
     data_dir: dir.path().to_path_buf(),
     mcp: tokio::sync::Mutex::new(None),
     approvals: tokio::sync::Mutex::new(HashMap::new()),
+    trust_windows: tokio::sync::Mutex::new(HashMap::new()),
   }
 }
 

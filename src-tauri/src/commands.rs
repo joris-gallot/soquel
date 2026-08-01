@@ -1139,9 +1139,28 @@ pub async fn mcp_audit_log(
 pub async fn mcp_resolve_approval(
   state: State<'_, AppState>,
   id: String,
-  approved: bool,
+  answer: crate::mcp::ApprovalAnswer,
 ) -> Result<(), Error> {
-  crate::mcp::resolve_approval(state.inner(), &id, approved).await
+  crate::mcp::resolve_approval(state.inner(), &id, answer).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_trust_windows(
+  state: State<'_, AppState>,
+) -> Result<Vec<crate::mcp::TrustWindowInfo>, Error> {
+  Ok(crate::mcp::trust_windows(state.inner()).await)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_revoke_trust(
+  state: State<'_, AppState>,
+  session: String,
+  connection_id: String,
+) -> Result<(), Error> {
+  crate::mcp::revoke_trust(state.inner(), &session, &connection_id).await;
+  Ok(())
 }
 
 #[cfg(test)]

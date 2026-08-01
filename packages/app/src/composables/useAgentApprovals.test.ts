@@ -31,13 +31,13 @@ describe('useAgentApprovals', () => {
     queue.value = [request('a', 'DELETE FROM one'), request('b', 'DELETE FROM two')]
 
     expect(pending.value?.id).toBe('a')
-    await resolve(true)
-    expect(resolveApproval).toHaveBeenLastCalledWith('a', true)
+    await resolve('once')
+    expect(resolveApproval).toHaveBeenLastCalledWith('a', 'once')
 
     // The second request stays pending, untouched by the first answer.
     expect(pending.value?.id).toBe('b')
-    await resolve(false)
-    expect(resolveApproval).toHaveBeenLastCalledWith('b', false)
+    await resolve('deny')
+    expect(resolveApproval).toHaveBeenLastCalledWith('b', 'deny')
     expect(pending.value).toBeNull()
   })
 
@@ -49,7 +49,7 @@ describe('useAgentApprovals', () => {
       error: { kind: 'not-found', message: 'approval request stale is no longer pending' },
     })
 
-    await resolve(true)
+    await resolve('once')
     // Silence here would read as "your write ran".
     expect(toastError).toHaveBeenCalledWith('That request expired. The agent has to ask again.')
   })

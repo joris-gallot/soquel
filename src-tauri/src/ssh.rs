@@ -770,6 +770,7 @@ mod tests {
       data_dir: dir.path().to_path_buf(),
       mcp: tokio::sync::Mutex::new(None),
       approvals: tokio::sync::Mutex::new(HashMap::new()),
+      trust_windows: tokio::sync::Mutex::new(HashMap::new()),
     };
     let active =
       |connections: &HashMap<String, ActiveConnection>| -> std::sync::Arc<dyn Connection> {

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useAgentApprovals } from '@/composables/useAgentApprovals'
+import { refreshTrustWindows } from '@/composables/useTrustWindows'
 
 const { pending, queue, listen, resolve } = useAgentApprovals()
 
@@ -20,9 +21,14 @@ const open = computed({
   get: () => pending.value !== null,
   set: (value) => {
     if (!value)
-      resolve(false)
+      resolve('deny')
   },
 })
+
+async function allowForWindow() {
+  await resolve('for-window')
+  await refreshTrustWindows()
+}
 </script>
 
 <template>
@@ -57,13 +63,18 @@ const open = computed({
         {{ queue.length - 1 }} more waiting
       </p>
 
-      <DialogFooter class="gap-2">
-        <Button variant="outline" data-testid="approval-deny" @click="resolve(false)">
+      <DialogFooter class="gap-2 sm:justify-between">
+        <Button variant="outline" data-testid="approval-deny" @click="resolve('deny')">
           Deny
         </Button>
-        <Button variant="destructive" data-testid="approval-allow" @click="resolve(true)">
-          Run this write
-        </Button>
+        <div class="flex gap-2">
+          <Button variant="secondary" data-testid="approval-allow-window" @click="allowForWindow">
+            Allow for 15 min
+          </Button>
+          <Button variant="destructive" data-testid="approval-allow" @click="resolve('once')">
+            Run this write
+          </Button>
+        </div>
       </DialogFooter>
     </DialogContent>
   </Dialog>

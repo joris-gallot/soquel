@@ -1,4 +1,4 @@
-import type { McpApprovalRequest } from '@/lib/bindings'
+import type { ApprovalAnswer, McpApprovalRequest } from '@/lib/bindings'
 import { computed, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { commands, events } from '@/lib/bindings'
@@ -20,13 +20,13 @@ export function useAgentApprovals() {
 
   const pending = computed(() => queue.value[0] ?? null)
 
-  async function resolve(approved: boolean) {
+  async function resolve(answer: ApprovalAnswer) {
     const request = pending.value
     if (!request)
       return
     queue.value = queue.value.filter(entry => entry.id !== request.id)
     try {
-      unwrap(await commands.mcpResolveApproval(request.id, approved))
+      unwrap(await commands.mcpResolveApproval(request.id, answer))
     }
     catch {
       // The core timed the request out while the dialog was still up: say so,

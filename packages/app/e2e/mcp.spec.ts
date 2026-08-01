@@ -191,6 +191,44 @@ describe('mcp server', () => {
     expect(names).not.toContain('denied_probe')
   })
 
+  it('runs a batch under a trust window, until it is revoked', async () => {
+    const token = await $('[data-testid="mcp-details"]').getAttribute('data-token')
+    const session = await handshake(token!)
+    const write = (id: number, sql: string) => mcpRequest({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: { name: 'run_query', arguments: { connection_id: connectionId, sql } },
+    }, token!, session)
+
+    // Granting is the explicit third choice, never the default.
+    const first = write(30, 'CREATE TABLE batch_one (id integer)')
+    await $('[data-testid="approval-dialog"]').waitForExist()
+    await $('[data-testid="approval-allow-window"]').waitForClickable()
+    await $('[data-testid="approval-allow-window"]').click()
+    expect((await first).json.result).toBeDefined()
+    // Settled, so the next assertion cannot catch this one closing.
+    await $('[data-testid="approval-dialog"]').waitForExist({ reverse: true })
+
+    // The whole point: the next write lands with no dialog at all.
+    expect((await write(31, 'CREATE TABLE batch_two (id integer)')).json.result).toBeDefined()
+    expect(await $('[data-testid="approval-dialog"]').isExisting()).toBe(false)
+
+    // And the panel says out loud that writes are running unattended.
+    await $('[data-testid="trust-window"]').waitForExist()
+    await expect($('[data-testid="trust-remaining"]')).toHaveText(/1[0-5]:\d\d left/)
+    await browser.saveScreenshot('./e2e/screenshots/mcp-trust-window.png')
+
+    await $('[data-testid="trust-revoke"]').click()
+    await $('[data-testid="trust-window"]').waitForExist({ reverse: true })
+
+    // Revoked: back to one dialog per write.
+    const after = write(32, 'CREATE TABLE batch_three (id integer)')
+    await $('[data-testid="approval-dialog"]').waitForExist()
+    await $('[data-testid="approval-deny"]').click()
+    expect((await after).json.error.message).toContain('not approved')
+  })
+
   it('asks before a redis write, showing the value it would store', async () => {
     const token = await $('[data-testid="mcp-details"]').getAttribute('data-token')
 

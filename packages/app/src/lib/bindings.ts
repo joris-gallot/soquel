@@ -102,7 +102,9 @@ export const commands = {
 	mcpStop: () => typedError<null, Error>(__TAURI_INVOKE("mcp_stop")),
 	mcpRegenerateToken: () => typedError<McpStatus, Error>(__TAURI_INVOKE("mcp_regenerate_token")),
 	mcpAuditLog: (limit: number | null) => typedError<AuditEntry[], Error>(__TAURI_INVOKE("mcp_audit_log", { limit })),
-	mcpResolveApproval: (id: string, approved: boolean) => typedError<null, Error>(__TAURI_INVOKE("mcp_resolve_approval", { id, approved })),
+	mcpResolveApproval: (id: string, answer: ApprovalAnswer) => typedError<null, Error>(__TAURI_INVOKE("mcp_resolve_approval", { id, answer })),
+	mcpTrustWindows: () => typedError<TrustWindowInfo[], Error>(__TAURI_INVOKE("mcp_trust_windows")),
+	mcpRevokeTrust: (session: string, connectionId: string) => typedError<null, Error>(__TAURI_INVOKE("mcp_revoke_trust", { session, connectionId })),
 };
 
 /** Events */
@@ -122,10 +124,21 @@ export type ApplyResult = {
 	durationMs: number | null,
 };
 
+/**  How a write got its yes; recorded so the log cannot imply a dialog nobody saw. */
+export type Approval = "asked" | "covered";
+
+/**
+ *  What the user answered. `ForWindow` also opens a trust window on the
+ *  connection; every other value, including silence, refuses.
+ */
+export type ApprovalAnswer = "deny" | "once" | "for-window";
+
 export type AuditEntry = {
 	/**  Milliseconds since the epoch; f64 because specta forbids u64 in bindings. */
 	ts: number | null,
 	tool: string,
+	/**  How a write got its yes; None on reads, which never ask. */
+	approval?: Approval | null,
 	connection: string | null,
 	detail: string | null,
 	ok: boolean,
@@ -570,6 +583,14 @@ export type TableRowsRequest = {
 	includeCtid?: boolean,
 	/**  Optimistic-lock guard for editing: any concurrent write bumps xmin. */
 	includeXmin?: boolean,
+};
+
+/**  One row of the panel's "currently covered" list. */
+export type TrustWindowInfo = {
+	session: string,
+	connectionId: string,
+	connectionName: string,
+	expiresAtMs: number | null,
 };
 
 /**

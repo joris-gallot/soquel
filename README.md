@@ -18,8 +18,10 @@ A Tauri 2 desktop app: the Rust core owns everything heavy and sensitive (databa
 
 - Table browser with inline editing, filters and export
 - SQL editor with query plans (EXPLAIN tree)
-- SSH tunnels: key and agent auth, host key verification
+- SSH tunnels: key, agent and password auth, host key verification
 - TLS connections, including custom root certificates
+- Passwords from the OS keychain, asked at each connection, or read from a command (RDS IAM tokens, Vault, 1Password)
+- Export and import connections as a file, passwords left out by default and encrypted when included
 - Redis key browser, Mongo document browser, dedicated consoles
 - Command palette
 - Agent access over MCP, off by default (see below)
@@ -46,6 +48,7 @@ Agents get read tools for every supported engine (schema and DDL, SQL queries, t
 ## Design
 
 - **Secrets never reach the webview.** Credentials live in the Rust core and the OS keychain.
+- **An imported command runs nothing on its own.** A connection can get its password from a program, which makes a shared connections file a way to run code. One that arrived through an import stays inert until you have read the exact arguments and approved them.
 - **A typed command layer is the only IPC boundary.** Every operation is a Tauri command with a normalized error shape; TypeScript bindings are generated from the Rust types. The MCP tools above are that same layer with a second client.
 - **Offline by design.** No remote assets, strict CSP; the app never phones home.
 

@@ -2795,5 +2795,41 @@ mod tests {
     )
     .await
     .unwrap();
+
+    // A kv write on a SQL connection dies on the missing surface, before the
+    // approver: an approving one is here to prove no dialog was ever raised for
+    // an operation this connection cannot run.
+    let wrong_kind = set_key_impl(
+      &state,
+      &FixedApprover(true),
+      &KeySetArgs {
+        connection_id: read_only.clone(),
+        key: "app:probe".to_string(),
+        value: "v".to_string(),
+      },
+    )
+    .await
+    .unwrap_err();
+    let Error::Unsupported { message } = wrong_kind else {
+      panic!("expected unsupported: {wrong_kind:?}");
+    };
+    assert!(message.contains("not a key-value store"), "{message}");
+
+    let wrong_doc = delete_document_impl(
+      &state,
+      &FixedApprover(true),
+      &DocIdArgs {
+        connection_id: read_only.clone(),
+        database: "app".to_string(),
+        collection: "customers".to_string(),
+        id: "1".to_string(),
+      },
+    )
+    .await
+    .unwrap_err();
+    let Error::Unsupported { message } = wrong_doc else {
+      panic!("expected unsupported: {wrong_doc:?}");
+    };
+    assert!(message.contains("not a document store"), "{message}");
   }
 }

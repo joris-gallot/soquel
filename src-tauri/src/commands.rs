@@ -944,12 +944,14 @@ pub fn import_connections(
   state: State<'_, AppState>,
   path: String,
   passphrase: Option<String>,
+  with_secrets: bool,
   strategy: DuplicateStrategy,
 ) -> Result<ImportOutcome, Error> {
   transfer::import_file(
     state.inner(),
     std::path::Path::new(&path),
     passphrase.as_deref(),
+    with_secrets,
     strategy,
   )
 }
@@ -1348,7 +1350,7 @@ mod tests {
     let target = state(&target_dir);
     let path = target_dir.path().join("shared.json");
     transfer::export(&source, &path, false, None).unwrap();
-    transfer::import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap();
+    transfer::import_file(&target, &path, None, true, DuplicateStrategy::Skip).unwrap();
 
     let imported = &target.profiles.lock().unwrap().list()[0];
     assert_eq!(imported.credential, command(line));

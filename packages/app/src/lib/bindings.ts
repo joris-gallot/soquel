@@ -23,7 +23,7 @@ export const commands = {
 	openConnectionsFile: (path: string) => typedError<null, Error>(__TAURI_INVOKE("open_connections_file", { path })),
 	/**  What importing that file would do; writes nothing. */
 	previewConnectionImport: (path: string, passphrase: string | null) => typedError<ImportPreview, Error>(__TAURI_INVOKE("preview_connection_import", { path, passphrase })),
-	importConnections: (path: string, passphrase: string | null, strategy: DuplicateStrategy) => typedError<ImportOutcome, Error>(__TAURI_INVOKE("import_connections", { path, passphrase, strategy })),
+	importConnections: (path: string, passphrase: string | null, withSecrets: boolean, strategy: DuplicateStrategy) => typedError<ImportOutcome, Error>(__TAURI_INVOKE("import_connections", { path, passphrase, withSecrets, strategy })),
 	/**  Ephemeral connect + health check; never touches the active connections. */
 	testConnection: (input: ConnectionInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_connection", { input, existingId })),
 	connect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("connect", { id })),

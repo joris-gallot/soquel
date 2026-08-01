@@ -68,6 +68,15 @@ export async function openImportDialog(path: string) {
     .waitForExist({ timeout: 10_000 })
 }
 
+/// A plain array of matches: awaiting `$$` still types as a chainable, so
+/// indexing or slicing it needs this first.
+export async function elements(selector: string): Promise<WebdriverIO.Element[]> {
+  const found: WebdriverIO.Element[] = []
+  for (const element of await $$(selector))
+    found.push(element)
+  return found
+}
+
 export async function deleteFirstConnection() {
   await $('[data-testid="row-menu"]').click()
   await $('[data-testid="row-delete"]').click()

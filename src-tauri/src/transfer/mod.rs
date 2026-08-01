@@ -513,12 +513,23 @@ pub fn import_file(
   state: &AppState,
   path: &std::path::Path,
   passphrase: Option<&str>,
+  with_secrets: bool,
   strategy: DuplicateStrategy,
 ) -> Result<ImportOutcome, Error> {
-  let bundle = file::read(path, passphrase)?
+  let mut bundle = file::read(path, passphrase)?
     .bundle
     .ok_or_else(|| Error::Secret {
       message: "this file is encrypted: a passphrase is required".to_string(),
     })?;
+  // Decrypting the file is not the same as agreeing to take what is inside:
+  // a password only crosses over when it was asked for.
+  if !with_secrets {
+    for connection in &mut bundle.connections {
+      connection.secret = None;
+    }
+    for tunnel in &mut bundle.tunnels {
+      tunnel.secret = None;
+    }
+  }
   apply(state, &bundle, strategy)
 }

@@ -30,6 +30,8 @@ No server/backend package: this is a desktop app. Data-layer conventions from th
 
 Secrets are keyed by `SecretKey::{Connection,Tunnel,McpToken}` (`secrets.rs`), not by a raw string: `storage_id()` produces the strings already on disk, so the keychain entries stay as they are.
 
+Importing reads soquel files and nothing else: parsing another client's private format is a one-shot path with permanent upkeep, and a pasted connection URL already prefills the form. Two rules hold whatever the file says: a password lands only when `import_connections` is called with `with_secrets`, and a credential command arriving in a file stays inert until approved.
+
 ## Commands
 
 Run from the repo root.

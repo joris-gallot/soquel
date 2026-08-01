@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { $, $$, browser } from '@wdio/globals'
-import { createPostgresConnection, exportConnectionsTo, openImportDialog, setEditorValue, waitForText, waitForToast } from './helpers'
+import { createPostgresConnection, elements, exportConnectionsTo, openImportDialog, setEditorValue, waitForText, waitForToast } from './helpers'
 
 const PLAIN = path.join(os.tmpdir(), 'soquel-e2e-plain.json')
 const SEALED = path.join(os.tmpdir(), 'soquel-e2e-sealed.json')
@@ -88,6 +88,26 @@ describe('connection transfer', () => {
     // The sealed file carries the password the plain one left out.
     await $('[data-testid="import-entry"]').waitForExist()
     await browser.keys(['Escape'])
+  })
+
+  it('takes the passwords out of a sealed file only when asked', async () => {
+    await openImportDialog(SEALED)
+    await setEditorValue('[data-testid="import-passphrase"]', 'correct horse battery')
+    await $('button=Unlock').click()
+    await waitForText('[data-testid="import-counts"]', '1 connections')
+
+    // Decrypting is not agreeing: the switch is what lets the password land.
+    await $('[data-testid="import-with-secrets"]').waitForDisplayed()
+    await $('[data-testid="import-with-secrets"]').click()
+    await $('[data-testid="strategy-keep-both"]').click()
+    await $('[data-testid="run-import"]').click()
+    await waitForToast('1 added')
+
+    // The copy that just landed opens without asking for anything.
+    const rows = await elements('[data-testid="connection-row"]')
+    await rows[rows.length - 1].$('[data-testid="toggle-connection"]').click()
+    await waitForText('[data-testid="workspace-name"]', 'exported pg')
+    await $('[data-testid="workspace-back"]').click()
   })
 
   it('refuses a file that is not an export at all', async () => {

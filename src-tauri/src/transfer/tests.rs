@@ -5,7 +5,32 @@ use super::*;
 use crate::known_hosts::KnownHostsStore;
 use crate::profiles::{ConnectionInput, ProfileStore, RedisParams, SqlServerParams, SslMode};
 use crate::secrets::{InMemoryStore, SecretKey, SecretStore};
+use crate::transfer::sources::ImportSource;
 use crate::tunnels::{TunnelInput, TunnelStore};
+
+/// The soquel-file source, the shape every test in here reads back.
+fn soquel(path: &std::path::Path) -> ImportSource {
+  ImportSource::SoquelFile {
+    path: path.to_string_lossy().into_owned(),
+  }
+}
+
+fn preview_soquel(
+  state: &AppState,
+  path: &std::path::Path,
+  passphrase: Option<&str>,
+) -> Result<ImportPreview, Error> {
+  preview_source(state, &soquel(path), passphrase)
+}
+
+fn import_soquel(
+  state: &AppState,
+  path: &std::path::Path,
+  passphrase: Option<&str>,
+  strategy: DuplicateStrategy,
+) -> Result<ImportOutcome, Error> {
+  import_source(state, &soquel(path), passphrase, true, strategy)
+}
 
 fn app_state(dir: &tempfile::TempDir) -> AppState {
   app_state_with(dir, Box::new(InMemoryStore::default()))
@@ -139,7 +164,7 @@ fn plaintext_roundtrip_carries_connections_tunnels_and_groups() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let target = app_state(&target_dir);
-  let outcome = import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap();
+  let outcome = import_soquel(&target, &path, None, DuplicateStrategy::Skip).unwrap();
   assert_eq!(outcome.created, 2);
   assert_eq!(outcome.tunnels_created, 1);
 
@@ -192,13 +217,13 @@ fn encrypted_roundtrip_restores_the_secrets() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let target = app_state(&target_dir);
-  let preview = preview_file(&target, &path, Some("correct horse")).unwrap();
+  let preview = preview_soquel(&target, &path, Some("correct horse")).unwrap();
   assert!(preview.encrypted);
   assert!(!preview.needs_passphrase);
   assert_eq!(preview.connections.len(), 2);
   assert!(preview.connections.iter().any(|entry| entry.has_secret));
 
-  import_file(
+  import_soquel(
     &target,
     &path,
     Some("correct horse"),
@@ -235,11 +260,11 @@ fn an_encrypted_file_announces_itself_before_the_passphrase() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let target = app_state(&target_dir);
-  let preview = preview_file(&target, &path, None).unwrap();
+  let preview = preview_soquel(&target, &path, None).unwrap();
   assert!(preview.needs_passphrase);
   assert!(preview.connections.is_empty());
 
-  let err = import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap_err();
+  let err = import_soquel(&target, &path, None, DuplicateStrategy::Skip).unwrap_err();
   assert!(
     matches!(&err, Error::Secret { message } if message.contains("passphrase is required")),
     "{err:?}"
@@ -256,7 +281,7 @@ fn a_wrong_passphrase_is_a_clear_error_and_writes_nothing() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let target = app_state(&target_dir);
-  let err = import_file(&target, &path, Some("wrong"), DuplicateStrategy::Skip).unwrap_err();
+  let err = import_soquel(&target, &path, Some("wrong"), DuplicateStrategy::Skip).unwrap_err();
   assert!(
     matches!(&err, Error::Secret { message } if message.contains("wrong passphrase")),
     "{err:?}"
@@ -289,7 +314,7 @@ fn a_future_version_is_refused_explicitly() {
   )
   .unwrap();
 
-  let err = preview_file(&state, &path, None).unwrap_err();
+  let err = preview_soquel(&state, &path, None).unwrap_err();
   assert!(
     matches!(&err, Error::Unsupported { message } if message.contains("update soquel")),
     "{err:?}"
@@ -302,7 +327,7 @@ fn a_foreign_json_file_is_not_mistaken_for_an_export() {
   let state = app_state(&dir);
   let path = out(&dir);
   std::fs::write(&path, r#"{"connections":[]}"#).unwrap();
-  let err = preview_file(&state, &path, None).unwrap_err();
+  let err = preview_soquel(&state, &path, None).unwrap_err();
   assert!(
     matches!(&err, Error::Storage { message } if message.contains("not a soquel connections file")),
     "{err:?}"
@@ -335,7 +360,7 @@ fn agent_access_is_forced_off_whatever_the_file_says() {
   )
   .unwrap();
 
-  import_file(&state, &path, None, DuplicateStrategy::Skip).unwrap();
+  import_soquel(&state, &path, None, DuplicateStrategy::Skip).unwrap();
   let imported = &state.profiles.lock().unwrap().list()[0];
   assert_eq!(imported.agent_access, AgentAccess::None);
 }
@@ -367,7 +392,7 @@ fn the_credential_mode_survives_a_roundtrip_without_the_secret() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let target = app_state(&target_dir);
-  import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap();
+  import_soquel(&target, &path, None, DuplicateStrategy::Skip).unwrap();
   let imported = &target.profiles.lock().unwrap().list()[0];
   assert_eq!(
     imported.credential,
@@ -421,7 +446,7 @@ fn the_preview_flags_the_entries_that_carry_a_command() {
   assert!(!raw.contains("approv"), "{raw}");
 
   let target_dir = tempfile::tempdir().unwrap();
-  let preview = preview_file(&app_state(&target_dir), &path, None).unwrap();
+  let preview = preview_soquel(&app_state(&target_dir), &path, None).unwrap();
   let flagged: Vec<&str> = preview
     .connections
     .iter()
@@ -429,6 +454,69 @@ fn the_preview_flags_the_entries_that_carry_a_command() {
     .map(|entry| entry.name.as_str())
     .collect();
   assert_eq!(flagged, vec!["iam"]);
+}
+
+#[test]
+fn a_password_only_crosses_over_when_it_was_asked_for() {
+  let source_dir = tempfile::tempdir().unwrap();
+  let (source, _) = seeded(&source_dir);
+  let path = out(&source_dir);
+  export(&source, &path, true, Some("correct horse")).unwrap();
+
+  // Same file, same passphrase, twice: only the flag differs.
+  let without_dir = tempfile::tempdir().unwrap();
+  let without = app_state(&without_dir);
+  import_source(
+    &without,
+    &soquel(&path),
+    Some("correct horse"),
+    false,
+    DuplicateStrategy::Skip,
+  )
+  .unwrap();
+  let prod = without
+    .profiles
+    .lock()
+    .unwrap()
+    .list()
+    .into_iter()
+    .find(|profile| profile.name == "prod")
+    .unwrap();
+  assert_eq!(
+    without
+      .secrets
+      .get(&SecretKey::Connection(prod.id.clone()))
+      .unwrap(),
+    None,
+    "the connection landed without the password the file was carrying"
+  );
+
+  let with_dir = tempfile::tempdir().unwrap();
+  let with = app_state(&with_dir);
+  import_source(
+    &with,
+    &soquel(&path),
+    Some("correct horse"),
+    true,
+    DuplicateStrategy::Skip,
+  )
+  .unwrap();
+  let prod = with
+    .profiles
+    .lock()
+    .unwrap()
+    .list()
+    .into_iter()
+    .find(|profile| profile.name == "prod")
+    .unwrap();
+  assert_eq!(
+    with
+      .secrets
+      .get(&SecretKey::Connection(prod.id))
+      .unwrap()
+      .as_deref(),
+    Some("pg-password")
+  );
 }
 
 #[test]
@@ -446,7 +534,7 @@ fn a_tunnel_carries_its_credential_mode_across_a_roundtrip() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let target = app_state(&target_dir);
-  import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap();
+  import_soquel(&target, &path, None, DuplicateStrategy::Skip).unwrap();
   assert_eq!(
     target.tunnels.lock().unwrap().list()[0].credential,
     CredentialSource::Prompt
@@ -478,7 +566,7 @@ fn a_file_without_a_credential_mode_reads_as_keychain() {
   )
   .unwrap();
 
-  import_file(&state, &path, None, DuplicateStrategy::Skip).unwrap();
+  import_soquel(&state, &path, None, DuplicateStrategy::Skip).unwrap();
   let imported = &state.profiles.lock().unwrap().list()[0];
   assert_eq!(imported.credential, CredentialSource::Keychain);
 }
@@ -494,7 +582,7 @@ fn replacing_a_duplicate_also_revokes_its_agent_access() {
   let prod = before.iter().find(|p| p.name == "prod").unwrap();
   assert_eq!(prod.agent_access, AgentAccess::ReadOnly);
 
-  let outcome = import_file(&state, &path, None, DuplicateStrategy::Replace).unwrap();
+  let outcome = import_soquel(&state, &path, None, DuplicateStrategy::Replace).unwrap();
   assert_eq!(outcome.replaced, 2);
   assert_eq!(outcome.created, 0);
   let after = state.profiles.lock().unwrap().list();
@@ -526,7 +614,7 @@ fn skip_leaves_duplicates_and_their_passwords_alone() {
     .set(&SecretKey::Connection(prod_id.clone()), "rotated-since")
     .unwrap();
 
-  let outcome = import_file(&state, &path, Some("pass"), DuplicateStrategy::Skip).unwrap();
+  let outcome = import_soquel(&state, &path, Some("pass"), DuplicateStrategy::Skip).unwrap();
   assert_eq!(outcome.skipped, 2);
   assert_eq!(outcome.created, 0);
   assert_eq!(outcome.tunnels_created, 0);
@@ -548,7 +636,7 @@ fn keep_both_disambiguates_the_names_and_the_tunnels() {
   let path = out(&dir);
   export(&state, &path, false, None).unwrap();
 
-  import_file(&state, &path, None, DuplicateStrategy::KeepBoth).unwrap();
+  import_soquel(&state, &path, None, DuplicateStrategy::KeepBoth).unwrap();
   let profiles = state.profiles.lock().unwrap().list();
   let tunnels = state.tunnels.lock().unwrap().list();
   assert_eq!(profiles.len(), 4);
@@ -570,7 +658,7 @@ fn keep_both_disambiguates_the_names_and_the_tunnels() {
   );
 
   // A second pass has to find yet another free name.
-  import_file(&state, &path, None, DuplicateStrategy::KeepBoth).unwrap();
+  import_soquel(&state, &path, None, DuplicateStrategy::KeepBoth).unwrap();
   let profiles = state.profiles.lock().unwrap().list();
   assert!(profiles.iter().any(|p| p.name == "prod (imported 2)"));
 }
@@ -598,14 +686,14 @@ fn an_invalid_entry_blocks_the_whole_import() {
   )
   .unwrap();
 
-  let preview = preview_file(&state, &path, None).unwrap();
+  let preview = preview_soquel(&state, &path, None).unwrap();
   assert_eq!(preview.connections[0].problem, None);
   assert_eq!(
     preview.connections[1].problem.as_deref(),
     Some("the host is empty")
   );
 
-  let err = import_file(&state, &path, None, DuplicateStrategy::Skip).unwrap_err();
+  let err = import_soquel(&state, &path, None, DuplicateStrategy::Skip).unwrap_err();
   assert!(
     matches!(&err, Error::Storage { message } if message.contains("\"broken\"")),
     "{err:?}"
@@ -633,12 +721,12 @@ fn a_tunnel_reference_with_no_tunnel_blocks_the_import() {
   )
   .unwrap();
 
-  let preview = preview_file(&state, &path, None).unwrap();
+  let preview = preview_soquel(&state, &path, None).unwrap();
   assert_eq!(
     preview.connections[0].problem.as_deref(),
     Some("its ssh tunnel is missing from the file")
   );
-  assert!(import_file(&state, &path, None, DuplicateStrategy::Skip).is_err());
+  assert!(import_soquel(&state, &path, None, DuplicateStrategy::Skip).is_err());
 }
 
 #[test]
@@ -648,7 +736,7 @@ fn the_preview_flags_what_already_exists() {
   let path = out(&source_dir);
   export(&source, &path, false, None).unwrap();
 
-  let preview = preview_file(&source, &path, None).unwrap();
+  let preview = preview_soquel(&source, &path, None).unwrap();
   assert!(preview.connections.iter().all(|entry| entry.duplicate));
   assert!(preview.tunnels.iter().all(|entry| entry.duplicate));
   assert_eq!(
@@ -663,7 +751,7 @@ fn the_preview_flags_what_already_exists() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let fresh = app_state(&target_dir);
-  let preview = preview_file(&fresh, &path, None).unwrap();
+  let preview = preview_soquel(&fresh, &path, None).unwrap();
   assert!(preview.connections.iter().all(|entry| !entry.duplicate));
 }
 
@@ -692,7 +780,7 @@ fn a_sqlite_only_export_needs_no_tunnel() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let receiver = app_state(&target_dir);
-  import_file(&receiver, &path, None, DuplicateStrategy::Skip).unwrap();
+  import_soquel(&receiver, &path, None, DuplicateStrategy::Skip).unwrap();
   let imported = &receiver.profiles.lock().unwrap().list()[0];
   assert_eq!(target(&imported.params), "/tmp/app.db");
   assert_eq!(imported.agent_access, AgentAccess::None);
@@ -760,7 +848,7 @@ fn a_keychain_that_refuses_midway_unwinds_both_stores() {
     })
     .unwrap();
 
-  let err = import_file(&target, &path, Some("pass"), DuplicateStrategy::Skip).unwrap_err();
+  let err = import_soquel(&target, &path, Some("pass"), DuplicateStrategy::Skip).unwrap_err();
   assert!(matches!(err, Error::Secret { .. }), "{err:?}");
 
   // What was here before is still here, untouched, and nothing new stuck.
@@ -786,7 +874,7 @@ fn the_preview_never_carries_a_secret_across_the_ipc_boundary() {
 
   let target_dir = tempfile::tempdir().unwrap();
   let target = app_state(&target_dir);
-  let preview = preview_file(&target, &path, Some("pass")).unwrap();
+  let preview = preview_soquel(&target, &path, Some("pass")).unwrap();
   let serialized = serde_json::to_string(&preview).unwrap();
   assert!(!serialized.contains("pg-password"), "{serialized}");
   assert!(!serialized.contains("key-passphrase"), "{serialized}");
@@ -819,7 +907,7 @@ fn connections_sharing_one_tunnel_land_on_one_tunnel() {
   )
   .unwrap();
 
-  let outcome = import_file(&state, &path, None, DuplicateStrategy::Skip).unwrap();
+  let outcome = import_soquel(&state, &path, None, DuplicateStrategy::Skip).unwrap();
   assert_eq!(outcome.created, 2);
   assert_eq!(outcome.tunnels_created, 1);
   let tunnels = state.tunnels.lock().unwrap().list();
@@ -852,7 +940,7 @@ fn a_file_that_is_half_new_replaces_and_creates_in_one_pass() {
     .id;
   state.profiles.lock().unwrap().delete(&cache_id).unwrap();
 
-  let outcome = import_file(&state, &path, None, DuplicateStrategy::Replace).unwrap();
+  let outcome = import_soquel(&state, &path, None, DuplicateStrategy::Replace).unwrap();
   assert_eq!(outcome.replaced, 1);
   assert_eq!(outcome.created, 1);
   assert_eq!(outcome.tunnels_created, 0);

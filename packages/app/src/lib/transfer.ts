@@ -1,4 +1,4 @@
-import type { DuplicateStrategy, ImportPreview, PreviewEntry } from '@/lib/bindings'
+import type { DuplicateStrategy, ImportPreview, ImportSource, ImportSourceKind, ImportSourceSummary, PreviewEntry } from '@/lib/bindings'
 import { open, save } from '@tauri-apps/plugin-dialog'
 
 const FILTERS = [{ name: 'Soquel connections', extensions: ['json'] }]
@@ -11,6 +11,24 @@ export const DUPLICATE_STRATEGY_LABELS: Record<DuplicateStrategy, { label: strin
   'skip': { label: 'Skip them', hint: 'Keep what is already here, ignore the file version.' },
   'replace': { label: 'Replace them', hint: 'Overwrite the existing entry, its password included.' },
   'keep-both': { label: 'Keep both', hint: 'Import a second copy under a suffixed name.' },
+}
+
+export const IMPORT_SOURCE_LABELS: Record<ImportSourceKind, string> = {
+  'pgpass': 'PostgreSQL password file',
+  'pg-service': 'PostgreSQL service file',
+}
+
+/// What a source line says about itself: how many entries, or why not.
+export function importSourceStatus(summary: ImportSourceSummary): string {
+  if (summary.problem !== null)
+    return summary.problem
+  if (summary.entries === null)
+    return 'not found'
+  return `${plural(summary.entries, 'entry', 'entries')} found`
+}
+
+export function soquelFileSource(path: string): ImportSource {
+  return { kind: 'soquel-file', path }
 }
 
 /** Null when the user cancels the dialog. */
@@ -81,6 +99,8 @@ export function importOutcomeMessage(outcome: { created: number, replaced: numbe
   return parts.length === 0 ? 'Nothing to import' : `Imported: ${parts.join(', ')}`
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`
+function plural(count: number, noun: string, plural?: string): string {
+  if (count === 1)
+    return `${count} ${noun}`
+  return `${count} ${plural ?? `${noun}s`}`
 }

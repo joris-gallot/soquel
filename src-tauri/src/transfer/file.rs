@@ -211,6 +211,9 @@ fn bundle_from(document: Document) -> ImportBundle {
           params,
           tunnel_ref,
           secret: entry.secret,
+          // The soquel format has no notion of a broken entry: the engine's
+          // own validation is what refuses one.
+          problem: None,
         }
       })
       .collect(),

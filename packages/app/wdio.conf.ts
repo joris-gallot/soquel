@@ -13,6 +13,9 @@ let exiting = false
 const E2E_DATA_DIR = path.join(os.tmpdir(), 'soquel-e2e-data')
 process.env.SOQUEL_DATA_DIR = E2E_DATA_DIR
 process.env.SOQUEL_EPHEMERAL_SECRETS = '1'
+// External import sources are read from here, never from the real home.
+export const E2E_IMPORT_HOME = path.join(os.tmpdir(), 'soquel-e2e-import-home')
+process.env.SOQUEL_IMPORT_HOME = E2E_IMPORT_HOME
 
 export const config: WebdriverIO.Config = {
   hostname: '127.0.0.1',
@@ -44,6 +47,8 @@ export const config: WebdriverIO.Config = {
     // Per spec, not per run: every spec starts from an empty connection list,
     // so one failing spec must not leave a connection behind and fail the rest.
     fs.rmSync(E2E_DATA_DIR, { recursive: true, force: true })
+    fs.rmSync(E2E_IMPORT_HOME, { recursive: true, force: true })
+    fs.mkdirSync(E2E_IMPORT_HOME, { recursive: true })
     tauriDriver = spawn(path.resolve(os.homedir(), '.cargo/bin/tauri-driver'), [], {
       stdio: [null, process.stdout, process.stderr],
     })

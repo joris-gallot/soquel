@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DuplicateStrategy, ImportPreview } from '@/lib/bindings'
+import type { DuplicateStrategy, ImportPreview, ImportSource } from '@/lib/bindings'
 import { Cable, Database, KeyRound, Lock, SquareTerminal, TriangleAlert } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
@@ -16,16 +16,18 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Switch } from '@/components/ui/switch'
 import { commands } from '@/lib/bindings'
 import { unwrap } from '@/lib/result'
 import { DUPLICATE_STRATEGIES, DUPLICATE_STRATEGY_LABELS, importOutcomeMessage, importPlan } from '@/lib/transfer'
 
-const props = defineProps<{ path: string | null }>()
+const props = defineProps<{ source: ImportSource | null }>()
 const emit = defineEmits<{ imported: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
 const preview = ref<ImportPreview | null>(null)
 const passphrase = ref('')
+const withSecrets = ref(false)
 const strategy = ref<DuplicateStrategy>('skip')
 const busy = ref(false)
 const error = ref<string | null>(null)
@@ -37,6 +39,7 @@ watch(open, (isOpen) => {
     return
   preview.value = null
   passphrase.value = ''
+  withSecrets.value = false
   strategy.value = 'skip'
   error.value = null
   locked.value = false
@@ -44,12 +47,12 @@ watch(open, (isOpen) => {
 })
 
 async function load() {
-  if (!props.path)
+  if (!props.source)
     return
   busy.value = true
   error.value = null
   try {
-    const result = unwrap(await commands.previewConnectionImport(props.path, passphrase.value || null))
+    const result = unwrap(await commands.previewImport(props.source, passphrase.value || null))
     preview.value = result
     locked.value = result.needsPassphrase
   }
@@ -66,14 +69,15 @@ const plan = computed(() => (preview.value ? importPlan(preview.value) : null))
 const blocked = computed(() => (plan.value?.problems.length ?? 0) > 0)
 
 async function run() {
-  if (!props.path || blocked.value)
+  if (!props.source || blocked.value)
     return
   busy.value = true
   error.value = null
   try {
-    const outcome = unwrap(await commands.importConnections(
-      props.path,
+    const outcome = unwrap(await commands.runImport(
+      props.source,
       passphrase.value || null,
+      withSecrets.value,
       strategy.value,
     ))
     open.value = false
@@ -97,7 +101,7 @@ async function run() {
           Import connections
         </DialogTitle>
         <DialogDescription class="truncate font-mono text-xs">
-          {{ path }}
+          {{ source?.path }}
         </DialogDescription>
       </DialogHeader>
 
@@ -184,6 +188,18 @@ async function run() {
               </Badge>
             </li>
           </ul>
+
+          <div v-if="plan.secrets > 0" class="flex items-start justify-between gap-4 rounded-md border p-3">
+            <div class="space-y-0.5">
+              <Label for="import-secrets" class="text-sm">Bring the passwords</Label>
+              <p class="text-xs text-muted-foreground">
+                {{ withSecrets
+                  ? `${plan.secrets} passwords land in the keychain.`
+                  : 'Off: the connections arrive without them, ready to re-enter.' }}
+              </p>
+            </div>
+            <Switch id="import-secrets" v-model="withSecrets" data-testid="import-with-secrets" />
+          </div>
 
           <div v-if="plan.duplicates > 0 && !blocked" class="space-y-2">
             <Label>{{ plan.duplicates }} already here</Label>

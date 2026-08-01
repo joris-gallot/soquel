@@ -1,6 +1,6 @@
-import type { ImportPreview, PreviewEntry } from '@/lib/bindings'
+import type { ImportPreview, ImportSourceSummary, PreviewEntry } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { exportSummaryMessage, importOutcomeMessage, importPlan, passphraseIssue } from '@/lib/transfer'
+import { exportSummaryMessage, importOutcomeMessage, importPlan, importSourceStatus, passphraseIssue, soquelFileSource } from '@/lib/transfer'
 
 function entry(overrides: Partial<PreviewEntry> = {}): PreviewEntry {
   return {
@@ -77,5 +77,39 @@ describe('summaries', () => {
       .toBe('Imported: 2 added, 1 skipped')
     expect(importOutcomeMessage({ created: 0, replaced: 0, skipped: 0, tunnelsCreated: 0 }))
       .toBe('Nothing to import')
+  })
+})
+
+describe('importSourceStatus', () => {
+  function summary(overrides: Partial<ImportSourceSummary> = {}): ImportSourceSummary {
+    return {
+      kind: 'pgpass',
+      source: { kind: 'pgpass', path: '/home/me/.pgpass' },
+      path: '/home/me/.pgpass',
+      entries: 3,
+      problem: null,
+      ...overrides,
+    }
+  }
+
+  it('counts what a source holds, singular included', () => {
+    expect(importSourceStatus(summary())).toBe('3 entries found')
+    expect(importSourceStatus(summary({ entries: 1 }))).toBe('1 entry found')
+    expect(importSourceStatus(summary({ entries: 0 }))).toBe('0 entries found')
+  })
+
+  it('says nothing was found rather than nothing at all', () => {
+    expect(importSourceStatus(summary({ entries: null }))).toBe('not found')
+  })
+
+  it('a problem wins over the count: the reason is what matters', () => {
+    expect(importSourceStatus(summary({ entries: null, problem: 'permission denied' })))
+      .toBe('permission denied')
+  })
+})
+
+describe('soquelFileSource', () => {
+  it('tags a picked path as the file source', () => {
+    expect(soquelFileSource('/tmp/x.json')).toEqual({ kind: 'soquel-file', path: '/tmp/x.json' })
   })
 })

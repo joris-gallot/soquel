@@ -30,6 +30,14 @@ No server/backend package: this is a desktop app. Data-layer conventions from th
 
 Secrets are keyed by `SecretKey::{Connection,Tunnel,McpToken}` (`secrets.rs`), not by a raw string: `storage_id()` produces the strings already on disk, so the keychain entries stay as they are.
 
+### Importing
+
+`transfer/mod.rs` is the engine (validation, id remapping, dedupe, forced `agentAccess: none`, atomic refusal); a source only produces an `ImportBundle`. Sources live in `transfer/sources/` behind the `ImportSource` enum, and `scan_import_sources` reports what the machine holds. A source that knows why one of its entries is unusable sets `IncomingConnection.problem` itself, which wins over the engine's generic validation.
+
+Two rules hold for every source: a password crosses over only when `run_import` is called with `with_secrets`, and a credential command arriving from a source stays inert until approved.
+
+Import sources are read from the real home, except when `SOQUEL_IMPORT_HOME` points elsewhere (e2e). libpq's own `PGPASSFILE` / `PGSERVICEFILE` still win over both.
+
 ## Commands
 
 Run from the repo root.
@@ -46,6 +54,7 @@ pnpm lint          # eslint . (lint:fix to autofix)
 pnpm test          # vitest across the workspace
 pnpm test:e2e      # wdio drives the built debug binary via tauri-driver (Linux/Windows only)
                    # isolated app data (SOQUEL_DATA_DIR) + in-memory secrets (SOQUEL_EPHEMERAL_SECRETS)
+                   # + a fake home for external import sources (SOQUEL_IMPORT_HOME)
                    # screenshots land in packages/app/e2e/screenshots/ (gitignored)
 
 cargo check --manifest-path src-tauri/Cargo.toml   # fast Rust validation

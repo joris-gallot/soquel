@@ -73,4 +73,22 @@ describe('import from what the machine already has', () => {
     // No password imported, so postgres refuses and the error says why.
     await waitForToast('password')
   })
+
+  it('brings the password over when asked, and then it connects', async () => {
+    await $('[data-testid="row-menu"]').click()
+    await $('[data-testid="row-delete"]').click()
+    await $('[data-testid="empty-state"]').waitForExist()
+
+    await $('[data-testid="connections-menu"]').click()
+    await $('[data-testid="open-import"]').click()
+    await $('[data-testid="import-source-pgpass"]').click()
+    await $('[data-testid="import-with-secrets"]').waitForDisplayed()
+    await $('[data-testid="import-with-secrets"]').click()
+    await $('[data-testid="run-import"]').click()
+    await waitForToast('1 added')
+
+    // The password came from the file: the connection opens without a prompt.
+    await $('[data-testid="toggle-connection"]').click()
+    await waitForText('[data-testid="workspace-name"]', `${PG.user}@${PG.host}`)
+  })
 })

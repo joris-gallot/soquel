@@ -170,6 +170,23 @@ mod tests {
   }
 
   #[test]
+  fn libpq_own_overrides_win_over_the_home() {
+    let elsewhere = tempfile::tempdir().unwrap();
+    let pgpass = elsewhere.path().join("elsewhere.pgpass");
+    std::fs::write(&pgpass, "db.prod:5432:shop:app:s3cret\n").unwrap();
+
+    // The home holds nothing: only PGPASSFILE says where to look.
+    let summaries = with_home(&[], || {
+      std::env::set_var("PGPASSFILE", &pgpass);
+      let summaries = scan();
+      std::env::remove_var("PGPASSFILE");
+      summaries
+    });
+    assert_eq!(summaries[0].path, pgpass.to_string_lossy());
+    assert_eq!(summaries[0].entries, Some(1));
+  }
+
+  #[test]
   fn a_missing_file_is_reported_not_an_error() {
     let summaries = with_home(&[], scan);
     assert!(summaries.iter().all(|summary| summary.entries.is_none()));

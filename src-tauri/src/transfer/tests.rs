@@ -457,6 +457,38 @@ fn the_preview_flags_the_entries_that_carry_a_command() {
 }
 
 #[test]
+fn a_source_that_knows_why_its_entry_is_bad_says_it_better_than_validation() {
+  let bundle = ImportBundle {
+    connections: vec![IncomingConnection {
+      name: "wildcard".to_string(),
+      env: Env::Dev,
+      group: None,
+      credential: Default::default(),
+      // Empty host: generic validation would call it "the host is empty".
+      params: ConnectorParams::Postgres(SqlServerParams {
+        host: String::new(),
+        port: 0,
+        database: "shop".to_string(),
+        user: "app".to_string(),
+        ssl_mode: SslMode::Prefer,
+        ssl_root_cert: None,
+        tunnel_id: None,
+      }),
+      tunnel_ref: None,
+      secret: None,
+      problem: Some("the host is a wildcard".to_string()),
+    }],
+    tunnels: Vec::new(),
+  };
+
+  let plan = preview(&bundle, &[], &[]);
+  assert_eq!(
+    plan.connections[0].problem.as_deref(),
+    Some("the host is a wildcard")
+  );
+}
+
+#[test]
 fn a_password_only_crosses_over_when_it_was_asked_for() {
   let source_dir = tempfile::tempdir().unwrap();
   let (source, _) = seeded(&source_dir);

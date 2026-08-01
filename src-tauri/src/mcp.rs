@@ -111,7 +111,10 @@ pub struct McpApprovalRequest {
   pub id: String,
   pub connection_id: String,
   pub connection_name: String,
-  pub sql: String,
+  /// What runs, read as one line: the SQL, or "DEL session:42".
+  pub operation: String,
+  /// The body worth reading before allowing: the new value, the document.
+  pub payload: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -318,6 +321,25 @@ struct KeyArgs {
 
 #[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+struct KeySetArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  key: String,
+  value: String,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct KeyTtlArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  key: String,
+  /// Milliseconds until expiry; omit to clear the expiry and keep the key.
+  ttl_ms: Option<f64>,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 struct DatabaseArgs {
   /// Connection id from list_connections.
   connection_id: String,
@@ -359,6 +381,30 @@ struct DocCountArgs {
   collection: String,
   /// Extended JSON filter; omit for the fast collection estimate.
   filter: Option<String>,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct DocIdArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  database: String,
+  collection: String,
+  /// The document's `id` exactly as find_documents returned it (extended JSON).
+  id: String,
+}
+
+#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct DocReplaceArgs {
+  /// Connection id from list_connections.
+  connection_id: String,
+  database: String,
+  collection: String,
+  /// The document's `id` exactly as find_documents returned it (extended JSON).
+  id: String,
+  /// The whole replacement document as extended JSON; it must keep the same _id.
+  document: String,
 }
 
 #[derive(Serialize)]
@@ -604,6 +650,18 @@ async fn run_query_impl(
   if crate::connectors::is_read_statement(&args.sql) {
     return Ok(capped(sql.run_read_only_query(&args.sql).await?));
   }
+  approve_write(state, approver, &profile, args.sql.clone(), None).await?;
+  Ok(capped(sql.run_query(&args.sql).await?))
+}
+
+/// The only door to a write: opted in to writes, then approved by the user.
+async fn approve_write(
+  state: &AppState,
+  approver: &dyn Approver,
+  profile: &ConnectionProfile,
+  operation: String,
+  payload: Option<String>,
+) -> Result<(), Error> {
   if profile.agent_access != AgentAccess::WriteWithApproval {
     return Err(Error::Unsupported {
       message: "this connection is read-only for agents".to_string(),
@@ -613,14 +671,15 @@ async fn run_query_impl(
     id: uuid::Uuid::new_v4().to_string(),
     connection_id: profile.id.clone(),
     connection_name: profile.name.clone(),
-    sql: args.sql.clone(),
+    operation,
+    payload,
   };
   if !approver.request(state, request).await {
     return Err(Error::Unsupported {
       message: "the write was not approved".to_string(),
     });
   }
-  Ok(capped(sql.run_query(&args.sql).await?))
+  Ok(())
 }
 
 async fn sample_rows_impl(state: &AppState, args: &SampleArgs) -> Result<serde_json::Value, Error> {
@@ -652,10 +711,7 @@ async fn agent_connection(
 
 async fn list_keys_impl(state: &AppState, args: &KeyScanArgs) -> Result<serde_json::Value, Error> {
   let connection = agent_connection(state, &args.connection_id).await?;
-  let kv = connection.kv().ok_or_else(|| Error::Unsupported {
-    message: "this connection is not a key-value store".to_string(),
-  })?;
-  let page = kv
+  let page = kv_surface(&connection)?
     .scan_keys(
       args.pattern.as_deref().unwrap_or("*"),
       args.cursor.as_deref(),
@@ -667,10 +723,67 @@ async fn list_keys_impl(state: &AppState, args: &KeyScanArgs) -> Result<serde_js
 
 async fn get_key_impl(state: &AppState, args: &KeyArgs) -> Result<serde_json::Value, Error> {
   let connection = agent_connection(state, &args.connection_id).await?;
-  let kv = connection.kv().ok_or_else(|| Error::Unsupported {
-    message: "this connection is not a key-value store".to_string(),
-  })?;
+  let kv = kv_surface(&connection)?;
   Ok(serde_json::to_value(kv.key_detail(&args.key).await?)?)
+}
+
+async fn set_key_impl(
+  state: &AppState,
+  approver: &dyn Approver,
+  args: &KeySetArgs,
+) -> Result<serde_json::Value, Error> {
+  let profile = opted_in(state, &args.connection_id)?;
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let kv = kv_surface(&connection)?;
+  let operation = format!("SET {}", args.key);
+  approve_write(
+    state,
+    approver,
+    &profile,
+    operation,
+    Some(args.value.clone()),
+  )
+  .await?;
+  kv.set_string(&args.key, &args.value).await?;
+  Ok(serde_json::Value::Null)
+}
+
+async fn delete_key_impl(
+  state: &AppState,
+  approver: &dyn Approver,
+  args: &KeyArgs,
+) -> Result<serde_json::Value, Error> {
+  let profile = opted_in(state, &args.connection_id)?;
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let kv = kv_surface(&connection)?;
+  approve_write(state, approver, &profile, format!("DEL {}", args.key), None).await?;
+  kv.delete_key(&args.key).await?;
+  Ok(serde_json::Value::Null)
+}
+
+async fn set_ttl_impl(
+  state: &AppState,
+  approver: &dyn Approver,
+  args: &KeyTtlArgs,
+) -> Result<serde_json::Value, Error> {
+  let profile = opted_in(state, &args.connection_id)?;
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let kv = kv_surface(&connection)?;
+  let operation = match args.ttl_ms {
+    Some(ttl) => format!("PEXPIRE {} {ttl}", args.key),
+    None => format!("PERSIST {}", args.key),
+  };
+  approve_write(state, approver, &profile, operation, None).await?;
+  kv.set_ttl(&args.key, args.ttl_ms).await?;
+  Ok(serde_json::Value::Null)
+}
+
+fn kv_surface(
+  connection: &Arc<dyn crate::connectors::Connection>,
+) -> Result<&dyn crate::connectors::KvBrowse, Error> {
+  connection.kv().ok_or_else(|| Error::Unsupported {
+    message: "this connection is not a key-value store".to_string(),
+  })
 }
 
 /// Redis reports a count, mongo a named list: one tool for either engine.
@@ -739,6 +852,45 @@ async fn list_indexes_impl(
   Ok(serde_json::to_value(
     doc.indexes(&args.database, &args.collection).await?,
   )?)
+}
+
+async fn replace_document_impl(
+  state: &AppState,
+  approver: &dyn Approver,
+  args: &DocReplaceArgs,
+) -> Result<serde_json::Value, Error> {
+  let profile = opted_in(state, &args.connection_id)?;
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let doc = doc_surface(&connection)?;
+  let operation = format!("replace {}.{} {}", args.database, args.collection, args.id);
+  approve_write(
+    state,
+    approver,
+    &profile,
+    operation,
+    Some(args.document.clone()),
+  )
+  .await?;
+  doc
+    .replace_doc(&args.database, &args.collection, &args.id, &args.document)
+    .await?;
+  Ok(serde_json::Value::Null)
+}
+
+async fn delete_document_impl(
+  state: &AppState,
+  approver: &dyn Approver,
+  args: &DocIdArgs,
+) -> Result<serde_json::Value, Error> {
+  let profile = opted_in(state, &args.connection_id)?;
+  let connection = agent_connection(state, &args.connection_id).await?;
+  let doc = doc_surface(&connection)?;
+  let operation = format!("delete {}.{} {}", args.database, args.collection, args.id);
+  approve_write(state, approver, &profile, operation, None).await?;
+  doc
+    .delete_doc(&args.database, &args.collection, &args.id)
+    .await?;
+  Ok(serde_json::Value::Null)
 }
 
 fn doc_surface(
@@ -913,6 +1065,78 @@ impl SoquelMcp {
     respond(outcome)
   }
 
+  #[tool(
+    description = "Write a string into a Redis key, waiting for the user to approve it. Redis SET semantics: the key is replaced whatever type it held. Requires the connection to allow writes."
+  )]
+  async fn set_key(
+    &self,
+    Parameters(args): Parameters<KeySetArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let approver = DialogApprover {
+      app: self.app.clone(),
+    };
+    let outcome = set_key_impl(&state, &approver, &args).await;
+    audit(
+      &state,
+      "set_key",
+      Some(&args.connection_id),
+      Some(&args.key),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(
+    description = "Delete one Redis key, waiting for the user to approve it. Requires the connection to allow writes."
+  )]
+  async fn delete_key(
+    &self,
+    Parameters(args): Parameters<KeyArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let approver = DialogApprover {
+      app: self.app.clone(),
+    };
+    let outcome = delete_key_impl(&state, &approver, &args).await;
+    audit(
+      &state,
+      "delete_key",
+      Some(&args.connection_id),
+      Some(&args.key),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(
+    description = "Set or clear the expiry of a Redis key, waiting for the user to approve it. Omitting ttlMs clears it (PERSIST). Requires the connection to allow writes."
+  )]
+  async fn set_ttl(
+    &self,
+    Parameters(args): Parameters<KeyTtlArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let approver = DialogApprover {
+      app: self.app.clone(),
+    };
+    let outcome = set_ttl_impl(&state, &approver, &args).await;
+    audit(
+      &state,
+      "set_ttl",
+      Some(&args.connection_id),
+      Some(&args.key),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
   #[tool(description = "List the collections of a MongoDB database.")]
   async fn list_collections(
     &self,
@@ -995,6 +1219,54 @@ impl SoquelMcp {
     );
     respond(outcome)
   }
+
+  #[tool(
+    description = "Replace one MongoDB document with a new one, waiting for the user to approve it. Full replacement, not a patch; the document must keep the same _id. Requires the connection to allow writes."
+  )]
+  async fn replace_document(
+    &self,
+    Parameters(args): Parameters<DocReplaceArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let approver = DialogApprover {
+      app: self.app.clone(),
+    };
+    let outcome = replace_document_impl(&state, &approver, &args).await;
+    audit(
+      &state,
+      "replace_document",
+      Some(&args.connection_id),
+      Some(&format!("{}.{}", args.database, args.collection)),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
+
+  #[tool(
+    description = "Delete one MongoDB document, waiting for the user to approve it. Requires the connection to allow writes."
+  )]
+  async fn delete_document(
+    &self,
+    Parameters(args): Parameters<DocIdArgs>,
+  ) -> Result<CallToolResult, McpError> {
+    let started = Instant::now();
+    let state = self.state();
+    let approver = DialogApprover {
+      app: self.app.clone(),
+    };
+    let outcome = delete_document_impl(&state, &approver, &args).await;
+    audit(
+      &state,
+      "delete_document",
+      Some(&args.connection_id),
+      Some(&format!("{}.{}", args.database, args.collection)),
+      &outcome,
+      started,
+    );
+    respond(outcome)
+  }
 }
 
 #[tool_handler]
@@ -1003,8 +1275,9 @@ impl ServerHandler for SoquelMcp {
     let mut info = ServerInfo::default();
     info.instructions = Some(
       "Soquel exposes the user's database connections to agents. Connections are opted in \
-       per profile from the app UI and queries run read-only with engine-level enforcement. \
-       Start with list_connections."
+       per profile from the app UI and reads run read-only with engine-level enforcement. \
+       Writes are refused unless the profile allows them, and every allowed one waits for \
+       the user to approve it in the app. Start with list_connections."
         .to_string(),
     );
     info.capabilities = ServerCapabilities::builder().enable_tools().build();
@@ -1196,6 +1469,8 @@ mod tests {
       names,
       [
         "count_documents",
+        "delete_document",
+        "delete_key",
         "find_documents",
         "get_key",
         "get_schema",
@@ -1205,8 +1480,11 @@ mod tests {
         "list_databases",
         "list_indexes",
         "list_keys",
+        "replace_document",
         "run_query",
         "sample_rows",
+        "set_key",
+        "set_ttl",
       ]
     );
   }
@@ -1370,6 +1648,75 @@ mod tests {
       )
       .await,
       "list_indexes",
+    );
+    // A write tool must be as blind as a read one: opt-in is checked before the
+    // approver, so a hidden profile never even raises a dialog.
+    assert_hidden(
+      set_key_impl(
+        &state,
+        &FixedApprover(true),
+        &KeySetArgs {
+          connection_id: hidden.clone(),
+          key: "any".to_string(),
+          value: "v".to_string(),
+        },
+      )
+      .await,
+      "set_key",
+    );
+    assert_hidden(
+      delete_key_impl(
+        &state,
+        &FixedApprover(true),
+        &KeyArgs {
+          connection_id: hidden.clone(),
+          key: "any".to_string(),
+        },
+      )
+      .await,
+      "delete_key",
+    );
+    assert_hidden(
+      set_ttl_impl(
+        &state,
+        &FixedApprover(true),
+        &KeyTtlArgs {
+          connection_id: hidden.clone(),
+          key: "any".to_string(),
+          ttl_ms: Some(1000.0),
+        },
+      )
+      .await,
+      "set_ttl",
+    );
+    assert_hidden(
+      replace_document_impl(
+        &state,
+        &FixedApprover(true),
+        &DocReplaceArgs {
+          connection_id: hidden.clone(),
+          database: "app".to_string(),
+          collection: "customers".to_string(),
+          id: "1".to_string(),
+          document: "{}".to_string(),
+        },
+      )
+      .await,
+      "replace_document",
+    );
+    assert_hidden(
+      delete_document_impl(
+        &state,
+        &FixedApprover(true),
+        &DocIdArgs {
+          connection_id: hidden.clone(),
+          database: "app".to_string(),
+          collection: "customers".to_string(),
+          id: "1".to_string(),
+        },
+      )
+      .await,
+      "delete_document",
     );
     // Gating happens before any connection attempt.
     assert!(state.connections.lock().await.is_empty());
@@ -1872,14 +2219,18 @@ mod tests {
   }
 
   /// One opted-in profile against a non-SQL engine, keyed by its params.
-  async fn kind_state(dir: &tempfile::TempDir, params: ConnectorParams) -> (AppState, String) {
+  async fn kind_state(
+    dir: &tempfile::TempDir,
+    params: ConnectorParams,
+    access: AgentAccess,
+  ) -> (AppState, String) {
     let mut profiles = ProfileStore::load(dir.path().join("connections.json")).unwrap();
     let profile = profiles
       .create(&ConnectionInput {
         name: "agent target".to_string(),
         env: Env::Dev,
         group: None,
-        agent_access: AgentAccess::ReadOnly,
+        agent_access: access,
         credential: Default::default(),
         params,
         password: None,
@@ -1912,6 +2263,22 @@ mod tests {
     (state, profile.id)
   }
 
+  /// Upgrade a live profile in place, the way the form does.
+  fn allow_writes(state: &AppState, id: &str) {
+    let mut profiles = state.profiles.lock().unwrap();
+    let profile = profiles.get(id).unwrap();
+    let input = ConnectionInput {
+      name: profile.name.clone(),
+      env: profile.env,
+      group: profile.group.clone(),
+      agent_access: AgentAccess::WriteWithApproval,
+      credential: profile.credential.clone(),
+      params: profile.params.clone(),
+      password: None,
+    };
+    profiles.update(id, &input).unwrap();
+  }
+
   #[tokio::test]
   async fn integration_mcp_kv_tools_read_redis() {
     let Ok(addr) = std::env::var("SOQUEL_TEST_REDIS") else {
@@ -1929,6 +2296,7 @@ mod tests {
         tls: false,
         tunnel_id: None,
       }),
+      AgentAccess::ReadOnly,
     )
     .await;
 
@@ -2003,6 +2371,124 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn integration_mcp_kv_writes_need_approval() {
+    let Ok(addr) = std::env::var("SOQUEL_TEST_REDIS") else {
+      return;
+    };
+    let (host, port) = addr.split_once(':').expect("host:port");
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = kind_state(
+      &dir,
+      ConnectorParams::Redis(crate::profiles::RedisParams {
+        host: host.to_string(),
+        port: port.parse().unwrap(),
+        db: 0,
+        username: None,
+        tls: false,
+        tunnel_id: None,
+      }),
+      AgentAccess::ReadOnly,
+    )
+    .await;
+    let key = "soquel_test:mcp:write";
+    let set = |value: &str| KeySetArgs {
+      connection_id: id.clone(),
+      key: key.to_string(),
+      value: value.to_string(),
+    };
+    // None = the key is absent; a missing key is a NotFound, not an empty read.
+    let read_back = || async {
+      match get_key_impl(
+        &state,
+        &KeyArgs {
+          connection_id: id.clone(),
+          key: key.to_string(),
+        },
+      )
+      .await
+      {
+        Ok(detail) => Some(detail["value"]["value"].as_str().unwrap().to_string()),
+        Err(Error::NotFound { .. }) => None,
+        Err(err) => panic!("unexpected read failure: {err:?}"),
+      }
+    };
+
+    // read-only never reaches the approver, whatever it would answer.
+    let err = set_key_impl(&state, &FixedApprover(true), &set("leak"))
+      .await
+      .unwrap_err();
+    let Error::Unsupported { message } = err else {
+      panic!("expected unsupported: {err:?}");
+    };
+    assert!(message.contains("read-only for agents"), "{message}");
+
+    allow_writes(&state, &id);
+
+    let denied = set_key_impl(&state, &DenyingApprover, &set("denied"))
+      .await
+      .unwrap_err();
+    let Error::Unsupported { message } = denied else {
+      panic!("expected unsupported: {denied:?}");
+    };
+    assert!(message.contains("not approved"), "{message}");
+    // Denial means nothing ran: the key was never created.
+    assert_eq!(read_back().await, None);
+
+    set_key_impl(&state, &FixedApprover(true), &set("approved"))
+      .await
+      .unwrap();
+    assert_eq!(read_back().await.as_deref(), Some("approved"));
+
+    // A TTL is a write of its own, and it is approved on its own.
+    set_ttl_impl(
+      &state,
+      &FixedApprover(true),
+      &KeyTtlArgs {
+        connection_id: id.clone(),
+        key: key.to_string(),
+        ttl_ms: Some(60_000.0),
+      },
+    )
+    .await
+    .unwrap();
+    let detail = get_key_impl(
+      &state,
+      &KeyArgs {
+        connection_id: id.clone(),
+        key: key.to_string(),
+      },
+    )
+    .await
+    .unwrap();
+    assert!(detail["ttlMs"].as_f64().unwrap() > 0.0, "{detail}");
+
+    let refused = delete_key_impl(
+      &state,
+      &DenyingApprover,
+      &KeyArgs {
+        connection_id: id.clone(),
+        key: key.to_string(),
+      },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(refused, Error::Unsupported { .. }), "{refused:?}");
+    assert_eq!(read_back().await.as_deref(), Some("approved"));
+
+    delete_key_impl(
+      &state,
+      &FixedApprover(true),
+      &KeyArgs {
+        connection_id: id.clone(),
+        key: key.to_string(),
+      },
+    )
+    .await
+    .unwrap();
+    assert_eq!(read_back().await, None);
+  }
+
+  #[tokio::test]
   async fn integration_mcp_doc_tools_read_mongo() {
     let Ok(addr) = std::env::var("SOQUEL_TEST_MONGO") else {
       return;
@@ -2020,6 +2506,7 @@ mod tests {
         tls: false,
         tunnel_id: None,
       }),
+      AgentAccess::ReadOnly,
     )
     .await;
 
@@ -2094,6 +2581,134 @@ mod tests {
     .await
     .unwrap();
     assert!(!indexes.as_array().unwrap().is_empty(), "{indexes}");
+  }
+
+  #[tokio::test]
+  async fn integration_mcp_doc_writes_need_approval() {
+    let Ok(addr) = std::env::var("SOQUEL_TEST_MONGO") else {
+      return;
+    };
+    let (host, port) = addr.split_once(':').expect("host:port");
+    // Its own database: soquel_e2e belongs to the e2e spec and must stay untouched.
+    let db_name = "soquel_test_mcp_writes";
+    let uri = format!("mongodb://soquel:soquel@{host}:{port}/?directConnection=true");
+    let client = mongodb::Client::with_uri_str(&uri).await.unwrap();
+    let raw = client.database(db_name);
+    raw.drop().await.unwrap();
+    raw
+      .collection::<mongodb::bson::Document>("docs")
+      .insert_one(mongodb::bson::doc! { "_id": "probe", "state": "before" })
+      .await
+      .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = kind_state(
+      &dir,
+      ConnectorParams::Mongo(crate::profiles::MongoParams {
+        host: host.to_string(),
+        port: port.parse().unwrap(),
+        database: None,
+        username: Some("soquel".to_string()),
+        auth_source: None,
+        tls: false,
+        tunnel_id: None,
+      }),
+      AgentAccess::ReadOnly,
+    )
+    .await;
+
+    let find = || async {
+      find_documents_impl(
+        &state,
+        &DocFindArgs {
+          connection_id: id.clone(),
+          database: db_name.to_string(),
+          collection: "docs".to_string(),
+          filter: None,
+          sort: None,
+          limit: None,
+          cursor: None,
+        },
+      )
+      .await
+      .unwrap()
+    };
+
+    // The agent addresses a document by the id find_documents handed it.
+    let page = find().await;
+    let doc_id = page["docs"][0]["id"].as_str().unwrap().to_string();
+    let replace = |body: &str| DocReplaceArgs {
+      connection_id: id.clone(),
+      database: db_name.to_string(),
+      collection: "docs".to_string(),
+      id: doc_id.clone(),
+      document: body.to_string(),
+    };
+
+    // read-only never reaches the approver, whatever it would answer.
+    let err = replace_document_impl(
+      &state,
+      &FixedApprover(true),
+      &replace(r#"{"_id":"probe","state":"leak"}"#),
+    )
+    .await
+    .unwrap_err();
+    let Error::Unsupported { message } = err else {
+      panic!("expected unsupported: {err:?}");
+    };
+    assert!(message.contains("read-only for agents"), "{message}");
+
+    allow_writes(&state, &id);
+
+    let denied = replace_document_impl(
+      &state,
+      &DenyingApprover,
+      &replace(r#"{"_id":"probe","state":"denied"}"#),
+    )
+    .await
+    .unwrap_err();
+    let Error::Unsupported { message } = denied else {
+      panic!("expected unsupported: {denied:?}");
+    };
+    assert!(message.contains("not approved"), "{message}");
+    assert!(
+      find().await["docs"][0]["doc"]
+        .as_str()
+        .unwrap()
+        .contains("before"),
+      "a denied replace must leave the document alone"
+    );
+
+    replace_document_impl(
+      &state,
+      &FixedApprover(true),
+      &replace(r#"{"_id":"probe","state":"after"}"#),
+    )
+    .await
+    .unwrap();
+    assert!(find().await["docs"][0]["doc"]
+      .as_str()
+      .unwrap()
+      .contains("after"));
+
+    let delete = DocIdArgs {
+      connection_id: id.clone(),
+      database: db_name.to_string(),
+      collection: "docs".to_string(),
+      id: doc_id.clone(),
+    };
+    let refused = delete_document_impl(&state, &DenyingApprover, &delete)
+      .await
+      .unwrap_err();
+    assert!(matches!(refused, Error::Unsupported { .. }), "{refused:?}");
+    assert_eq!(find().await["docs"].as_array().unwrap().len(), 1);
+
+    delete_document_impl(&state, &FixedApprover(true), &delete)
+      .await
+      .unwrap();
+    assert!(find().await["docs"].as_array().unwrap().is_empty());
+
+    raw.drop().await.unwrap();
   }
 
   #[tokio::test]

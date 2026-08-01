@@ -2,7 +2,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { $, $$, browser, expect } from '@wdio/globals'
-import { createSqliteConnection, deleteFirstConnection } from './helpers'
+import { TEST_REDIS } from './fixtures'
+import { createSqliteConnection, deleteConnectionNamed, deleteFirstConnection } from './helpers'
 
 // The e2e binary is a debug build: dev port, isolated from an installed app.
 const ENDPOINT = 'http://127.0.0.1:52701/mcp'
@@ -113,11 +114,13 @@ describe('mcp server', () => {
     expect(names).toContain('get_schema')
     expect(names).toContain('list_keys')
     expect(names).toContain('find_documents')
-    // run_query is the only way in for a write, so it is the only path that can
-    // ask for approval. Nothing else may mutate.
-    const mutating = names.filter(name => /^(?:set|delete|replace|drop|insert|update)_/.test(name))
-    expect(mutating).toEqual([])
+    // Every mutating tool goes through the approval dialog: this list is the whole
+    // set, and it stays closed. The consoles are excluded on purpose, an arbitrary
+    // command would write without being classified as a write.
+    const mutating = names.filter(name => /^(?:set|delete|replace|drop|insert|update)_/.test(name)).sort()
+    expect(mutating).toEqual(['delete_document', 'delete_key', 'replace_document', 'set_key', 'set_ttl'])
     expect(names).not.toContain('run_command')
+    expect(names).not.toContain('doc_run_query')
 
     const call = await mcpRequest({
       jsonrpc: '2.0',
@@ -177,7 +180,7 @@ describe('mcp server', () => {
     // Allowed: the same statement lands.
     const allowed = write(12, 'CREATE TABLE allowed_probe (id integer)')
     await $('[data-testid="approval-dialog"]').waitForExist()
-    await expect($('[data-testid="approval-sql"]')).toHaveText('CREATE TABLE allowed_probe (id integer)')
+    await expect($('[data-testid="approval-operation"]')).toHaveText('CREATE TABLE allowed_probe (id integer)')
     await $('[data-testid="approval-allow"]').click()
     expect((await allowed).json.result).toBeDefined()
 
@@ -186,6 +189,70 @@ describe('mcp server', () => {
     const names = tables.result.statements[0].rows.flat()
     expect(names).toContain('allowed_probe')
     expect(names).not.toContain('denied_probe')
+  })
+
+  it('asks before a redis write, showing the value it would store', async () => {
+    const token = await $('[data-testid="mcp-details"]').getAttribute('data-token')
+
+    await $('[data-testid="new-connection"]').click()
+    await $('[data-testid="field-name"]').setValue('agent redis')
+    await $('[data-testid="field-kind"]').click()
+    await $('[role="option"]*=Redis').click()
+    await $('[data-testid="field-host"]').setValue(TEST_REDIS.host)
+    await $('[data-testid="field-port"]').setValue(TEST_REDIS.port)
+    await $('[data-testid="field-password"]').setValue(TEST_REDIS.password)
+    await $('[data-testid="field-agent-access"]').click()
+    await $('[data-testid="agent-access-write-with-approval"]').click()
+    await $('[data-testid="save-connection"]').click()
+    await $('[data-testid="field-name"]').waitForExist({ reverse: true })
+
+    const session = await handshake(token!)
+    const listed = JSON.parse((await mcpRequest({
+      jsonrpc: '2.0',
+      id: 20,
+      method: 'tools/call',
+      params: { name: 'list_connections', arguments: {} },
+    }, token!, session)).json.result.content[0].text)
+    const redisId = listed.find((c: { name: string }) => c.name === 'agent redis').id
+
+    const call = (id: number, name: string, args: Record<string, unknown>) => mcpRequest({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: { name, arguments: { connection_id: redisId, ...args } },
+    }, token!, session)
+
+    // Denied: the key is never created.
+    const denied = call(21, 'set_key', { key: 'e2e:mcp:probe', value: 'denied value' })
+    await $('[data-testid="approval-dialog"]').waitForExist()
+    await expect($('[data-testid="approval-operation"]')).toHaveText('SET e2e:mcp:probe')
+    // A kv write carries what it would store: approving blind is the failure mode.
+    await expect($('[data-testid="approval-payload"]')).toHaveText('denied value')
+    await $('[data-testid="approval-deny"]').waitForClickable()
+    await browser.saveScreenshot('./e2e/screenshots/mcp-approval-redis.png')
+    await $('[data-testid="approval-deny"]').click()
+    expect((await denied).json.error.message).toContain('not approved')
+    expect((await call(22, 'get_key', { key: 'e2e:mcp:probe' })).json.error.message).toContain('does not exist')
+
+    // Allowed: the write lands and reads back.
+    const allowed = call(23, 'set_key', { key: 'e2e:mcp:probe', value: 'stored value' })
+    await $('[data-testid="approval-dialog"]').waitForExist()
+    await $('[data-testid="approval-allow"]').click()
+    expect((await allowed).json.result).toBeDefined()
+    const detail = JSON.parse((await call(24, 'get_key', { key: 'e2e:mcp:probe' })).json.result.content[0].text)
+    expect(detail.value.value).toBe('stored value')
+
+    // Deleting is its own approval, and it cleans the key up.
+    const removed = call(25, 'delete_key', { key: 'e2e:mcp:probe' })
+    await $('[data-testid="approval-dialog"]').waitForExist()
+    await expect($('[data-testid="approval-operation"]')).toHaveText('DEL e2e:mcp:probe')
+    // Nothing to read before allowing: a deletion has no payload block.
+    expect(await $('[data-testid="approval-payload"]').isExisting()).toBe(false)
+    await $('[data-testid="approval-allow"]').click()
+    expect((await removed).json.result).toBeDefined()
+    expect((await call(26, 'get_key', { key: 'e2e:mcp:probe' })).json.error.message).toContain('does not exist')
+
+    await deleteConnectionNamed('agent redis')
   })
 
   it('lists agent activity in the audit log', async () => {

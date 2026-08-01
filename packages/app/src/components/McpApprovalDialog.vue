@@ -33,15 +33,25 @@ const open = computed({
           An agent wants to write
         </DialogTitle>
         <DialogDescription>
-          This statement changes data on
+          This changes data on
           <span class="font-medium text-foreground">{{ pending?.connectionName }}</span>. It runs only if you allow it.
         </DialogDescription>
       </DialogHeader>
 
       <pre
         class="max-h-60 overflow-auto rounded bg-muted px-3 py-2 font-mono text-xs whitespace-pre-wrap"
-        data-testid="approval-sql"
-      >{{ pending?.sql }}</pre>
+        data-testid="approval-operation"
+      >{{ pending?.operation }}</pre>
+
+      <div v-if="pending?.payload" class="space-y-1.5">
+        <p class="text-xs text-muted-foreground">
+          What it writes
+        </p>
+        <pre
+          class="max-h-60 overflow-auto rounded bg-muted px-3 py-2 font-mono text-xs whitespace-pre-wrap"
+          data-testid="approval-payload"
+        >{{ pending.payload }}</pre>
+      </div>
 
       <p v-if="queue.length > 1" class="font-mono text-xs text-muted-foreground">
         {{ queue.length - 1 }} more waiting

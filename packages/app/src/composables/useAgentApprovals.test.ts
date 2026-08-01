@@ -13,8 +13,8 @@ vi.mock('@/lib/bindings', () => ({
 const toastError = vi.fn()
 vi.mock('vue-sonner', () => ({ toast: { error: (message: string) => toastError(message) } }))
 
-function request(id: string, sql: string) {
-  return { id, connectionId: 'c1', connectionName: 'agent sqlite', sql }
+function request(id: string, operation: string) {
+  return { id, connectionId: 'c1', connectionName: 'agent sqlite', operation, payload: null }
 }
 
 describe('useAgentApprovals', () => {

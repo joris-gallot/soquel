@@ -388,7 +388,10 @@ export type McpApprovalRequest = {
 	id: string,
 	connectionId: string,
 	connectionName: string,
-	sql: string,
+	/**  What runs, read as one line: the SQL, or "DEL session:42". */
+	operation: string,
+	/**  The body worth reading before allowing: the new value, the document. */
+	payload: string | null,
 };
 
 export type McpStatus = {

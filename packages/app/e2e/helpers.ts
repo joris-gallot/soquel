@@ -83,6 +83,20 @@ export async function deleteFirstConnection() {
   await $('[data-testid="empty-state"]').waitForExist()
 }
 
+/// By name, for specs holding more than one connection at a time.
+export async function deleteConnectionNamed(name: string) {
+  for (const row of await elements('[data-testid="connection-row"]')) {
+    if (!(await row.$(`[data-testid="open-${name}"]`).isExisting()))
+      continue
+    await row.$('[data-testid="row-menu"]').click()
+    await $('[data-testid="row-delete"]').click()
+    // The row selector still matches its siblings: wait on this name alone.
+    await $(`[data-testid="open-${name}"]`).waitForExist({ reverse: true })
+    return
+  }
+  throw new Error(`no connection row named ${name}`)
+}
+
 /// First displayed match: inactive tabs keep their panels mounted but hidden,
 /// so bare selectors can land on an invisible duplicate. Waits, because a
 /// conditional field is mounted a frame after the click that reveals it.

@@ -4,6 +4,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { useAsyncState } from '@vueuse/core'
 import { TooltipProvider } from 'reka-ui'
 import { ref } from 'vue'
+import CommandApprovalDialog from '@/components/CommandApprovalDialog.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import HostKeyDialog from '@/components/HostKeyDialog.vue'
 import McpApprovalDialog from '@/components/McpApprovalDialog.vue'
@@ -51,6 +52,7 @@ const { state: version } = useAsyncState(getVersion, '')
       <CommandPalette ref="palette" />
       <HostKeyDialog />
       <SecretPromptDialog />
+      <CommandApprovalDialog />
       <McpApprovalDialog />
       <Toaster />
     </div>

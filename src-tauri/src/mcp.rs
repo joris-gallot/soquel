@@ -1160,6 +1160,12 @@ mod tests {
       known_hosts: std::sync::Mutex::new(
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
       ),
+      command_approvals: std::sync::Mutex::new(
+        crate::command_approvals::CommandApprovalsStore::load(
+          dir.path().join("command_approvals.json"),
+        )
+        .unwrap(),
+      ),
       secrets: Box::new(secrets),
       session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
@@ -1503,6 +1509,12 @@ mod tests {
       known_hosts: std::sync::Mutex::new(
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
       ),
+      command_approvals: std::sync::Mutex::new(
+        crate::command_approvals::CommandApprovalsStore::load(
+          dir.path().join("command_approvals.json"),
+        )
+        .unwrap(),
+      ),
       secrets: Box::new(InMemoryStore::default()),
       session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
@@ -1730,6 +1742,12 @@ mod tests {
       known_hosts: std::sync::Mutex::new(
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
       ),
+      command_approvals: std::sync::Mutex::new(
+        crate::command_approvals::CommandApprovalsStore::load(
+          dir.path().join("command_approvals.json"),
+        )
+        .unwrap(),
+      ),
       secrets: Box::new(InMemoryStore::default()),
       session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
@@ -1848,6 +1866,12 @@ mod tests {
       tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
       known_hosts: std::sync::Mutex::new(
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
+      ),
+      command_approvals: std::sync::Mutex::new(
+        crate::command_approvals::CommandApprovalsStore::load(
+          dir.path().join("command_approvals.json"),
+        )
+        .unwrap(),
       ),
       secrets: Box::new(secrets),
       session_secrets: Default::default(),

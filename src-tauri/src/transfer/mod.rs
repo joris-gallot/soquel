@@ -62,6 +62,8 @@ pub struct PreviewEntry {
   pub name: String,
   pub target: String,
   pub has_secret: bool,
+  /// Carries a credential command: it will not run before the user approves it.
+  pub has_command: bool,
   pub duplicate: bool,
   /// Set when the entry cannot be written; any problem blocks the whole import.
   pub problem: Option<String>,
@@ -200,6 +202,7 @@ pub fn preview(
           name: entry.name.clone(),
           target: target(&entry.params),
           has_secret: entry.secret.is_some(),
+          has_command: is_command(&entry.credential),
           duplicate: existing_connections
             .iter()
             .any(|existing| is_same_connection(existing, entry)),
@@ -215,6 +218,7 @@ pub fn preview(
         name: entry.name.clone(),
         target: incoming_tunnel_target(entry),
         has_secret: entry.secret.is_some(),
+        has_command: is_command(&entry.credential),
         duplicate: existing_tunnels
           .iter()
           .any(|existing| is_same_tunnel(existing, entry)),
@@ -222,6 +226,10 @@ pub fn preview(
       })
       .collect(),
   }
+}
+
+fn is_command(credential: &CredentialSource) -> bool {
+  matches!(credential, CredentialSource::Command { .. })
 }
 
 fn is_same_connection(existing: &ConnectionProfile, incoming: &IncomingConnection) -> bool {

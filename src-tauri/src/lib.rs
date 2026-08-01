@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
+use crate::command_approvals::CommandApprovalsStore;
 use crate::connectors::{Connection, SqlSession};
 use crate::credentials::SessionSecrets;
 use crate::known_hosts::KnownHostsStore;
@@ -11,6 +12,7 @@ use crate::secrets::{FileStore, InMemoryStore, KeyringStore, SecretStore};
 use crate::ssh::SshTunnel;
 use crate::tunnels::TunnelStore;
 
+mod command_approvals;
 mod commands;
 mod connectors;
 mod credentials;
@@ -44,6 +46,7 @@ pub struct AppState {
   pub profiles: Mutex<ProfileStore>,
   pub tunnels: Mutex<TunnelStore>,
   pub known_hosts: Mutex<KnownHostsStore>,
+  pub command_approvals: Mutex<CommandApprovalsStore>,
   pub secrets: Box<dyn SecretStore>,
   pub session_secrets: SessionSecrets,
   pub connections: tokio::sync::Mutex<HashMap<String, ActiveConnection>>,
@@ -63,6 +66,9 @@ impl AppState {
       profiles: Mutex::new(ProfileStore::load(dir.join("connections.json")).unwrap()),
       tunnels: Mutex::new(TunnelStore::load(dir.join("tunnels.json")).unwrap()),
       known_hosts: Mutex::new(KnownHostsStore::load(dir.join("known_hosts.json")).unwrap()),
+      command_approvals: Mutex::new(
+        CommandApprovalsStore::load(dir.join("command_approvals.json")).unwrap(),
+      ),
       secrets,
       session_secrets: SessionSecrets::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
@@ -90,6 +96,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::connect,
       commands::unlock_secret,
       commands::parse_credential_command,
+      commands::approve_credential_command,
+      commands::revoke_credential_command,
       commands::disconnect,
       commands::active_connections,
       commands::server_version,
@@ -183,6 +191,7 @@ pub fn run() {
       let store = ProfileStore::load(data_dir.join("connections.json"))?;
       let tunnels = TunnelStore::load(data_dir.join("tunnels.json"))?;
       let known_hosts = KnownHostsStore::load(data_dir.join("known_hosts.json"))?;
+      let command_approvals = CommandApprovalsStore::load(data_dir.join("command_approvals.json"))?;
       // Keychain-less environments: e2e/CI (ephemeral) and WSL dev (plaintext file, opt-in).
       let secrets: Box<dyn SecretStore> = if std::env::var("SOQUEL_EPHEMERAL_SECRETS").is_ok() {
         Box::new(InMemoryStore::default())
@@ -195,6 +204,7 @@ pub fn run() {
         profiles: Mutex::new(store),
         tunnels: Mutex::new(tunnels),
         known_hosts: Mutex::new(known_hosts),
+        command_approvals: Mutex::new(command_approvals),
         secrets,
         session_secrets: SessionSecrets::default(),
         connections: tokio::sync::Mutex::new(HashMap::new()),

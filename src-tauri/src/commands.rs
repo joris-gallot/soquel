@@ -179,6 +179,54 @@ fn key_for(subject: SecretSubject, id: String) -> SecretKey {
   }
 }
 
+/// Agrees to run the credential command a profile carries, as it stands now.
+/// The approval is local and dies with any later edit of the command.
+#[tauri::command]
+#[specta::specta]
+pub fn approve_credential_command(
+  state: State<'_, AppState>,
+  subject: SecretSubject,
+  id: String,
+) -> Result<(), Error> {
+  let key = key_for(subject, id);
+  let command = current_command(state.inner(), &key)?;
+  state
+    .command_approvals
+    .lock()
+    .unwrap()
+    .approve(&key, &command)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn revoke_credential_command(
+  state: State<'_, AppState>,
+  subject: SecretSubject,
+  id: String,
+) -> Result<(), Error> {
+  state
+    .command_approvals
+    .lock()
+    .unwrap()
+    .revoke(&key_for(subject, id))
+}
+
+/// Reads the command off the stored profile: approving what the webview echoes
+/// back would approve whatever it says instead of what will run.
+fn current_command(state: &AppState, key: &SecretKey) -> Result<String, Error> {
+  let credential = match key {
+    SecretKey::Connection(id) => state.profiles.lock().unwrap().get(id)?.credential,
+    SecretKey::Tunnel(id) => state.tunnels.lock().unwrap().get(id)?.credential,
+    SecretKey::McpToken => CredentialSource::Keychain,
+  };
+  match credential {
+    CredentialSource::Command { command, .. } => Ok(command),
+    _ => Err(Error::NotFound {
+      message: "this connection does not get its password from a command".to_string(),
+    }),
+  }
+}
+
 /// Splits a credential command the way the core will run it, so the form can
 /// show the argv instead of guessing at it.
 #[tauri::command]
@@ -770,6 +818,20 @@ pub(crate) fn persist_secret(
   Ok(())
 }
 
+/// A command typed in the form is approved by saving it: the user just read
+/// the argv under the field. Only imports leave one waiting.
+fn approve_own_command(
+  state: &AppState,
+  key: &SecretKey,
+  credential: &CredentialSource,
+) -> Result<(), Error> {
+  let mut approvals = state.command_approvals.lock().unwrap();
+  match credential {
+    CredentialSource::Command { command, .. } => approvals.approve(key, command),
+    _ => approvals.revoke(key),
+  }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn create_connection(
@@ -788,6 +850,7 @@ pub fn create_connection(
     let _ = state.profiles.lock().unwrap().delete(&profile.id);
     return Err(err);
   }
+  approve_own_command(state.inner(), &key, &profile.credential)?;
   Ok(profile)
 }
 
@@ -799,12 +862,14 @@ pub fn update_connection(
   input: ConnectionInput,
 ) -> Result<ConnectionProfile, Error> {
   let profile = state.profiles.lock().unwrap().update(&id, &input)?;
+  let key = SecretKey::Connection(profile.id.clone());
   persist_secret(
     state.inner(),
-    &SecretKey::Connection(profile.id.clone()),
+    &key,
     &profile.credential,
     input.password.as_deref(),
   )?;
+  approve_own_command(state.inner(), &key, &profile.credential)?;
   Ok(profile)
 }
 
@@ -812,7 +877,9 @@ pub fn update_connection(
 #[specta::specta]
 pub fn delete_connection(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   state.profiles.lock().unwrap().delete(&id)?;
-  state.secrets.delete(&SecretKey::Connection(id))
+  let key = SecretKey::Connection(id);
+  state.command_approvals.lock().unwrap().revoke(&key)?;
+  state.secrets.delete(&key)
 }
 
 /// Writes every connection, tunnel and group to a file. Passwords ride along
@@ -884,15 +951,17 @@ pub fn create_tunnel(
 ) -> Result<TunnelProfile, Error> {
   let tunnel = state.tunnels.lock().unwrap().create(&input)?;
   // No orphan tunnel when the keychain is unavailable.
+  let key = SecretKey::Tunnel(tunnel.id.clone());
   if let Err(err) = persist_secret(
     state.inner(),
-    &SecretKey::Tunnel(tunnel.id.clone()),
+    &key,
     &tunnel.credential,
     input.secret.as_deref(),
   ) {
     let _ = state.tunnels.lock().unwrap().delete(&tunnel.id);
     return Err(err);
   }
+  approve_own_command(state.inner(), &key, &tunnel.credential)?;
   Ok(tunnel)
 }
 
@@ -904,12 +973,14 @@ pub fn update_tunnel(
   input: TunnelInput,
 ) -> Result<TunnelProfile, Error> {
   let tunnel = state.tunnels.lock().unwrap().update(&id, &input)?;
+  let key = SecretKey::Tunnel(tunnel.id.clone());
   persist_secret(
     state.inner(),
-    &SecretKey::Tunnel(tunnel.id.clone()),
+    &key,
     &tunnel.credential,
     input.secret.as_deref(),
   )?;
+  approve_own_command(state.inner(), &key, &tunnel.credential)?;
   Ok(tunnel)
 }
 
@@ -931,7 +1002,9 @@ pub fn delete_tunnel(state: State<'_, AppState>, id: String) -> Result<(), Error
     });
   }
   state.tunnels.lock().unwrap().delete(&id)?;
-  state.secrets.delete(&SecretKey::Tunnel(id))
+  let key = SecretKey::Tunnel(id);
+  state.command_approvals.lock().unwrap().revoke(&key)?;
+  state.secrets.delete(&key)
 }
 
 /// Ephemeral tunnel bring-up: validates the host key and the credentials
@@ -1220,6 +1293,80 @@ mod tests {
       state.secrets.get(&key(&tunnel.id)).unwrap(),
       Some("db".to_string())
     );
+  }
+
+  fn command(line: &str) -> CredentialSource {
+    CredentialSource::Command {
+      command: line.to_string(),
+      refresh_after_secs: None,
+    }
+  }
+
+  #[test]
+  fn saving_a_command_approves_it_but_importing_the_same_profile_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = state(&dir);
+    let line = "aws rds generate-db-auth-token --hostname {host}";
+
+    // Typed in the form: the user just read the argv under the field.
+    let saved = source
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&input(command(line), None))
+      .unwrap();
+    approve_own_command(&source, &key(&saved.id), &saved.credential).unwrap();
+    assert!(source
+      .command_approvals
+      .lock()
+      .unwrap()
+      .is_approved(&key(&saved.id), line));
+
+    // The same profile arriving in a file: nothing grants it anything.
+    let target_dir = tempfile::tempdir().unwrap();
+    let target = state(&target_dir);
+    let path = target_dir.path().join("shared.json");
+    transfer::export(&source, &path, false, None).unwrap();
+    transfer::import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap();
+
+    let imported = &target.profiles.lock().unwrap().list()[0];
+    assert_eq!(imported.credential, command(line));
+    assert!(
+      !target
+        .command_approvals
+        .lock()
+        .unwrap()
+        .is_approved(&key(&imported.id), line),
+      "an imported command must wait for a yes"
+    );
+  }
+
+  #[test]
+  fn leaving_the_command_mode_drops_the_approval() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+    let line = "vault read db";
+    let profile = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&input(command(line), None))
+      .unwrap();
+    approve_own_command(&state, &key(&profile.id), &profile.credential).unwrap();
+
+    let switched = state
+      .profiles
+      .lock()
+      .unwrap()
+      .update(&profile.id, &input(CredentialSource::Keychain, Some("pw")))
+      .unwrap();
+    approve_own_command(&state, &key(&profile.id), &switched.credential).unwrap();
+
+    assert!(!state
+      .command_approvals
+      .lock()
+      .unwrap()
+      .is_approved(&key(&profile.id), line));
   }
 
   #[tokio::test]

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DuplicateStrategy, ImportPreview } from '@/lib/bindings'
-import { Cable, Database, KeyRound, Lock, TriangleAlert } from '@lucide/vue'
+import { Cable, Database, KeyRound, Lock, SquareTerminal, TriangleAlert } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { Badge } from '@/components/ui/badge'
@@ -136,6 +136,15 @@ async function run() {
               <KeyRound class="size-2.5" />
               {{ plan.secrets }} passwords
             </Badge>
+            <Badge
+              v-if="plan.commands > 0"
+              variant="outline"
+              data-testid="import-commands"
+              class="gap-1 border-amber-500/30 font-mono text-[10px] text-amber-500"
+            >
+              <SquareTerminal class="size-2.5" />
+              {{ plan.commands }} run a command
+            </Badge>
           </div>
 
           <ul class="max-h-56 divide-y overflow-y-auto rounded-md border">
@@ -161,6 +170,15 @@ async function run() {
                 <TriangleAlert class="size-2.5" />
                 {{ entry.problem }}
               </Badge>
+              <Badge
+                v-else-if="entry.hasCommand"
+                variant="outline"
+                data-testid="import-entry-command"
+                class="gap-1 border-amber-500/30 font-mono text-[10px] text-amber-500"
+              >
+                <SquareTerminal class="size-2.5" />
+                command
+              </Badge>
               <Badge v-else-if="entry.duplicate" variant="outline" class="font-mono text-[10px]" data-testid="import-duplicate">
                 exists
               </Badge>
@@ -185,6 +203,9 @@ async function run() {
           </p>
           <p v-else class="text-xs text-muted-foreground">
             Imported connections stay hidden from agents whatever the file says.
+            <template v-if="plan.commands > 0">
+              A credential command runs nothing until you read it and approve it.
+            </template>
           </p>
         </template>
 

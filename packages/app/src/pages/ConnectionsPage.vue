@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ConnectionProfile, TunnelProfile } from '@/lib/bindings'
+import type { ConnectionProfile, SecretSubject, TunnelProfile } from '@/lib/bindings'
 import { Bot, Cable, ChevronDown, ChevronRight, Download, MoreHorizontal, Plug, Plus, Unplug, Upload } from '@lucide/vue'
 import { useLocalStorage } from '@vueuse/core'
 import { computed, onMounted, ref } from 'vue'
@@ -20,20 +20,23 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { useCommandApproval } from '@/composables/useCommandApproval'
 import { useConnections } from '@/composables/useConnections'
 import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { useTunnels } from '@/composables/useTunnels'
+import { commands } from '@/lib/bindings'
 import { connectionDsn, ENV_BADGE_CLASSES, groupConnections } from '@/lib/connections'
-import { CommandError } from '@/lib/result'
+import { CommandError, unwrap } from '@/lib/result'
 import { pickImportFile } from '@/lib/transfer'
 import { SSH_AUTH_LABELS } from '@/lib/tunnels'
 
-const HANDLED_BY_A_DIALOG = ['host-key-untrusted', 'secret-required']
+const HANDLED_BY_A_DIALOG = ['host-key-untrusted', 'secret-required', 'command-approval-required']
 
 const router = useRouter()
 const { connections, activeIds, refresh, remove, connect, disconnect } = useConnections()
 const { tunnels, refresh: refreshTunnels, remove: removeTunnel } = useTunnels()
 const { intercept: interceptSecret } = useSecretPrompt()
+const { intercept: interceptCommand } = useCommandApproval()
 
 const sections = computed(() => groupConnections(connections.value))
 const collapsed = useLocalStorage<string[]>('soquel:collapsed-groups', [])
@@ -52,6 +55,17 @@ const editingTunnel = ref<TunnelProfile | null>(null)
 const exportOpen = ref(false)
 const importOpen = ref(false)
 const importPath = ref<string | null>(null)
+
+/// Puts the command back in waiting: the next connect asks again.
+async function revokeCommand(subject: SecretSubject, id: string) {
+  try {
+    unwrap(await commands.revokeCredentialCommand(subject, id))
+    toast.success('The command will ask before running again')
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
+}
 
 async function startImport() {
   const path = await pickImportFile()
@@ -95,6 +109,7 @@ async function toggle(profile: ConnectionProfile) {
   catch (error) {
     // Retry the whole gesture, navigation included, once the password lands.
     interceptSecret(error, () => toggle(profile))
+    interceptCommand(error, () => toggle(profile))
     // The trust and password dialogs own these failure modes.
     if (!(error instanceof CommandError && HANDLED_BY_A_DIALOG.includes(error.kind)))
       toast.error(error instanceof Error ? error.message : String(error))
@@ -275,6 +290,13 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
                   <DropdownMenuItem data-testid="row-edit" @click="openEdit(profile)">
                     Edit
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-if="profile.credential?.mode === 'command'"
+                    data-testid="row-revoke-command"
+                    @click="revokeCommand('connection', profile.id)"
+                  >
+                    Revoke the credential command
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem data-testid="row-delete" variant="destructive" @click="removeProfile(profile)">
                     Delete
@@ -330,6 +352,13 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
             <DropdownMenuContent align="end">
               <DropdownMenuItem data-testid="tunnel-edit" @click="openEditTunnel(tunnel)">
                 Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                v-if="tunnel.credential?.mode === 'command'"
+                data-testid="tunnel-revoke-command"
+                @click="revokeCommand('tunnel', tunnel.id)"
+              >
+                Revoke the credential command
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem data-testid="tunnel-delete" variant="destructive" @click="removeTunnelProfile(tunnel)">

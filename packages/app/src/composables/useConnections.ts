@@ -1,5 +1,6 @@
 import type { ConnectionInput, ConnectionProfile } from '@/lib/bindings'
 import { ref } from 'vue'
+import { useCommandApproval } from '@/composables/useCommandApproval'
 import { useHostKeyTrust } from '@/composables/useHostKeyTrust'
 import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { commands } from '@/lib/bindings'
@@ -33,14 +34,15 @@ export function useConnections() {
 
   const { intercept } = useHostKeyTrust()
   const { intercept: interceptSecret } = useSecretPrompt()
+  const { intercept: interceptCommand } = useCommandApproval()
 
   async function connect(id: string) {
     try {
       unwrap(await commands.connect(id))
     }
     catch (error) {
-      if (!intercept(error, () => connect(id)))
-        interceptSecret(error, () => connect(id))
+      if (!intercept(error, () => connect(id)) && !interceptSecret(error, () => connect(id)))
+        interceptCommand(error, () => connect(id))
       throw error
     }
     await refresh()

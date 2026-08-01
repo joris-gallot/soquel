@@ -20,6 +20,12 @@ fn app_state_with(dir: &tempfile::TempDir, secrets: Box<dyn SecretStore>) -> App
     known_hosts: std::sync::Mutex::new(
       KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
     ),
+    command_approvals: std::sync::Mutex::new(
+      crate::command_approvals::CommandApprovalsStore::load(
+        dir.path().join("command_approvals.json"),
+      )
+      .unwrap(),
+    ),
     secrets,
     session_secrets: Default::default(),
     connections: tokio::sync::Mutex::new(HashMap::new()),
@@ -370,6 +376,59 @@ fn the_credential_mode_survives_a_roundtrip_without_the_secret() {
       refresh_after_secs: Some(60),
     }
   );
+}
+
+#[test]
+fn the_preview_flags_the_entries_that_carry_a_command() {
+  let dir = tempfile::tempdir().unwrap();
+  let state = app_state(&dir);
+  let path = out(&dir);
+  state
+    .profiles
+    .lock()
+    .unwrap()
+    .create(&ConnectionInput {
+      name: "iam".to_string(),
+      env: Env::Prod,
+      group: None,
+      agent_access: AgentAccess::None,
+      credential: CredentialSource::Command {
+        command: "aws rds generate-db-auth-token".to_string(),
+        refresh_after_secs: None,
+      },
+      params: pg_params(None),
+      password: None,
+    })
+    .unwrap();
+  state
+    .profiles
+    .lock()
+    .unwrap()
+    .create(&ConnectionInput {
+      name: "plain".to_string(),
+      env: Env::Dev,
+      group: None,
+      agent_access: AgentAccess::None,
+      credential: CredentialSource::Keychain,
+      params: pg_params(None),
+      password: None,
+    })
+    .unwrap();
+
+  export(&state, &path, false, None).unwrap();
+  // The approval is local: an export cannot carry one along.
+  let raw = std::fs::read_to_string(&path).unwrap();
+  assert!(!raw.contains("approv"), "{raw}");
+
+  let target_dir = tempfile::tempdir().unwrap();
+  let preview = preview_file(&app_state(&target_dir), &path, None).unwrap();
+  let flagged: Vec<&str> = preview
+    .connections
+    .iter()
+    .filter(|entry| entry.has_command)
+    .map(|entry| entry.name.as_str())
+    .collect();
+  assert_eq!(flagged, vec!["iam"]);
 }
 
 #[test]

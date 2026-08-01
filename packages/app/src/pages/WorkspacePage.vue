@@ -25,6 +25,7 @@ import { Input } from '@/components/ui/input'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useCommandApproval } from '@/composables/useCommandApproval'
 import { useConnections } from '@/composables/useConnections'
 import { useSchema } from '@/composables/useSchema'
 import { useSecretPrompt } from '@/composables/useSecretPrompt'
@@ -38,6 +39,7 @@ const route = useRoute()
 const router = useRouter()
 const { connections, activeIds, refresh, connect, disconnect } = useConnections()
 const { intercept: interceptSecret } = useSecretPrompt()
+const { intercept: interceptCommand } = useCommandApproval()
 const { snapshots, pending, load, evict } = useSchema()
 const sessions = useSqlSessions()
 
@@ -176,7 +178,7 @@ async function boot() {
   }
   catch (error) {
     // The prompt replays the whole boot, not just the connect.
-    if (interceptSecret(error, boot))
+    if (interceptSecret(error, boot) || interceptCommand(error, boot))
       return
     toast.error(error instanceof Error ? error.message : String(error))
     router.push({ name: 'connections' })

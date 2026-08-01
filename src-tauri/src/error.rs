@@ -52,6 +52,16 @@ pub enum Error {
     program: String,
     stderr: String,
   },
+  /// A credential command nobody agreed to run yet: it arrived with an import.
+  #[error("{message}")]
+  CommandApprovalRequired {
+    message: String,
+    subject: SecretSubject,
+    target_id: String,
+    target_name: String,
+    program: String,
+    args: Vec<String>,
+  },
 }
 
 impl From<tokio_postgres::Error> for Error {

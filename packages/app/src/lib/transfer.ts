@@ -40,6 +40,7 @@ export interface ImportPlan {
   duplicates: number
   problems: PlanEntry[]
   secrets: number
+  commands: number
 }
 
 /// Connections and tunnels read as one list: the counts the dialog announces
@@ -54,6 +55,7 @@ export function importPlan(preview: ImportPreview): ImportPlan {
     duplicates: entries.filter(entry => entry.duplicate).length,
     problems: entries.filter(entry => entry.problem !== null),
     secrets: entries.filter(entry => entry.hasSecret).length,
+    commands: entries.filter(entry => entry.hasCommand).length,
   }
 }
 

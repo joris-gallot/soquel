@@ -7,6 +7,7 @@ function entry(overrides: Partial<PreviewEntry> = {}): PreviewEntry {
     name: 'prod',
     target: 'db.internal:5432/app',
     hasSecret: false,
+    hasCommand: false,
     duplicate: false,
     problem: null,
     ...overrides,
@@ -47,16 +48,19 @@ describe('importPlan', () => {
     expect(plan.entries.map(item => item.kind)).toEqual(['connection', 'connection', 'tunnel'])
   })
 
-  it('counts duplicates, secrets and problems', () => {
+  it('counts duplicates, secrets, commands and problems', () => {
     const plan = importPlan(preview({
       connections: [
         entry({ duplicate: true, hasSecret: true }),
+        entry({ name: 'iam', hasCommand: true }),
         entry({ name: 'broken', problem: 'the host is empty' }),
       ],
-      tunnels: [entry({ name: 'bastion', duplicate: true })],
+      tunnels: [entry({ name: 'bastion', duplicate: true, hasCommand: true })],
     }))
     expect(plan.duplicates).toBe(2)
     expect(plan.secrets).toBe(1)
+    // Connections and tunnels alike: the dialog warns about both.
+    expect(plan.commands).toBe(2)
     expect(plan.problems.map(item => item.name)).toEqual(['broken'])
   })
 })

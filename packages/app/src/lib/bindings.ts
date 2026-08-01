@@ -33,6 +33,12 @@ export const commands = {
 	 *  show the argv instead of guessing at it.
 	 */
 	parseCredentialCommand: (line: string) => typedError<string[], Error>(__TAURI_INVOKE("parse_credential_command", { line })),
+	/**
+	 *  Agrees to run the credential command a profile carries, as it stands now.
+	 *  The approval is local and dies with any later edit of the command.
+	 */
+	approveCredentialCommand: (subject: SecretSubject, id: string) => typedError<null, Error>(__TAURI_INVOKE("approve_credential_command", { subject, id })),
+	revokeCredentialCommand: (subject: SecretSubject, id: string) => typedError<null, Error>(__TAURI_INVOKE("revoke_credential_command", { subject, id })),
 	disconnect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("disconnect", { id })),
 	activeConnections: () => typedError<string[], Error>(__TAURI_INVOKE("active_connections")),
 	serverVersion: (id: string) => typedError<string | null, Error>(__TAURI_INVOKE("server_version", { id })),
@@ -270,7 +276,9 @@ export type Env = "dev" | "staging" | "prod";
 /**  Normalized error shape crossing the IPC boundary. */
 export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean } | 
 /**  The profile asks for its password interactively; the caller must supply one. */
-{ kind: "secret-required"; message: string; subject: SecretSubject; targetId: string; targetName: string } | { kind: "credential-command"; message: string; program: string; stderr: string };
+{ kind: "secret-required"; message: string; subject: SecretSubject; targetId: string; targetName: string } | { kind: "credential-command"; message: string; program: string; stderr: string } | 
+/**  A credential command nobody agreed to run yet: it arrived with an import. */
+{ kind: "command-approval-required"; message: string; subject: SecretSubject; targetId: string; targetName: string; program: string; args: string[] };
 
 export type ExportFormat = "csv" | "json" | "sql" | "markdown";
 
@@ -395,6 +403,8 @@ export type PreviewEntry = {
 	name: string,
 	target: string,
 	hasSecret: boolean,
+	/**  Carries a credential command: it will not run before the user approves it. */
+	hasCommand: boolean,
 	duplicate: boolean,
 	/**  Set when the entry cannot be written; any problem blocks the whole import. */
 	problem: string | null,

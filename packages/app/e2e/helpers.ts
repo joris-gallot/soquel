@@ -167,8 +167,11 @@ export async function waitForVisibleRows(count: number, timeout = 10_000) {
 }
 
 export async function waitForText(selector: string, text: string, timeout = 10_000) {
+  // Collapsed: markup indentation lands in textContent, so a phrase spread
+  // over several elements would never match as typed.
+  const collapse = (value: string) => value.replace(/\s+/g, ' ').trim()
   await browser.waitUntil(
-    async () => (await visibleText(selector)).includes(text),
+    async () => collapse(await visibleText(selector)).includes(collapse(text)),
     {
       timeout,
       timeoutMsg: `${selector} never contained "${text}"`,

@@ -323,6 +323,25 @@ pub fn resolve_credentials(
       refresh_after_secs,
     } => {
       let spec = resolved_spec(command, &target.placeholders)?;
+      // Running a command is running code: an imported one waits for a yes.
+      if !state
+        .command_approvals
+        .lock()
+        .unwrap()
+        .is_approved(&target.key, command)
+      {
+        return Err(Error::CommandApprovalRequired {
+          message: format!(
+            "{} gets its password from a command that has not been approved on this machine",
+            target.name
+          ),
+          subject: target.subject,
+          target_id: target.id.to_string(),
+          target_name: target.name.to_string(),
+          program: spec.program,
+          args: spec.args,
+        });
+      }
       let refresh_after = refresh_after_secs
         .map(|secs| Duration::from_secs(u64::from(secs)))
         .unwrap_or(DEFAULT_REFRESH);
@@ -359,6 +378,19 @@ mod tests {
       ssl_root_cert: None,
       tunnel_id: None,
     })
+  }
+
+  /// The store the user's own form writes to when they save a command.
+  fn approve(state: &AppState, key: &SecretKey, credential: &CredentialSource) {
+    let CredentialSource::Command { command, .. } = credential else {
+      panic!("only a command mode is approved");
+    };
+    state
+      .command_approvals
+      .lock()
+      .unwrap()
+      .approve(key, command)
+      .unwrap();
   }
 
   fn spec(program: &str, args: &[&str]) -> CommandSpec {
@@ -501,6 +533,11 @@ mod tests {
     };
 
     let pg = profile(credential.clone(), pg_params());
+    approve(
+      &state,
+      &SecretKey::Connection("c-1".to_string()),
+      &credential,
+    );
     let credentials =
       resolve_credentials(&state, &CredentialTarget::connection(&pg, "c-1"), None).unwrap();
     assert_eq!(
@@ -525,6 +562,71 @@ mod tests {
       // No ACL user: {user} is left alone rather than blanked.
       Some("{user}@cache:6379/2".to_string())
     );
+  }
+
+  #[tokio::test]
+  async fn an_unapproved_command_shows_what_it_would_run_instead_of_running_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()));
+    let credential = CredentialSource::Command {
+      command: "aws rds generate-db-auth-token --hostname {host}".to_string(),
+      refresh_after_secs: None,
+    };
+    let pg = profile(credential.clone(), pg_params());
+    let key = SecretKey::Connection("c-1".to_string());
+
+    let Err(err) = resolve_credentials(&state, &CredentialTarget::connection(&pg, "c-1"), None)
+    else {
+      panic!("an unapproved command must not resolve");
+    };
+    let Error::CommandApprovalRequired {
+      subject,
+      target_id,
+      program,
+      args,
+      ..
+    } = &err
+    else {
+      panic!("expected an approval request: {err:?}");
+    };
+    assert_eq!(*subject, SecretSubject::Connection);
+    assert_eq!(target_id, "c-1");
+    // The dialog shows the resolved argv, not the raw line.
+    assert_eq!(program, "aws");
+    assert_eq!(
+      args,
+      &["rds", "generate-db-auth-token", "--hostname", "db.internal"]
+    );
+
+    approve(&state, &key, &credential);
+    assert!(resolve_credentials(&state, &CredentialTarget::connection(&pg, "c-1"), None).is_ok());
+  }
+
+  #[tokio::test]
+  async fn editing_an_approved_command_puts_it_back_in_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()));
+    let key = SecretKey::Connection("c-1".to_string());
+    approve(
+      &state,
+      &key,
+      &CredentialSource::Command {
+        command: "aws rds token".to_string(),
+        refresh_after_secs: None,
+      },
+    );
+
+    let edited = profile(
+      CredentialSource::Command {
+        command: "curl evil.example.com".to_string(),
+        refresh_after_secs: None,
+      },
+      pg_params(),
+    );
+    assert!(matches!(
+      resolve_credentials(&state, &CredentialTarget::connection(&edited, "c-1"), None),
+      Err(Error::CommandApprovalRequired { .. })
+    ));
   }
 
   #[tokio::test]
@@ -642,6 +744,11 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let state = AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()));
 
+    approve(
+      &state,
+      &SecretKey::Tunnel("t-1".to_string()),
+      &tunnel.credential,
+    );
     let credentials =
       resolve_credentials(&state, &CredentialTarget::tunnel(&tunnel, "t-1"), None).unwrap();
     assert_eq!(

@@ -522,6 +522,20 @@ mod tests {
 
     let dir = tempfile::tempdir().unwrap();
     let state = AppState::for_tests(dir.path(), Box::new(InMemoryStore::default()));
+    // Saving the tunnel in the form is what approves its command.
+    let CredentialSource::Command { command, .. } = &profile.credential else {
+      unreachable!("the profile above is in command mode");
+    };
+    state
+      .command_approvals
+      .lock()
+      .unwrap()
+      .approve(
+        &crate::secrets::SecretKey::Tunnel("t-1".to_string()),
+        command,
+      )
+      .unwrap();
+
     let secret = resolve_credentials(&state, &CredentialTarget::tunnel(&profile, "t-1"), None)
       .unwrap()
       .resolve()
@@ -736,6 +750,12 @@ mod tests {
       tunnels: std::sync::Mutex::new(TunnelStore::load(dir.path().join("tunnels.json")).unwrap()),
       known_hosts: std::sync::Mutex::new(
         KnownHostsStore::load(dir.path().join("known_hosts.json")).unwrap(),
+      ),
+      command_approvals: std::sync::Mutex::new(
+        crate::command_approvals::CommandApprovalsStore::load(
+          dir.path().join("command_approvals.json"),
+        )
+        .unwrap(),
       ),
       secrets: Box::new(secrets),
       session_secrets: Default::default(),

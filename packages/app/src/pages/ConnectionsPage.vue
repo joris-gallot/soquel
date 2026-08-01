@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ConnectionProfile, ImportSource, SecretSubject, TunnelProfile } from '@/lib/bindings'
+import type { ConnectionProfile, SecretSubject, TunnelProfile } from '@/lib/bindings'
 import { Bot, Cable, ChevronDown, ChevronRight, Download, MoreHorizontal, Plug, Plus, Unplug, Upload } from '@lucide/vue'
 import { useLocalStorage } from '@vueuse/core'
 import { computed, onMounted, ref } from 'vue'
@@ -8,7 +8,6 @@ import { toast } from 'vue-sonner'
 import ConnectionFormDialog from '@/components/ConnectionFormDialog.vue'
 import ExportConnectionsDialog from '@/components/ExportConnectionsDialog.vue'
 import ImportConnectionsDialog from '@/components/ImportConnectionsDialog.vue'
-import ImportSourcesDialog from '@/components/ImportSourcesDialog.vue'
 import McpServerPanel from '@/components/McpServerPanel.vue'
 import TunnelFormDialog from '@/components/TunnelFormDialog.vue'
 import { Badge } from '@/components/ui/badge'
@@ -28,7 +27,7 @@ import { useTunnels } from '@/composables/useTunnels'
 import { commands, events } from '@/lib/bindings'
 import { connectionDsn, ENV_BADGE_CLASSES, groupConnections } from '@/lib/connections'
 import { CommandError, unwrap } from '@/lib/result'
-import { soquelFileSource } from '@/lib/transfer'
+import { pickImportFile } from '@/lib/transfer'
 import { SSH_AUTH_LABELS } from '@/lib/tunnels'
 
 const HANDLED_BY_A_DIALOG = ['host-key-untrusted', 'secret-required', 'command-approval-required']
@@ -55,8 +54,7 @@ const tunnelFormOpen = ref(false)
 const editingTunnel = ref<TunnelProfile | null>(null)
 const exportOpen = ref(false)
 const importOpen = ref(false)
-const importSourcesOpen = ref(false)
-const importSource = ref<ImportSource | null>(null)
+const importPath = ref<string | null>(null)
 
 /// Puts the command back in waiting: the next connect asks again.
 async function revokeCommand(subject: SecretSubject, id: string) {
@@ -69,12 +67,11 @@ async function revokeCommand(subject: SecretSubject, id: string) {
   }
 }
 
-function startImport() {
-  importSourcesOpen.value = true
-}
-
-function importFrom(source: ImportSource) {
-  importSource.value = source
+async function startImport() {
+  const path = await pickImportFile()
+  if (!path)
+    return
+  importPath.value = path
   importOpen.value = true
 }
 
@@ -89,7 +86,8 @@ onMounted(async () => {
   // A file handed to the app from outside the webview (opened from the OS,
   // dropped on the window) lands here and opens the dialog on it.
   await events.importFileRequested.listen(({ payload }) => {
-    importFrom(soquelFileSource(payload.path))
+    importPath.value = payload.path
+    importOpen.value = true
   })
 })
 
@@ -383,8 +381,7 @@ async function removeTunnelProfile(tunnel: TunnelProfile) {
     <ConnectionFormDialog v-model:open="formOpen" :profile="editing" />
     <TunnelFormDialog v-model:open="tunnelFormOpen" :tunnel="editingTunnel" />
     <ExportConnectionsDialog v-model:open="exportOpen" />
-    <ImportSourcesDialog v-model:open="importSourcesOpen" @chosen="importFrom" />
-    <ImportConnectionsDialog v-model:open="importOpen" :source="importSource" @imported="afterImport" />
+    <ImportConnectionsDialog v-model:open="importOpen" :path="importPath" @imported="afterImport" />
   </div>
 </template>
 

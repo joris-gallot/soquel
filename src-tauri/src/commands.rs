@@ -16,7 +16,6 @@ use crate::profiles::{
 };
 use crate::secrets::SecretKey;
 use crate::ssh::{self, SshTunnel, TunnelTarget};
-use crate::transfer::sources::{ImportSource, ImportSourceSummary};
 use crate::transfer::{self, DuplicateStrategy, ExportSummary, ImportOutcome, ImportPreview};
 use crate::tunnels::{TunnelInput, TunnelProfile};
 use crate::{ActiveConnection, AppState, SessionEntry};
@@ -924,38 +923,33 @@ pub fn open_connections_file(app: tauri::AppHandle, path: String) -> Result<(), 
     })
 }
 
-/// What this machine has to import from, and how much each source holds.
+/// What importing that file would do; writes nothing.
 #[tauri::command]
 #[specta::specta]
-pub fn scan_import_sources() -> Result<Vec<ImportSourceSummary>, Error> {
-  Ok(transfer::sources::scan())
-}
-
-/// What importing that source would do; writes nothing.
-#[tauri::command]
-#[specta::specta]
-pub fn preview_import(
+pub fn preview_connection_import(
   state: State<'_, AppState>,
-  source: ImportSource,
+  path: String,
   passphrase: Option<String>,
 ) -> Result<ImportPreview, Error> {
-  transfer::preview_source(state.inner(), &source, passphrase.as_deref())
+  transfer::preview_file(
+    state.inner(),
+    std::path::Path::new(&path),
+    passphrase.as_deref(),
+  )
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn run_import(
+pub fn import_connections(
   state: State<'_, AppState>,
-  source: ImportSource,
+  path: String,
   passphrase: Option<String>,
-  with_secrets: bool,
   strategy: DuplicateStrategy,
 ) -> Result<ImportOutcome, Error> {
-  transfer::import_source(
+  transfer::import_file(
     state.inner(),
-    &source,
+    std::path::Path::new(&path),
     passphrase.as_deref(),
-    with_secrets,
     strategy,
   )
 }
@@ -1354,16 +1348,7 @@ mod tests {
     let target = state(&target_dir);
     let path = target_dir.path().join("shared.json");
     transfer::export(&source, &path, false, None).unwrap();
-    transfer::import_source(
-      &target,
-      &transfer::sources::ImportSource::SoquelFile {
-        path: path.to_string_lossy().into_owned(),
-      },
-      None,
-      true,
-      DuplicateStrategy::Skip,
-    )
-    .unwrap();
+    transfer::import_file(&target, &path, None, DuplicateStrategy::Skip).unwrap();
 
     let imported = &target.profiles.lock().unwrap().list()[0];
     assert_eq!(imported.credential, command(line));

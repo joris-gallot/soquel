@@ -21,11 +21,9 @@ export const commands = {
 	 *  The entry point for a `.soquel` opened from the OS or dropped on the window.
 	 */
 	openConnectionsFile: (path: string) => typedError<null, Error>(__TAURI_INVOKE("open_connections_file", { path })),
-	/**  What this machine has to import from, and how much each source holds. */
-	scanImportSources: () => typedError<ImportSourceSummary[], Error>(__TAURI_INVOKE("scan_import_sources")),
-	/**  What importing that source would do; writes nothing. */
-	previewImport: (source: ImportSource, passphrase: string | null) => typedError<ImportPreview, Error>(__TAURI_INVOKE("preview_import", { source, passphrase })),
-	runImport: (source: ImportSource, passphrase: string | null, withSecrets: boolean, strategy: DuplicateStrategy) => typedError<ImportOutcome, Error>(__TAURI_INVOKE("run_import", { source, passphrase, withSecrets, strategy })),
+	/**  What importing that file would do; writes nothing. */
+	previewConnectionImport: (path: string, passphrase: string | null) => typedError<ImportPreview, Error>(__TAURI_INVOKE("preview_connection_import", { path, passphrase })),
+	importConnections: (path: string, passphrase: string | null, strategy: DuplicateStrategy) => typedError<ImportOutcome, Error>(__TAURI_INVOKE("import_connections", { path, passphrase, strategy })),
 	/**  Ephemeral connect + health check; never touches the active connections. */
 	testConnection: (input: ConnectionInput, existingId: string | null) => typedError<null, Error>(__TAURI_INVOKE("test_connection", { input, existingId })),
 	connect: (id: string) => typedError<null, Error>(__TAURI_INVOKE("connect", { id })),
@@ -338,25 +336,6 @@ export type ImportPreview = {
 	needsPassphrase: boolean,
 	connections: PreviewEntry[],
 	tunnels: PreviewEntry[],
-};
-
-/**
- *  A source pinned to a file. The path travels with it: the UI shows what it
- *  would read, and a test points somewhere other than the real home.
- */
-export type ImportSource = { kind: "soquel-file"; path: string } | { kind: "pgpass"; path: string } | { kind: "pg-service"; path: string };
-
-/**  A source's own kind, without a path: what `scan` reports on. */
-export type ImportSourceKind = "pgpass" | "pg-service";
-
-export type ImportSourceSummary = {
-	kind: ImportSourceKind,
-	source: ImportSource,
-	path: string,
-	/**  How many entries the file holds, `None` when it could not be read. */
-	entries: number | null,
-	/**  Why it could not be read; absent when there is nothing to say. */
-	problem: string | null,
 };
 
 export type IndexInfo = {

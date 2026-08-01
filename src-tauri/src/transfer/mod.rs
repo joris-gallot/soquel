@@ -5,7 +5,6 @@
 
 pub mod crypto;
 pub mod file;
-pub mod sources;
 #[cfg(test)]
 mod tests;
 
@@ -20,7 +19,6 @@ use crate::AppState;
 
 /// A connection on its way in. Ids are deliberately absent: they belong to the
 /// store, and two machines can hand us the same one.
-#[derive(Debug)]
 pub struct IncomingConnection {
   pub name: String,
   pub env: Env,
@@ -30,12 +28,8 @@ pub struct IncomingConnection {
   pub params: ConnectorParams,
   pub tunnel_ref: Option<String>,
   pub secret: Option<String>,
-  /// Set by a source that knows why its own entry cannot be imported, and
-  /// says it better than the engine's generic validation would.
-  pub problem: Option<String>,
 }
 
-#[derive(Debug)]
 pub struct IncomingTunnel {
   /// Source-local key the connections' `tunnel_ref` points at.
   pub reference: String,
@@ -221,10 +215,7 @@ pub fn preview(
           duplicate: existing_connections
             .iter()
             .any(|existing| is_same_connection(existing, entry)),
-          problem: entry
-            .problem
-            .clone()
-            .or_else(|| validate(&entry.name, &entry.params))
+          problem: validate(&entry.name, &entry.params)
             .or_else(|| dangling.then(|| "its ssh tunnel is missing from the file".to_string())),
         }
       })
@@ -496,13 +487,13 @@ pub fn export(
   })
 }
 
-/// Read a source and describe what importing it would do.
-pub fn preview_source(
+/// Read a soquel file and describe what importing it would do.
+pub fn preview_file(
   state: &AppState,
-  source: &sources::ImportSource,
+  path: &std::path::Path,
   passphrase: Option<&str>,
 ) -> Result<ImportPreview, Error> {
-  let read = source.read(passphrase)?;
+  let read = file::read(path, passphrase)?;
   let Some(bundle) = read.bundle else {
     return Ok(ImportPreview {
       encrypted: true,
@@ -518,28 +509,16 @@ pub fn preview_source(
   Ok(preview)
 }
 
-pub fn import_source(
+pub fn import_file(
   state: &AppState,
-  source: &sources::ImportSource,
+  path: &std::path::Path,
   passphrase: Option<&str>,
-  with_secrets: bool,
   strategy: DuplicateStrategy,
 ) -> Result<ImportOutcome, Error> {
-  let mut bundle = source
-    .read(passphrase)?
+  let bundle = file::read(path, passphrase)?
     .bundle
     .ok_or_else(|| Error::Secret {
       message: "this file is encrypted: a passphrase is required".to_string(),
     })?;
-  // A password only crosses over when it was asked for, whatever the source
-  // was willing to hand out.
-  if !with_secrets {
-    for connection in &mut bundle.connections {
-      connection.secret = None;
-    }
-    for tunnel in &mut bundle.tunnels {
-      tunnel.secret = None;
-    }
-  }
   apply(state, &bundle, strategy)
 }

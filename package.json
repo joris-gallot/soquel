@@ -32,7 +32,7 @@
     "db:dev:down": "docker compose -f docker-compose.dev.yml down"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^9.0.0",
+    "@antfu/eslint-config": "^9.2.0",
     "@tauri-apps/cli": "^2.11.4",
     "eslint": "^10.8.0",
     "typescript": "~6.0.3"

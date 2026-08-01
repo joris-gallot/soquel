@@ -2931,6 +2931,31 @@ mod tests {
     .await
     .unwrap();
     assert_eq!(read_back().await, None);
+
+    // The batch this whole feature exists for: a window opened by one kv tool
+    // covers the next one, so cleaning N keys asks once instead of N times.
+    let approver = WindowApprover::default();
+    let mut opening = AgentCall::new("session-batch", &approver);
+    set_key_impl(&state, &mut opening, &set("batched"))
+      .await
+      .unwrap();
+    assert_eq!(opening.approval, Some(Approval::Asked));
+
+    let mut covered = AgentCall::new("session-batch", &approver);
+    delete_key_impl(
+      &state,
+      &mut covered,
+      &KeyArgs {
+        connection_id: id.clone(),
+        key: key.to_string(),
+      },
+    )
+    .await
+    .unwrap();
+    assert_eq!(approver.asked(), 1, "a second kv write must not ask again");
+    assert_eq!(covered.approval, Some(Approval::Covered));
+    assert_eq!(read_back().await, None);
+    revoke_trust(&state, "session-batch", &id).await;
   }
 
   #[tokio::test]

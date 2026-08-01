@@ -81,7 +81,7 @@ importers:
         specifier: ^3.6.0
         version: 3.6.0
       vue:
-        specifier: ^3.5.38
+        specifier: ^3.5.40
         version: 3.5.40(typescript@6.0.3)
       vue-router:
         specifier: ^5.1.0

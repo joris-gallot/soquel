@@ -24,7 +24,7 @@ import { useCommandApproval } from '@/composables/useCommandApproval'
 import { useConnections } from '@/composables/useConnections'
 import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { useTunnels } from '@/composables/useTunnels'
-import { commands } from '@/lib/bindings'
+import { commands, events } from '@/lib/bindings'
 import { connectionDsn, ENV_BADGE_CLASSES, groupConnections } from '@/lib/connections'
 import { CommandError, unwrap } from '@/lib/result'
 import { pickImportFile } from '@/lib/transfer'
@@ -80,9 +80,15 @@ async function afterImport() {
   await refreshTunnels()
 }
 
-onMounted(() => {
+onMounted(async () => {
   refresh()
   refreshTunnels()
+  // A file handed to the app from outside the webview (opened from the OS,
+  // dropped on the window) lands here and opens the dialog on it.
+  await events.importFileRequested.listen(({ payload }) => {
+    importPath.value = payload.path
+    importOpen.value = true
+  })
 })
 
 function openCreate() {

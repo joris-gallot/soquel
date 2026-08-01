@@ -16,6 +16,11 @@ export const commands = {
 	 *  only with `include_secrets`, and only inside a passphrase-encrypted payload.
 	 */
 	exportConnections: (path: string, includeSecrets: boolean, passphrase: string | null) => typedError<ExportSummary, Error>(__TAURI_INVOKE("export_connections", { path, includeSecrets, passphrase })),
+	/**
+	 *  Hands a connections file to the UI, which opens the import dialog on it.
+	 *  The entry point for a `.soquel` opened from the OS or dropped on the window.
+	 */
+	openConnectionsFile: (path: string) => typedError<null, Error>(__TAURI_INVOKE("open_connections_file", { path })),
 	/**  What importing that file would do; writes nothing. */
 	previewConnectionImport: (path: string, passphrase: string | null) => typedError<ImportPreview, Error>(__TAURI_INVOKE("preview_connection_import", { path, passphrase })),
 	importConnections: (path: string, passphrase: string | null, strategy: DuplicateStrategy) => typedError<ImportOutcome, Error>(__TAURI_INVOKE("import_connections", { path, passphrase, strategy })),
@@ -102,6 +107,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	importFileRequested: makeEvent<ImportFileRequested>("import-file-requested"),
 	mcpApprovalRequest: makeEvent<McpApprovalRequest>("mcp-approval-request"),
 };
 
@@ -306,6 +312,15 @@ export type ForeignKeyInfo = {
 export type HashField = {
 	field: string,
 	value: string,
+};
+
+/**
+ *  A file handed to the app from outside the webview: the OS opening a
+ *  `.soquel`, or a path dropped on the window. The UI answers by opening the
+ *  import dialog on it.
+ */
+export type ImportFileRequested = {
+	path: string,
 };
 
 export type ImportOutcome = {

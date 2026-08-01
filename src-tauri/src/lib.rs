@@ -90,6 +90,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::update_connection,
       commands::delete_connection,
       commands::export_connections,
+      commands::open_connections_file,
       commands::preview_connection_import,
       commands::import_connections,
       commands::test_connection,
@@ -147,7 +148,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_audit_log,
       commands::mcp_resolve_approval,
     ])
-    .events(tauri_specta::collect_events![mcp::McpApprovalRequest])
+    .events(tauri_specta::collect_events![
+      mcp::McpApprovalRequest,
+      transfer::ImportFileRequested
+    ])
     .error_handling(tauri_specta::ErrorHandlingMode::Result)
 }
 

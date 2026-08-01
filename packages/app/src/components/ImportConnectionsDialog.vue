@@ -166,7 +166,7 @@ async function run() {
                   {{ entry.target }}
                 </p>
               </div>
-              <Badge v-if="entry.problem" variant="outline" class="gap-1 border-destructive/30 text-[10px] text-destructive">
+              <Badge v-if="entry.problem" variant="outline" data-testid="import-problem" class="gap-1 border-destructive/30 text-[10px] text-destructive">
                 <TriangleAlert class="size-2.5" />
                 {{ entry.problem }}
               </Badge>

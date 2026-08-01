@@ -905,6 +905,24 @@ pub fn export_connections(
   )
 }
 
+/// Hands a connections file to the UI, which opens the import dialog on it.
+/// The entry point for a `.soquel` opened from the OS or dropped on the window.
+#[tauri::command]
+#[specta::specta]
+pub fn open_connections_file(app: tauri::AppHandle, path: String) -> Result<(), Error> {
+  if !std::path::Path::new(&path).is_file() {
+    return Err(Error::NotFound {
+      message: format!("{path} is not a file"),
+    });
+  }
+  use tauri_specta::Event;
+  transfer::ImportFileRequested { path }
+    .emit(&app)
+    .map_err(|err| Error::Storage {
+      message: format!("could not hand the file to the window: {err}"),
+    })
+}
+
 /// What importing that file would do; writes nothing.
 #[tauri::command]
 #[specta::specta]

@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { $, browser } from '@wdio/globals'
 import { TEST_DBS } from './fixtures'
-import { waitForText } from './helpers'
+import { openImportDialog, waitForText } from './helpers'
 
 const PG = TEST_DBS.postgres
 const FILE = path.join(os.tmpdir(), 'soquel-e2e-import.json')
@@ -32,18 +32,6 @@ function writeImportFile() {
   }))
 }
 
-/// The import picker is a native dialog wdio cannot drive, so the file goes in
-/// through the command the dialog would call.
-async function importFile() {
-  await browser.execute((file: string) => {
-    const tauri = (window as unknown as {
-      __TAURI_INTERNALS__: { invoke: (cmd: string, args: unknown) => Promise<unknown> }
-    }).__TAURI_INTERNALS__
-    return tauri.invoke('import_connections', { path: file, passphrase: null, strategy: 'skip' })
-  }, FILE)
-  await browser.refresh()
-}
-
 describe('imported credential command', () => {
   before(() => {
     writeImportFile()
@@ -53,11 +41,18 @@ describe('imported credential command', () => {
     fs.rmSync(FILE, { force: true })
   })
 
-  it('does not run before the argv has been read and approved', async () => {
+  it('warns in the preview that the file carries a command', async () => {
     await $('[data-testid="empty-state"]').waitForExist()
-    await importFile()
-    await $('[data-testid="connection-row"]').waitForExist()
+    await openImportDialog(FILE)
+    await waitForText('[data-testid="import-commands"]', '1 run a command')
+    await $('[data-testid="import-entry-command"]').waitForExist()
+    await browser.saveScreenshot('./e2e/screenshots/import-command-badge.png')
 
+    await $('[data-testid="run-import"]').click()
+    await $('[data-testid="connection-row"]').waitForExist()
+  })
+
+  it('does not run before the argv has been read and approved', async () => {
     await $('[data-testid="toggle-connection"]').click()
     await $('[data-testid="command-approval-dialog"]').waitForDisplayed()
     // One chip per argument: the split is part of what the user approves.

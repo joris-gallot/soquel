@@ -39,6 +39,35 @@ export async function createSqliteConnection(name: string, path: string) {
   await $('[data-testid="field-name"]').waitForExist({ reverse: true })
 }
 
+/// The webview's IPC is frozen (`__TAURI_INTERNALS__.invoke` is not writable),
+/// so a native file picker cannot be stubbed. Calling a command is fine: that
+/// is how a spec writes a fixture file without the save dialog.
+export async function invokeCommand<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  return await browser.execute((name: string, payload: Record<string, unknown>) => {
+    const tauri = (window as unknown as {
+      __TAURI_INTERNALS__: { invoke: (cmd: string, args: unknown) => Promise<unknown> }
+    }).__TAURI_INTERNALS__
+    return tauri.invoke(name, payload)
+  }, command, args) as T
+}
+
+/// Writes the current connections to `path`, the file the import specs read back.
+export async function exportConnectionsTo(path: string, passphrase?: string) {
+  await invokeCommand('export_connections', {
+    path,
+    includeSecrets: passphrase !== undefined,
+    passphrase: passphrase ?? null,
+  })
+}
+
+/// Opens the import dialog on a file, the way the OS does when a .soquel is
+/// double-clicked. The native picker itself stays out of reach of WebDriver.
+export async function openImportDialog(path: string) {
+  await invokeCommand('open_connections_file', { path })
+  await $('[data-testid="import-counts"], [data-testid="import-error"], [data-testid="import-passphrase"]')
+    .waitForExist({ timeout: 10_000 })
+}
+
 export async function deleteFirstConnection() {
   await $('[data-testid="row-menu"]').click()
   await $('[data-testid="row-delete"]').click()

@@ -877,9 +877,14 @@ pub fn update_connection(
 #[specta::specta]
 pub fn delete_connection(state: State<'_, AppState>, id: String) -> Result<(), Error> {
   state.profiles.lock().unwrap().delete(&id)?;
-  let key = SecretKey::Connection(id);
-  state.command_approvals.lock().unwrap().revoke(&key)?;
-  state.secrets.delete(&key)
+  forget(state.inner(), &SecretKey::Connection(id))
+}
+
+/// Everything kept next to a profile rather than in it, dropped with it.
+fn forget(state: &AppState, key: &SecretKey) -> Result<(), Error> {
+  state.command_approvals.lock().unwrap().revoke(key)?;
+  state.session_secrets.clear(key);
+  state.secrets.delete(key)
 }
 
 /// Writes every connection, tunnel and group to a file. Passwords ride along
@@ -1002,9 +1007,7 @@ pub fn delete_tunnel(state: State<'_, AppState>, id: String) -> Result<(), Error
     });
   }
   state.tunnels.lock().unwrap().delete(&id)?;
-  let key = SecretKey::Tunnel(id);
-  state.command_approvals.lock().unwrap().revoke(&key)?;
-  state.secrets.delete(&key)
+  forget(state.inner(), &SecretKey::Tunnel(id))
 }
 
 /// Ephemeral tunnel bring-up: validates the host key and the credentials
@@ -1339,6 +1342,84 @@ mod tests {
         .is_approved(&key(&imported.id), line),
       "an imported command must wait for a yes"
     );
+  }
+
+  #[test]
+  fn the_approval_records_the_stored_command_not_what_the_caller_says() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+    let line = "aws rds generate-db-auth-token";
+    let profile = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&input(command(line), None))
+      .unwrap();
+
+    // The webview only names a target: the command comes off the profile, so
+    // it cannot approve one thing and run another.
+    let stored = current_command(&state, &key(&profile.id)).unwrap();
+    assert_eq!(stored, line);
+
+    // A tunnel resolves against its own store, and a profile with no command
+    // has nothing to approve.
+    let tunnel = state
+      .tunnels
+      .lock()
+      .unwrap()
+      .create(&TunnelInput {
+        name: "bastion".to_string(),
+        host: "bastion.internal".to_string(),
+        port: 22,
+        user: "deploy".to_string(),
+        auth: crate::tunnels::SshAuth::Password,
+        credential: command("vault-ssh {host}"),
+        secret: None,
+      })
+      .unwrap();
+    assert_eq!(
+      current_command(&state, &SecretKey::Tunnel(tunnel.id.clone())).unwrap(),
+      "vault-ssh {host}"
+    );
+
+    let plain = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&input(CredentialSource::Keychain, None))
+      .unwrap();
+    assert!(matches!(
+      current_command(&state, &key(&plain.id)),
+      Err(Error::NotFound { .. })
+    ));
+  }
+
+  #[test]
+  fn deleting_a_profile_takes_its_approval_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(&dir);
+    let line = "vault read db";
+    let profile = state
+      .profiles
+      .lock()
+      .unwrap()
+      .create(&input(command(line), None))
+      .unwrap();
+    approve_own_command(&state, &key(&profile.id), &profile.credential).unwrap();
+
+    state
+      .session_secrets
+      .set(&key(&profile.id), "typed".to_string(), true);
+
+    state.profiles.lock().unwrap().delete(&profile.id).unwrap();
+    forget(&state, &key(&profile.id)).unwrap();
+
+    assert_eq!(state.session_secrets.get(&key(&profile.id)), None);
+    assert!(!state
+      .command_approvals
+      .lock()
+      .unwrap()
+      .is_approved(&key(&profile.id), line));
   }
 
   #[test]

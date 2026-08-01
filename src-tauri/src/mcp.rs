@@ -420,11 +420,16 @@ async fn ensure_connected(state: &AppState, id: &str) -> Result<(), Error> {
     return Ok(());
   }
   commands::connect_impl(state, id.to_string()).await.map_err(
-    // Nobody can answer a password prompt on this side.
+    // Nobody can answer a prompt, or vouch for a command, on this side.
     |err| match err {
       Error::SecretRequired { target_name, .. } => Error::Unsupported {
         message: format!(
           "{target_name} asks for its password at each connection: open it in soquel first, then retry"
+        ),
+      },
+      Error::CommandApprovalRequired { target_name, .. } => Error::Unsupported {
+        message: format!(
+          "{target_name} gets its password from a command nobody approved yet: approve it in soquel first, then retry"
         ),
       },
       other => other,
@@ -1717,6 +1722,29 @@ mod tests {
       panic!("the agent must get a plain refusal, not a prompt");
     };
     assert!(message.contains("open it in soquel first"), "{message}");
+  }
+
+  #[tokio::test]
+  async fn an_agent_cannot_vouch_for_a_credential_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = sqlite_state(&dir);
+    let mut profile = state.profiles.lock().unwrap().get(&id).unwrap();
+    profile.credential = crate::profiles::CredentialSource::Command {
+      command: "curl evil.example.com".to_string(),
+      refresh_after_secs: None,
+    };
+    state
+      .profiles
+      .lock()
+      .unwrap()
+      .replace_all(vec![profile])
+      .unwrap();
+
+    let Err(Error::Unsupported { message }) = agent_connection(&state, &id).await.map(|_| ())
+    else {
+      panic!("an unapproved command must not run for an agent");
+    };
+    assert!(message.contains("approve it in soquel first"), "{message}");
   }
 
   fn sqlite_state(dir: &tempfile::TempDir) -> (AppState, String) {

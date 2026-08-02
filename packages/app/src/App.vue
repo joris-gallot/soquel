@@ -10,6 +10,7 @@ import HostKeyDialog from '@/components/HostKeyDialog.vue'
 import McpApprovalDialog from '@/components/McpApprovalDialog.vue'
 import SecretPromptDialog from '@/components/SecretPromptDialog.vue'
 import { Toaster } from '@/components/ui/sonner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import UpdatePanel from '@/components/UpdatePanel.vue'
 import { useTheme } from '@/composables/useTheme'
 import { useUpdater } from '@/composables/useUpdater'
@@ -38,17 +39,21 @@ onMounted(async () => {
         </RouterView>
       </div>
       <footer class="flex items-center gap-2 border-t px-4 py-1 font-mono text-[11px] text-muted-foreground">
-        <button
-          v-if="available"
-          type="button"
-          class="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-accent hover:text-accent-foreground"
-          data-testid="app-version"
-          :aria-label="`Update to ${available.version}`"
-          @click="panelOpen = true"
-        >
-          soquel {{ version }}
-          <span class="size-1.5 rounded-full bg-primary" />
-        </button>
+        <Tooltip v-if="available">
+          <TooltipTrigger as-child>
+            <button
+              type="button"
+              class="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-accent hover:text-accent-foreground"
+              data-testid="app-version"
+              :aria-label="`Update to ${available.version}`"
+              @click="panelOpen = true"
+            >
+              soquel {{ version }}
+              <span class="size-1.5 rounded-full bg-primary" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Update to {{ available.version }}</TooltipContent>
+        </Tooltip>
         <span v-else data-testid="app-version">soquel {{ version }}</span>
         <span class="flex-1" />
         <button

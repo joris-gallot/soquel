@@ -75,7 +75,7 @@ async function run() {
           Later
         </Button>
         <Button type="button" data-testid="run-update" :disabled="downloading" @click="run">
-          Restart and install
+          Install and restart
         </Button>
       </DialogFooter>
     </DialogContent>

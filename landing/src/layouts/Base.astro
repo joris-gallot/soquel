@@ -14,7 +14,12 @@ const { title, description } = Astro.props
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="Soquel" />
+    <link rel="manifest" href="/site.webmanifest" />
     <link rel="canonical" href={Astro.site} />
     <title>{title}</title>
     <meta name="description" content={description} />
@@ -22,6 +27,9 @@ const { title, description } = Astro.props
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
     <meta name="color-scheme" content="light dark" />
+    <!-- Mobile browser chrome follows the page instead of staying white on the dark one. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a" />
   </head>
   <body>
     <slot />

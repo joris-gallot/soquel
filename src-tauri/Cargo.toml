@@ -34,7 +34,7 @@ thiserror = "2.0.19"
 uuid = { version = "1", features = [ "v4" ] }
 keyring = "4.1.6"
 async-trait = "0.1.91"
-tokio-postgres = "0.7"
+tokio-postgres = "0.7.18"
 mysql_async = { version = "0.37", default-features = false, features = [ "default-rustls-ring" ] }
 futures-util = { version = "0.3.33", default-features = false }
 tokio = { version = "1.53.1", features = [

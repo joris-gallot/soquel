@@ -46,6 +46,7 @@ pnpm build:desktop # tauri build (bundles the app)
 pnpm typecheck     # vue-tsc across the workspace
 pnpm lint          # eslint . (lint:fix to autofix)
 pnpm test          # vitest across the workspace
+pnpm updates:stub <dir>  # fake update endpoint over a built AppImage (see Updater below)
 pnpm test:e2e      # wdio drives the built debug binary via tauri-driver (Linux/Windows only)
                    # isolated app data (SOQUEL_DATA_DIR) + in-memory secrets (SOQUEL_EPHEMERAL_SECRETS)
                    # screenshots land in packages/app/e2e/screenshots/ (gitignored)
@@ -94,6 +95,8 @@ Weight: Rust integration against real databases is the core; unit tests for pure
 The signing keypair is **not rotatable**: `plugins.updater.pubkey` is compiled into every binary, so a new key orphans every installed client (no auto-update, manual reinstall). Private key + passphrase live in 1Password, and become `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for release builds.
 
 `endpoints` points at a dynamic service, never a static `latest.json`: the license window is enforced server-side (see the Pricing issue), and the license key will ride an `UpdaterBuilder::header` set in `pending()`.
+
+`pnpm updates:stub <dir>` serves a fake endpoint over a built AppImage (`scripts/update-server.mjs`): 204 when the caller is current, otherwise a manifest pointing at the bundle. Hardcoded release, no licence logic, and it stays that way. It paces the download so the progress bar is watchable (`SLOW=0` to send at full speed).
 
 `SOQUEL_UPDATE_ENDPOINT` overrides the endpoint in debug builds only. A debug build with no override skips the check entirely (nothing to replace), and a release build ignores the variable so a shipped app cannot be redirected. Consequence for end-to-end testing: use `tauri build --debug`, since a release bundle both ignores the override and refuses plain `http`. Only the AppImage is updatable on Linux; `.deb` is not.
 

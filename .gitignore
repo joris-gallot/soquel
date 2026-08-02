@@ -9,6 +9,9 @@ dist
 *.local
 *.tsbuildinfo
 
+# Astro generated types
+.astro/
+
 # Rust
 src-tauri/target/
 src-tauri/gen/schemas/

@@ -1,0 +1,40 @@
+---
+// The app's own write-approval dialog, rebuilt with the app's tokens rather
+// than screenshotted: the copy below is what McpApprovalDialog.vue renders.
+---
+
+<figure class="settle m-0" style="--step: 3">
+  <div
+    class="rounded-card border border-rule bg-paper p-5 shadow-[0_1px_2px_oklch(0_0_0/0.05),0_12px_32px_-12px_oklch(0_0_0/0.18)] sm:p-6"
+  >
+    <h2 class="font-mono text-sm font-medium">An agent wants to write</h2>
+    <p class="mt-1 text-sm text-mute">
+      This changes data on <span class="font-medium text-ink">prod billing</span>. It runs only if
+      you allow it.
+    </p>
+
+    <pre
+      class="mt-4 overflow-x-auto rounded bg-wash px-3 py-2.5 font-mono text-xs leading-6 sm:text-[0.8125rem]"
+    ><span class="settle inline-block" style="--step: 5"><span class="text-keyword">UPDATE</span> invoices</span>
+<span class="settle inline-block" style="--step: 6"><span class="text-keyword">SET</span> status = <span class="text-string">'void'</span></span>
+<span class="settle inline-block" style="--step: 7"><span class="text-keyword">WHERE</span> customer_id = <span class="text-number">4812</span></span>
+<span class="settle inline-block" style="--step: 8">  <span class="text-keyword">AND</span> status = <span class="text-string">'draft'</span></span></pre>
+
+    <div class="settle mt-5 flex flex-wrap items-center justify-between gap-2" style="--step: 10">
+      <span
+        class="rounded-md border border-rule px-3 py-1.5 font-sans text-sm font-medium text-ink"
+      >Deny</span
+      >
+      <div class="flex gap-2">
+        <span class="rounded-md bg-wash px-3 py-1.5 font-sans text-sm font-medium text-ink">Allow for 15 min</span
+        >
+        <span class="rounded-md bg-danger px-3 py-1.5 font-sans text-sm font-medium text-paper">Run this write</span
+        >
+      </div>
+    </div>
+  </div>
+
+  <figcaption class="settle mt-3 font-mono text-xs text-mute" style="--step: 12">
+    Denying it, closing it, or ignoring it for a minute all refuse.
+  </figcaption>
+</figure>

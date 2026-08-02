@@ -1,0 +1,33 @@
+{
+  "name": "soquel-landing",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.17.0",
+  "engines": {
+    "node": "26.3.1"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "astro check",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.6",
+    "@fontsource/ibm-plex-sans": "^5.2.6",
+    "@tailwindcss/vite": "^4.1.16",
+    "astro": "^5.15.9",
+    "tailwindcss": "^4.1.16"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^9.2.0",
+    "@astrojs/check": "^0.9.5",
+    "astro-eslint-parser": "^3.0.0",
+    "eslint": "^10.8.0",
+    "eslint-plugin-astro": "^3.0.1",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,15 @@
+shellEmulator: true
+
+# Own workspace root: the landing keeps its own lockfile and its own CI job.
+allowBuilds:
+  esbuild: true
+  # Astro's image pipeline; the page ships no raster images.
+  sharp: false
+
+trustPolicy: no-downgrade
+
+# Same exclusions as the root workspace: these lost their provenance
+# attestation upstream, not in a takeover.
+trustPolicyExclude:
+  - chokidar
+packages: []

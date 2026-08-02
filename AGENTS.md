@@ -17,6 +17,7 @@ Two architecture rules that must hold:
 
 - `packages/app` - Vue 3 + vue-router + shadcn-vue (Reka UI) + Tailwind v4, Vite on port 5173.
 - `src-tauri` - Rust core. `src/commands.rs` holds the command layer, `src/error.rs` the normalized error enum.
+- `landing` - Astro + Tailwind v4 for soquel.dev. **Its own workspace**: own `pnpm-workspace.yaml`, own lockfile, own eslint, own CI job, and the root lint ignores it. Run its commands from `landing/`. Its palette is the app's tokens verbatim, and the only colour on the page is the one the app gives data (syntax tokens plus the destructive action): soquel has no brand hue.
 
 ### Command layer
 

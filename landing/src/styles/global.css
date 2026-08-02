@@ -1,0 +1,105 @@
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Straight from the app: every token it owns is zero-chroma. */
+  --color-paper: oklch(1 0 0);
+  --color-wash: oklch(0.97 0 0);
+  --color-rule: oklch(0.922 0 0);
+  --color-mute: oklch(0.556 0 0);
+  --color-ink: oklch(0.145 0 0);
+
+  /* The app's syntax tokens and its destructive action. The page borrows no
+     other colour: soquel has no brand hue, only the colour it gives data. */
+  --color-keyword: oklch(0.5 0.13 240);
+  --color-string: oklch(0.52 0.11 150);
+  --color-number: oklch(0.53 0.12 70);
+  --color-danger: oklch(0.577 0.245 27.325);
+
+  --radius-card: 0.625rem;
+}
+
+/* Plain custom properties, not @theme: that one is a build-time directive and
+   a nested copy is dropped without a word. The utilities read the vars. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-paper: oklch(0.145 0 0);
+    --color-wash: oklch(0.269 0 0);
+    --color-rule: oklch(1 0 0 / 12%);
+    --color-mute: oklch(0.708 0 0);
+    --color-ink: oklch(0.985 0 0);
+
+    --color-keyword: oklch(0.72 0.11 240);
+    --color-string: oklch(0.75 0.1 150);
+    --color-number: oklch(0.78 0.11 70);
+    --color-danger: oklch(0.704 0.191 22.216);
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: var(--color-ink);
+    color: var(--color-paper);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 3px;
+  }
+}
+
+@utility label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-mute);
+}
+
+/* One orchestrated moment: the statement lands line by line, then the buttons. */
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(0.35rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.settle {
+  animation: settle 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  animation-delay: calc(var(--step, 0) * 90ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .settle {
+    animation: none;
+  }
+}

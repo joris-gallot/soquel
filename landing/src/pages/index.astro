@@ -1,0 +1,206 @@
+---
+import ApprovalCard from '@/components/ApprovalCard.astro'
+import Shot from '@/components/Shot.astro'
+import Wordmark from '@/components/Wordmark.astro'
+import Base from '@/layouts/Base.astro'
+
+const SOURCE = 'https://github.com/joris-gallot/soquel'
+
+const guardrails = [
+  {
+    claim: 'Read-only is the engine\'s job, not a SQL parser\'s.',
+    proof:
+      'Agent reads run inside a READ ONLY transaction on Postgres and MySQL, or on a handle opened read-only at the filesystem level on SQLite. A statement that slips past classification still cannot write.',
+  },
+  {
+    claim: 'Off, and empty, by default.',
+    proof:
+      'The server starts stopped, and every connection stays invisible to agents until you opt it in. Read-only or writes-need-approval, one connection at a time.',
+  },
+  {
+    claim: 'Every call is logged.',
+    proof: 'Tool, connection, statement, outcome and duration, readable from the app.',
+  },
+  {
+    claim: 'Local only.',
+    proof:
+      'The server binds loopback and requires a bearer token that never leaves your machine. Results are capped and paginated, and agent queries carry a 30 second engine-enforced timeout.',
+  },
+]
+
+const engines = [
+  { name: 'PostgreSQL', note: '14 and up' },
+  { name: 'MySQL, MariaDB', note: 'MySQL 8.0 and up, MariaDB LTS' },
+  { name: 'SQLite', note: 'a file, no server' },
+  { name: 'Redis, Valkey', note: 'key browser and console' },
+  { name: 'MongoDB', note: 'document browser and console' },
+]
+
+// Dark theme only: a dark shot reads on either page theme, and light/dark pairs
+// double the capture and the upkeep for little gain. Market seed only, never a
+// real database: hostnames and connection names would ship to a public page.
+const shots = [
+  {
+    alt: 'The soquel table browser, editing a row inline',
+    caption: 'Table browser. Edits are staged, then written in one transaction.',
+    spec: 'Table browser, market seed, dark, 1440x900',
+  },
+  {
+    alt: 'The soquel SQL editor showing a query plan as a tree',
+    caption: 'The SQL editor renders EXPLAIN as a tree, not a wall of text.',
+    spec: 'SQL editor + EXPLAIN tree, market seed, dark, 1440x900',
+  },
+  {
+    alt: 'The soquel MCP panel with its audit log',
+    caption: 'Every agent call, its statement and its outcome, readable in the app.',
+    spec: 'MCP panel + audit log, market seed, dark, 1440x900',
+  },
+]
+
+const client = [
+  'Table browser with inline editing, filters and export',
+  'SQL editor with query plans, rendered as a tree',
+  'SSH tunnels with key, agent or password auth, and host key verification',
+  'TLS, custom root certificates included',
+  'Passwords from the OS keychain, asked at connect, or read from a command',
+  'Connections exported to a file, passwords left out unless you encrypt them in',
+]
+---
+
+<Base
+  title="soquel: a database client that lends agents the query, not the credentials"
+  description="A desktop database client for Postgres, MySQL, SQLite, Redis and MongoDB. Coding agents reach your data through the app over MCP: read-only by default, every write stops for your approval, and credentials never leave the Rust core."
+>
+  <div class="mx-auto max-w-3xl px-6">
+    <header class="flex items-center justify-between border-b border-rule py-5">
+      <Wordmark />
+      <a
+        href={SOURCE}
+        target="_blank"
+        rel="noopener"
+        aria-label="soquel source on GitHub"
+        class="font-mono text-xs text-mute underline-offset-4 hover:text-ink hover:underline"
+      >Source</a
+      >
+    </header>
+
+    <main>
+      <section class="py-16 sm:py-24">
+        <h1
+          class="settle font-mono text-[2rem] leading-[1.1] font-semibold tracking-[-0.03em] text-balance sm:text-5xl"
+          style="--step: 0"
+        >
+          Lend an agent the query.<br />Never the credentials.
+        </h1>
+
+        <p class="settle mt-6 max-w-xl text-lg leading-relaxed text-mute" style="--step: 1">
+          Soquel is a desktop database client for Postgres, MySQL, SQLite, Redis and MongoDB. It can
+          also hand a coding agent a way in, one connection at a time, while the passwords stay in
+          the Rust core and the OS keychain.
+        </p>
+
+        <div class="mt-12">
+          <ApprovalCard />
+        </div>
+      </section>
+
+      <section class="border-t border-rule py-14">
+        <p class="label">Agent access</p>
+        <h2 class="mt-3 max-w-xl font-mono text-xl leading-snug font-medium tracking-tight">
+          An agent gets the tools, not a copy of your database password.
+        </h2>
+        <p class="mt-4 max-w-xl text-mute">
+          Soquel runs a local MCP server. Point your agent at the app instead of pasting a
+          connection string into its config, and the guardrails come with it.
+        </p>
+
+        <div class="mt-10 space-y-px">
+          {
+            guardrails.map(item => (
+              <div class="border-t border-rule py-6 sm:grid sm:grid-cols-[16rem_1fr] sm:gap-8">
+                <h3 class="font-mono text-sm leading-relaxed font-medium">{item.claim}</h3>
+                <p class="mt-2 text-sm leading-relaxed text-mute sm:mt-0">{item.proof}</p>
+              </div>
+            ))
+          }
+        </div>
+
+        <p class="mt-8 text-sm text-mute">
+          Setting it up is one line, printed by the app with its own token:
+        </p>
+        <pre
+          class="mt-3 overflow-x-auto rounded-card border border-rule bg-wash px-4 py-3 font-mono text-xs leading-6"
+        >claude mcp add --transport http soquel http://127.0.0.1:52700/mcp \
+  --header <span class="text-string">"Authorization: Bearer &lt;token&gt;"</span></pre>
+      </section>
+
+      <section class="border-t border-rule py-14">
+        <p class="label">The client</p>
+        <h2 class="mt-3 max-w-xl font-mono text-xl leading-snug font-medium tracking-tight">
+          It has to be a good client first.
+        </h2>
+        <ul class="mt-8 space-y-3">
+          {
+            client.map(line => (
+              <li class="flex gap-3 text-sm leading-relaxed">
+                <span aria-hidden="true" class="mt-2.5 h-px w-4 shrink-0 bg-rule" />
+                <span>{line}</span>
+              </li>
+            ))
+          }
+        </ul>
+
+        <div class="mt-12 space-y-10">
+          {shots.map(shot => <Shot {...shot} />)}
+        </div>
+      </section>
+
+      <section class="border-t border-rule py-14">
+        <p class="label">Engines</p>
+        <dl class="mt-6">
+          {
+            engines.map(engine => (
+              <div class="flex items-baseline justify-between gap-6 border-b border-rule py-3">
+                <dt class="font-mono text-sm font-medium">{engine.name}</dt>
+                <dd class="text-right text-sm text-mute">{engine.note}</dd>
+              </div>
+            ))
+          }
+        </dl>
+      </section>
+
+      <section class="border-t border-rule py-14">
+        <p class="label">Get it</p>
+        <h2 class="mt-3 max-w-xl font-mono text-xl leading-snug font-medium tracking-tight">
+          No builds yet.
+        </h2>
+        <p class="mt-4 max-w-xl text-mute">
+          Soquel is pre-release and under active development. The source is available under
+          FSL-1.1-MIT: read it, build it for yourself, or watch the repository for the first signed
+          builds.
+        </p>
+        <a
+          href={SOURCE}
+          target="_blank"
+          rel="noopener"
+          class="mt-6 inline-flex rounded-md bg-ink px-4 py-2.5 font-sans text-sm font-medium text-paper transition-opacity hover:opacity-90"
+        >Read the source</a
+        >
+      </section>
+    </main>
+
+    <footer
+      class="flex flex-wrap items-center justify-between gap-3 border-t border-rule py-8 font-mono text-xs text-mute"
+    >
+      <span>Offline by design, no telemetry.</span>
+      <a
+        href={SOURCE}
+        target="_blank"
+        rel="noopener"
+        aria-label="soquel source on GitHub"
+        class="underline-offset-4 hover:text-ink hover:underline"
+      >GitHub</a
+      >
+    </footer>
+  </div>
+</Base>

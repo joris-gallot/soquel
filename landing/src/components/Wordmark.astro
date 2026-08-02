@@ -1,0 +1,18 @@
+---
+// The app's own empty-state prompt (ConnectionsPage.vue): the product name is a
+// psql prompt, so the wordmark needs no drawing. The cursor does not blink here,
+// the page keeps a single moment of motion.
+interface Props {
+  class?: string
+}
+
+const { class: className = 'text-sm' } = Astro.props
+---
+
+<span class={`inline-flex items-baseline font-mono tracking-tight ${className}`}>
+  <span class="font-semibold">soquel</span><span class="text-mute">=#</span>
+  <span
+    aria-hidden="true"
+    class="ml-1.5 inline-block h-[0.85em] w-[0.45em] translate-y-[0.08em] bg-keyword"
+  ></span>
+</span>

@@ -9,5 +9,7 @@ export default antfu({
     'src-tauri/target/**',
     'src-tauri/gen/**',
     'packages/app/src/lib/bindings.ts',
+    // Own workspace, own lockfile, own lint and CI job.
+    'landing/**',
   ],
 })

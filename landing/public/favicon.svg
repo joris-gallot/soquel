@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="soquel">
+  <rect width="32" height="32" rx="7" fill="#0a0a0a" />
+  <!-- The tail of the psql prompt the app shows as its wordmark: soquel=# -->
+  <g fill="#fafafa">
+    <rect x="4" y="12" width="9" height="2.6" rx="1.3" />
+    <rect x="4" y="17.4" width="9" height="2.6" rx="1.3" />
+    <rect x="16" y="11" width="12" height="2.6" rx="1.3" />
+    <rect x="16" y="18.4" width="12" height="2.6" rx="1.3" />
+    <rect x="19.2" y="7" width="2.6" height="18" rx="1.3" />
+    <rect x="24" y="7" width="2.6" height="18" rx="1.3" />
+  </g>
+</svg>

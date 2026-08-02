@@ -1176,6 +1176,18 @@ pub async fn mcp_revoke_trust(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn secrets_status(
+  state: State<'_, AppState>,
+) -> Result<crate::secrets::SecretsStatus, Error> {
+  let problem = state.secrets_problem.clone();
+  Ok(crate::secrets::SecretsStatus {
+    keychain: problem.is_none(),
+    problem,
+  })
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn check_update(
   app: tauri::AppHandle,
 ) -> Result<Option<crate::updater::UpdateInfo>, Error> {

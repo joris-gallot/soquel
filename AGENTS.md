@@ -30,6 +30,8 @@ No server/backend package: this is a desktop app. Data-layer conventions from th
 
 Secrets are keyed by `SecretKey::{Connection,Tunnel,McpToken}` (`secrets.rs`), not by a raw string: `storage_id()` produces the strings already on disk, so the keychain entries stay as they are.
 
+An OS keyring is required, not emulated: `SecretStore::probe()` runs once at startup and its failure lands in `AppState::secrets_problem`, which `secrets_status` hands to the webview. Both forms then disable the `keychain` mode and show why, and a new profile defaults to `prompt`. The app stays usable that way, since `prompt` and `command` never touch the keyring. No encrypted-file fallback: with no keyring there is nowhere safe to keep its key, so it would take a master password, a whole feature. `SOQUEL_INSECURE_FILE_SECRETS` stays what its name says, dev only.
+
 Importing reads soquel files and nothing else: parsing another client's private format is a one-shot path with permanent upkeep, and a pasted connection URL already prefills the form. Two rules hold whatever the file says: a password lands only when `import_connections` is called with `with_secrets`, and a credential command arriving in a file stays inert until approved.
 
 ## Commands

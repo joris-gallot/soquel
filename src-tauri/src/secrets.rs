@@ -32,6 +32,21 @@ pub trait SecretStore: Send + Sync {
   fn set(&self, key: &SecretKey, secret: &str) -> Result<(), Error>;
   fn get(&self, key: &SecretKey) -> Result<Option<String>, Error>;
   fn delete(&self, key: &SecretKey) -> Result<(), Error>;
+
+  /// Whether the store can hold a secret at all. Probed at startup: a session
+  /// with no keyring must not be discovered after the user typed a password.
+  fn probe(&self) -> Result<(), Error> {
+    Ok(())
+  }
+}
+
+/// What the webview needs to know about secret storage.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretsStatus {
+  pub keychain: bool,
+  /// Why the keychain is unusable, ready to show as-is.
+  pub problem: Option<String>,
 }
 
 /// OS keychain: Keychain (macOS), Credential Manager (Windows), Secret Service (Linux).
@@ -63,7 +78,32 @@ impl SecretStore for KeyringStore {
       Err(err) => Err(err.into()),
     }
   }
+
+  fn probe(&self) -> Result<(), Error> {
+    // store_status reports the init itself: Entry::new would only say "no
+    // default store", which hides why the platform backend refused.
+    match keyring::Entry::store_status() {
+      Ok(()) => Ok(()),
+      Err(err) => {
+        // The D-Bus detail is log material: in the form it buries the one
+        // sentence that says what to do.
+        log::warn!("keyring unavailable: {err}");
+        Err(Error::Secret {
+          message: KEYRING_MISSING.to_string(),
+        })
+      }
+    }
+  }
 }
+
+#[cfg(target_os = "linux")]
+const KEYRING_MISSING: &str = "No keyring on this session. Install one that speaks Secret Service \
+                               (gnome-keyring, kwallet, KeePassXC), or use \"Ask every time\" or \
+                               \"From a command\".";
+
+#[cfg(not(target_os = "linux"))]
+const KEYRING_MISSING: &str =
+  "The OS keychain did not answer. Use \"Ask every time\" or \"From a command\" to keep going.";
 
 /// Plaintext secrets on disk. Explicit opt-in for keychain-less dev machines
 /// (WSL) only: never the default, never shipped as one.
@@ -158,6 +198,11 @@ mod tests {
     assert_eq!(store.get(&key).unwrap(), Some("s3cret".to_string()));
     store.delete(&key).unwrap();
     assert_eq!(store.get(&key).unwrap(), None);
+  }
+
+  #[test]
+  fn a_store_that_holds_secrets_probes_clean() {
+    assert!(InMemoryStore::default().probe().is_ok());
   }
 
   #[test]

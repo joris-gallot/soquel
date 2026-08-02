@@ -27,6 +27,7 @@ fn app_state_with(dir: &tempfile::TempDir, secrets: Box<dyn SecretStore>) -> App
       .unwrap(),
     ),
     secrets,
+    secrets_problem: None,
     session_secrets: Default::default(),
     connections: tokio::sync::Mutex::new(HashMap::new()),
     sessions: tokio::sync::Mutex::new(HashMap::new()),

@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useConnections } from '@/composables/useConnections'
+import { useKeychain } from '@/composables/useKeychain'
 import { useTunnels } from '@/composables/useTunnels'
 import { commands } from '@/lib/bindings'
 import { AGENT_ACCESS_CHOICES, AGENT_ACCESS_LABELS, connectionSchema, CREDENTIAL_COMMAND_CAVEATS, CREDENTIAL_MODE_HINTS, CREDENTIAL_MODE_LABELS, CREDENTIAL_MODES, ENGINE_CHOICES, engineChoiceForKind, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
@@ -36,6 +37,7 @@ const emit = defineEmits<{ saved: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
 const { connections, create, update, test } = useConnections()
+const { available: keychainAvailable, problem: keychainProblem } = useKeychain()
 const { tunnels, refresh: refreshTunnels } = useTunnels()
 
 const knownGroups = computed(() =>
@@ -54,7 +56,9 @@ function groupValue(): string {
 }
 
 function emptyValues(): ConnectionFormValues {
-  return { name: '', env: 'dev', kind: 'postgres', agentAccess: 'none', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', credentialMode: 'keychain', credentialCommand: '', path: '', dbIndex: 0, tls: false, authSource: '' }
+  // No keyring to save into: asking every time is the only mode that needs no setup.
+  const credentialMode = keychainAvailable.value ? 'keychain' : 'prompt'
+  return { name: '', env: 'dev', kind: 'postgres', agentAccess: 'none', host: 'localhost', port: 5432, database: '', user: '', sslMode: 'prefer', sslRootCert: '', tunnelId: NO_TUNNEL, group: '', password: '', credentialMode, credentialCommand: '', path: '', dbIndex: 0, tls: false, authSource: '' }
 }
 
 const values = ref<ConnectionFormValues>(emptyValues())
@@ -378,6 +382,7 @@ async function save() {
                     v-for="mode in CREDENTIAL_MODES"
                     :key="mode"
                     :value="mode"
+                    :disabled="mode === 'keychain' && !keychainAvailable"
                     :data-testid="`credential-mode-${mode}`"
                   >
                     {{ CREDENTIAL_MODE_LABELS[mode] }}
@@ -386,6 +391,11 @@ async function save() {
               </Select>
             </div>
           </div>
+
+          <!-- Amber, not destructive: one mode is unavailable, nothing is broken. -->
+          <p v-if="keychainProblem" data-testid="keychain-problem" class="text-xs text-amber-600 dark:text-amber-500">
+            {{ keychainProblem }}
+          </p>
 
           <div v-if="!isSqlite" class="space-y-1.5">
             <Label v-if="values.credentialMode !== 'command'" for="conn-password">

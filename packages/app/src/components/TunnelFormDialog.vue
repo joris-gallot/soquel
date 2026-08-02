@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useKeychain } from '@/composables/useKeychain'
 import { useTunnels } from '@/composables/useTunnels'
 import { commands } from '@/lib/bindings'
 import { CREDENTIAL_MODE_HINTS, CREDENTIAL_MODE_LABELS, CREDENTIAL_MODES } from '@/lib/connections'
@@ -34,9 +35,12 @@ const emit = defineEmits<{ saved: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
 const { create, update, test } = useTunnels()
+const { available: keychainAvailable, problem: keychainProblem } = useKeychain()
 
 function emptyValues(): TunnelFormValues {
-  return { name: '', host: '', port: 22, user: '', method: 'agent', keyPath: '', secret: '', credentialMode: 'keychain', credentialCommand: '' }
+  // No keyring to save into: asking every time is the only mode that needs no setup.
+  const credentialMode = keychainAvailable.value ? 'keychain' : 'prompt'
+  return { name: '', host: '', port: 22, user: '', method: 'agent', keyPath: '', secret: '', credentialMode, credentialCommand: '' }
 }
 
 const values = ref<TunnelFormValues>(emptyValues())
@@ -245,12 +249,16 @@ async function save() {
                   v-for="mode in CREDENTIAL_MODES"
                   :key="mode"
                   :value="mode"
+                  :disabled="mode === 'keychain' && !keychainAvailable"
                   :data-testid="`tunnel-credential-mode-${mode}`"
                 >
                   {{ CREDENTIAL_MODE_LABELS[mode] }}
                 </SelectItem>
               </SelectContent>
             </Select>
+            <p v-if="keychainProblem" data-testid="tunnel-keychain-problem" class="text-xs text-amber-600 dark:text-amber-500">
+              {{ keychainProblem }}
+            </p>
           </div>
 
           <div class="space-y-1.5">

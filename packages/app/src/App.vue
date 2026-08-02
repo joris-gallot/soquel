@@ -12,6 +12,7 @@ import SecretPromptDialog from '@/components/SecretPromptDialog.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import UpdatePanel from '@/components/UpdatePanel.vue'
+import { useKeychain } from '@/composables/useKeychain'
 import { useTheme } from '@/composables/useTheme'
 import { useUpdater } from '@/composables/useUpdater'
 
@@ -22,8 +23,12 @@ const palette = ref<InstanceType<typeof CommandPalette> | null>(null)
 const { state: version } = useAsyncState(getVersion, '')
 
 const { available, panelOpen, check, listen } = useUpdater()
+const { load: loadKeychain } = useKeychain()
 
 onMounted(async () => {
+  // Before any form opens: the core probed the keyring at startup, and the
+  // credential mode a new profile defaults to depends on the answer.
+  await loadKeychain()
   await listen()
   await check()
 })

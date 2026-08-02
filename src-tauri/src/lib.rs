@@ -49,6 +49,9 @@ pub struct AppState {
   pub known_hosts: Mutex<KnownHostsStore>,
   pub command_approvals: Mutex<CommandApprovalsStore>,
   pub secrets: Box<dyn SecretStore>,
+  /// Probed once at startup: talking to the keyring on every render would be
+  /// a D-Bus round trip per keystroke in the form.
+  pub secrets_problem: Option<String>,
   pub session_secrets: SessionSecrets,
   pub connections: tokio::sync::Mutex<HashMap<String, ActiveConnection>>,
   pub sessions: tokio::sync::Mutex<HashMap<String, SessionEntry>>,
@@ -74,6 +77,7 @@ impl AppState {
         CommandApprovalsStore::load(dir.join("command_approvals.json")).unwrap(),
       ),
       secrets,
+      secrets_problem: None,
       session_secrets: SessionSecrets::default(),
       connections: tokio::sync::Mutex::new(HashMap::new()),
       sessions: tokio::sync::Mutex::new(HashMap::new()),
@@ -155,6 +159,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_resolve_approval,
       commands::mcp_trust_windows,
       commands::mcp_revoke_trust,
+      commands::secrets_status,
       commands::check_update,
       commands::install_update,
     ])
@@ -216,12 +221,14 @@ pub fn run() {
       } else {
         Box::new(KeyringStore)
       };
+      let secrets_problem = secrets.probe().err().map(|err| err.to_string());
       app.manage(AppState {
         profiles: Mutex::new(store),
         tunnels: Mutex::new(tunnels),
         known_hosts: Mutex::new(known_hosts),
         command_approvals: Mutex::new(command_approvals),
         secrets,
+        secrets_problem,
         session_secrets: SessionSecrets::default(),
         connections: tokio::sync::Mutex::new(HashMap::new()),
         sessions: tokio::sync::Mutex::new(HashMap::new()),

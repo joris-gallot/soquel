@@ -758,6 +758,7 @@ mod tests {
         .unwrap(),
       ),
       secrets: Box::new(secrets),
+      secrets_problem: None,
       session_secrets: Default::default(),
       connections: tokio::sync::Mutex::new(HashMap::from([(
         id.clone(),

@@ -106,6 +106,7 @@ export const commands = {
 	mcpResolveApproval: (id: string, answer: ApprovalAnswer) => typedError<null, Error>(__TAURI_INVOKE("mcp_resolve_approval", { id, answer })),
 	mcpTrustWindows: () => typedError<TrustWindowInfo[], Error>(__TAURI_INVOKE("mcp_trust_windows")),
 	mcpRevokeTrust: (session: string, connectionId: string) => typedError<null, Error>(__TAURI_INVOKE("mcp_revoke_trust", { session, connectionId })),
+	secretsStatus: () => typedError<SecretsStatus, Error>(__TAURI_INVOKE("secrets_status")),
 	checkUpdate: () => typedError<{
 	version: string,
 	currentVersion: string,
@@ -507,6 +508,13 @@ export type SchemaSnapshot = {
 
 /**  What a prompt is asking for; drives the dialog's wording. */
 export type SecretSubject = "connection" | "tunnel";
+
+/**  What the webview needs to know about secret storage. */
+export type SecretsStatus = {
+	keychain: boolean,
+	/**  Why the keychain is unusable, ready to show as-is. */
+	problem: string | null,
+};
 
 export type ServerNotice = {
 	severity: string,

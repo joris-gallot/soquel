@@ -26,7 +26,7 @@ ${features}
 
 ## Agent access over MCP
 
-Soquel can run a local MCP server so coding agents query databases through the app instead of getting a copy of the credentials. It is turned on from the connections screen, and the app prints the command to paste into the agent.
+Soquel can run a local MCP server so coding agents query databases through the app instead of getting a copy of the credentials. It is turned on from the connections screen. The server speaks MCP over streamable HTTP, so any compliant client works with the same URL and bearer token, whether that is Claude Code, Cursor, VS Code, Cline or something written in-house; the app prints the Claude Code one-liner because it is the shortest to paste.
 
 The guardrails are the point:
 

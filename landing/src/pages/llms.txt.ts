@@ -19,7 +19,7 @@ ${engines}
 
 ## Agent access over MCP
 
-- The app runs a local MCP server, bound to loopback, behind a bearer token that never leaves the machine. It starts stopped, and every connection is invisible to agents until opted in, one at a time.
+- The app runs a local MCP server over streamable HTTP, bound to loopback, behind a bearer token that never leaves the machine. Any compliant MCP client connects with that URL and token: Claude Code, Cursor, VS Code, Cline or a client of your own. It starts stopped, and every connection is invisible to agents until opted in, one at a time.
 - Read-only is enforced by the engine, not by a SQL parser: agent reads run inside a READ ONLY transaction on Postgres and MySQL, or on a handle opened read-only at the filesystem level on SQLite.
 - A write opens a dialog showing the exact statement. Denying it, closing it, or ignoring it for a minute all refuse.
 - Every call is logged with its tool, connection, statement, outcome and duration.

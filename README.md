@@ -28,7 +28,7 @@ A Tauri 2 desktop app: the Rust core owns everything heavy and sensitive (databa
 
 ## Agent access (MCP)
 
-Soquel can run a local MCP server so coding agents query your databases through the app instead of getting a copy of your credentials. Turn it on from the connections screen and paste the generated command into your agent:
+Soquel can run a local MCP server so coding agents query your databases through the app instead of getting a copy of your credentials. Turn it on from the connections screen and point your agent at it. Any client that speaks MCP over streamable HTTP works with the same URL and token; Claude Code takes the one-liner the app prints:
 
 ```bash
 claude mcp add --transport http soquel http://127.0.0.1:52700/mcp --header "Authorization: Bearer <token>"

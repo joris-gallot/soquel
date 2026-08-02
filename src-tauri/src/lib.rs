@@ -20,6 +20,7 @@ mod diagnostics;
 mod error;
 mod export;
 mod known_hosts;
+mod licence;
 mod mcp;
 mod mongo;
 mod mysql;
@@ -160,6 +161,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_resolve_approval,
       commands::mcp_trust_windows,
       commands::mcp_revoke_trust,
+      commands::licence_status,
+      commands::install_licence,
       commands::secrets_status,
       commands::platform,
       commands::diagnostics,

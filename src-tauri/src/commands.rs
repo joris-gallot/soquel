@@ -1186,6 +1186,29 @@ pub async fn secrets_status(
   })
 }
 
+/// Read from disk each time rather than cached in state: the file changes when
+/// the user installs one, and this is called on a dialog opening, not per frame.
+#[tauri::command]
+#[specta::specta]
+pub async fn licence_status(
+  state: State<'_, AppState>,
+) -> Result<crate::licence::LicenceStatus, Error> {
+  Ok(crate::licence::read(&licence_path(state.inner())))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn install_licence(
+  state: State<'_, AppState>,
+  token: String,
+) -> Result<crate::licence::LicenceStatus, Error> {
+  crate::licence::install(&licence_path(state.inner()), &token)
+}
+
+fn licence_path(state: &AppState) -> std::path::PathBuf {
+  state.data_dir.join("licence.txt")
+}
+
 /// The compile target, not a user agent string: the webview needs it for the
 /// modifier key it prints and the file manager it names.
 #[tauri::command]

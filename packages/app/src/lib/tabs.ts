@@ -11,6 +11,9 @@ export interface TabsState {
 
 export const EMPTY_TABS: TabsState = { tabs: [], activeId: null }
 
+/// What the free tier allows per connection. Infinity once a licence unlocks it.
+export const FREE_TABS = 2
+
 /// Activates the existing tab for that table (replacing its initial filters),
 /// or appends a new one.
 export function openTableTab(
@@ -18,6 +21,7 @@ export function openTableTab(
   schema: string,
   table: string,
   filters?: ColumnFilter[],
+  limit = Number.POSITIVE_INFINITY,
 ): TabsState {
   const existing = state.tabs.find(
     tab => tab.type === 'table' && tab.schema === schema && tab.table === table,
@@ -30,6 +34,10 @@ export function openTableTab(
       activeId: existing.id,
     }
   }
+  // Only opening is limited. Re-activating a tab that is already there adds
+  // nothing, and refusing it would block navigation instead of a purchase.
+  if (state.tabs.length >= limit)
+    return state
   const tab: WorkspaceTab = {
     id: crypto.randomUUID(),
     type: 'table',
@@ -40,7 +48,9 @@ export function openTableTab(
   return { tabs: [...state.tabs, tab], activeId: tab.id }
 }
 
-export function openSqlTab(state: TabsState): TabsState {
+export function openSqlTab(state: TabsState, limit = Number.POSITIVE_INFINITY): TabsState {
+  if (state.tabs.length >= limit)
+    return state
   const taken = state.tabs
     .filter(tab => tab.type === 'sql')
     .map(tab => Number.parseInt(tab.title.replace('sql ', ''), 10))

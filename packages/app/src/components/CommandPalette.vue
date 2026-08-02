@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDownToLine, ClipboardList, Moon, Plug, Plus, Sun } from '@lucide/vue'
+import { ArrowDownToLine, ClipboardList, KeyRound, Moon, Plug, Plus, Sun } from '@lucide/vue'
 import { useMagicKeys, whenever } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/command'
 import { useCommandApproval } from '@/composables/useCommandApproval'
 import { useConnections } from '@/composables/useConnections'
+import { useLicence } from '@/composables/useLicence'
 import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { useTheme } from '@/composables/useTheme'
 import { useUpdater } from '@/composables/useUpdater'
@@ -29,6 +30,7 @@ const { intercept: interceptSecret } = useSecretPrompt()
 const { intercept: interceptCommand } = useCommandApproval()
 const { mode, toggle } = useTheme()
 const { panelOpen, check: checkForUpdate } = useUpdater()
+const { panelOpen: licenceOpen } = useLicence()
 
 const sections = computed(() => groupConnections(connections.value))
 
@@ -70,6 +72,11 @@ function newConnection() {
 function toggleTheme() {
   open.value = false
   toggle()
+}
+
+function showLicence() {
+  open.value = false
+  licenceOpen.value = true
 }
 
 function showDiagnostics() {
@@ -126,6 +133,10 @@ defineExpose({ open })
         <CommandItem value="check for updates" @select="checkForUpdates">
           <ArrowDownToLine />
           <span>Check for updates</span>
+        </CommandItem>
+        <CommandItem value="licence license unlock buy" @select="showLicence">
+          <KeyRound />
+          <span>Licence</span>
         </CommandItem>
         <CommandItem value="diagnostics logs support bug report" @select="showDiagnostics">
           <ClipboardList />

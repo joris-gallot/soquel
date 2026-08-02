@@ -93,6 +93,18 @@ Weight: Rust integration against real databases is the core; unit tests for pure
 - Add Tauri plugins with `pnpm tauri add <name>`; their permissions go in `src-tauri/capabilities/default.json`.
 - No remote assets in the webview (fonts, scripts): the app must work offline and keep a strict CSP. Bundle everything.
 
+### Licence and the free tier
+
+`licence.rs` validates offline against the public key compiled into the binary; the format is public in `docs/licence-format.md` so a buyer can check their own file. The signature is verified over the **stored bytes**, never a re-serialised payload, and the algorithm is hardcoded rather than read from the token.
+
+The window is compared against `SOQUEL_BUILD_DATE`, stamped by `build.rs`, not against the wall clock: moving the system clock must not switch a licence off, and a build has to know when it was made to tell whether a licence covers it.
+
+**Three states, not two.** `Free`, `Licensed`, and `Expired` for a signature that verifies against a window that closed before this build. Collapsing `Expired` into `Free` is what turns a lapsed renewal into a bug report.
+
+The public key is a parameter with the constant as its default: inline, no test could sign with a key it holds.
+
+The limit is two tabs **per connection**, enforced in the pure functions of `lib/tabs.ts`. Only opening counts: `openTableTab` re-activating a tab that is already there must always pass, or the limit blocks navigation instead of a purchase.
+
 ### Logs and diagnostics
 
 `diagnostics.rs` owns both. The log plugin is registered on the builder chain, not in `setup`, so anything logged while starting up (the keyring probe first of all) is captured. One file target always, Stdout only in debug (a bundle has no console). The log dir derives from the identifier and is therefore shared, so the file name is what separates them: `soquel-dev.log` in debug, `soquel.log` in release. With `SOQUEL_DATA_DIR` set, logs go to `<data dir>/logs` so an e2e run is as isolated for its logs as for its data.

@@ -1,6 +1,6 @@
 import type { TabsState } from './tabs'
 import { describe, expect, it } from 'vitest'
-import { activateSibling, closeTab, EMPTY_TABS, openSqlTab, openTableTab } from './tabs'
+import { activateSibling, closeTab, EMPTY_TABS, FREE_TABS, openSqlTab, openTableTab } from './tabs'
 
 function tableTab(state: TabsState, index: number) {
   const tab = state.tabs[index]
@@ -82,5 +82,35 @@ describe('activateSibling', () => {
     expect(state.activeId).toBe(state.tabs[0].id)
     state = activateSibling(state, -1)
     expect(state.activeId).toBe(state.tabs[1].id)
+  })
+})
+
+describe('the free tier limit', () => {
+  const full = openSqlTab(openSqlTab(EMPTY_TABS, FREE_TABS), FREE_TABS)
+
+  it('refuses a third tab, of either kind', () => {
+    expect(full.tabs).toHaveLength(2)
+    expect(openSqlTab(full, FREE_TABS)).toBe(full)
+    expect(openTableTab(full, 'public', 'orders', undefined, FREE_TABS)).toBe(full)
+  })
+
+  it('still activates a tab that is already open', () => {
+    // Re-activating opens nothing. Refusing it would block navigation between
+    // the tabs someone already has, which is not what the limit is for.
+    const opened = openTableTab(EMPTY_TABS, 'public', 'users', undefined, FREE_TABS)
+    const two = openSqlTab(opened, FREE_TABS)
+    expect(two.tabs).toHaveLength(2)
+
+    const back = openTableTab(two, 'public', 'users', undefined, FREE_TABS)
+
+    expect(back.tabs).toHaveLength(2)
+    expect(back.activeId).toBe(opened.activeId)
+  })
+
+  it('opens without limit when none is given', () => {
+    let state = EMPTY_TABS
+    for (let i = 0; i < 5; i++)
+      state = openSqlTab(state)
+    expect(state.tabs).toHaveLength(5)
   })
 })

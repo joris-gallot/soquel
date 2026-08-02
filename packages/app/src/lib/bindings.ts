@@ -106,6 +106,12 @@ export const commands = {
 	mcpResolveApproval: (id: string, answer: ApprovalAnswer) => typedError<null, Error>(__TAURI_INVOKE("mcp_resolve_approval", { id, answer })),
 	mcpTrustWindows: () => typedError<TrustWindowInfo[], Error>(__TAURI_INVOKE("mcp_trust_windows")),
 	mcpRevokeTrust: (session: string, connectionId: string) => typedError<null, Error>(__TAURI_INVOKE("mcp_revoke_trust", { session, connectionId })),
+	/**
+	 *  Read from disk each time rather than cached in state: the file changes when
+	 *  the user installs one, and this is called on a dialog opening, not per frame.
+	 */
+	licenceStatus: () => typedError<LicenceStatus, Error>(__TAURI_INVOKE("licence_status")),
+	installLicence: (token: string) => typedError<LicenceStatus, Error>(__TAURI_INVOKE("install_licence", { token })),
 	secretsStatus: () => typedError<SecretsStatus, Error>(__TAURI_INVOKE("secrets_status")),
 	/**
 	 *  The compile target, not a user agent string: the webview needs it for the
@@ -416,6 +422,14 @@ export type KvDatabases = {
 	/**  Non-empty databases with their key counts. */
 	used: KvDatabaseKeys[],
 };
+
+/**
+ *  Three states, not two: a lapsed window looks exactly like no licence at all
+ *  unless it says so, and that is what gets reported as a regression.
+ */
+export type LicenceStatus = { kind: "free" } | { kind: "licensed"; email: string; name: string | null; updatesUntil: string } | 
+/**  Signature is good, the window closed before this build was made. */
+{ kind: "expired"; email: string; updatesUntil: string };
 
 /**  The MCP call stays blocked until this is answered. */
 export type McpApprovalRequest = {

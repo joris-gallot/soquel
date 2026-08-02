@@ -8,12 +8,14 @@ import CommandApprovalDialog from '@/components/CommandApprovalDialog.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import DiagnosticsDialog from '@/components/DiagnosticsDialog.vue'
 import HostKeyDialog from '@/components/HostKeyDialog.vue'
+import LicenceDialog from '@/components/LicenceDialog.vue'
 import McpApprovalDialog from '@/components/McpApprovalDialog.vue'
 import SecretPromptDialog from '@/components/SecretPromptDialog.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import UpdatePanel from '@/components/UpdatePanel.vue'
 import { useKeychain } from '@/composables/useKeychain'
+import { useLicence } from '@/composables/useLicence'
 import { useOs } from '@/composables/useOs'
 import { useTheme } from '@/composables/useTheme'
 import { useUpdater } from '@/composables/useUpdater'
@@ -27,12 +29,14 @@ const { state: version } = useAsyncState(getVersion, '')
 
 const { available, panelOpen, check, listen } = useUpdater()
 const { load: loadKeychain } = useKeychain()
+const { panelOpen: licenceOpen, load: loadLicence } = useLicence()
 const { paletteShortcut, load: loadOs } = useOs()
 
 onMounted(async () => {
   // Before any form opens: the core probed the keyring at startup, and the
   // credential mode a new profile defaults to depends on the answer.
   await loadKeychain()
+  await loadLicence()
   await loadOs()
   await listen()
   await check()
@@ -91,6 +95,7 @@ onMounted(async () => {
       <McpApprovalDialog />
       <UpdatePanel v-model:open="panelOpen" />
       <DiagnosticsDialog v-model:open="diagnosticsOpen" />
+      <LicenceDialog v-model:open="licenceOpen" />
       <Toaster />
     </div>
   </TooltipProvider>

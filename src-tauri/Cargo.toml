@@ -31,7 +31,7 @@ tauri-specta = { version = "=2.0.0-rc.25", features = [
   "typescript"
 ] }
 thiserror = "2.0.19"
-uuid = { version = "1", features = [ "v4" ] }
+uuid = { version = "1.24.0", features = [ "v4" ] }
 keyring = "4.1.6"
 async-trait = "0.1.91"
 tokio-postgres = "0.7"

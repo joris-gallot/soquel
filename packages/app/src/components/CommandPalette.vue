@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ArrowDownToLine, Moon, Plug, Plus, Sun } from '@lucide/vue'
-import { useMagicKeys, whenever } from '@vueuse/core'
+import { ArrowDownToLine, ClipboardList, FolderOpen, Moon, Plug, Plus, Sun } from '@lucide/vue'
+import { useClipboard, useMagicKeys, whenever } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -19,7 +19,9 @@ import { useConnections } from '@/composables/useConnections'
 import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { useTheme } from '@/composables/useTheme'
 import { useUpdater } from '@/composables/useUpdater'
+import { commands } from '@/lib/bindings'
 import { connectionTarget, groupConnections } from '@/lib/connections'
+import { unwrap } from '@/lib/result'
 
 const router = useRouter()
 const { connections, connect, activeIds } = useConnections()
@@ -27,6 +29,7 @@ const { intercept: interceptSecret } = useSecretPrompt()
 const { intercept: interceptCommand } = useCommandApproval()
 const { mode, toggle } = useTheme()
 const { panelOpen, check: checkForUpdate } = useUpdater()
+const { copy } = useClipboard({ legacy: true })
 
 const sections = computed(() => groupConnections(connections.value))
 
@@ -68,6 +71,27 @@ function newConnection() {
 function toggleTheme() {
   open.value = false
   toggle()
+}
+
+async function copyDiagnostics() {
+  open.value = false
+  try {
+    await copy(unwrap(await commands.diagnostics()))
+    toast.success('Diagnostics copied. It carries no connection names.')
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function openLogFolder() {
+  open.value = false
+  try {
+    unwrap(await commands.openLogFolder())
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  }
 }
 
 async function checkForUpdates() {
@@ -119,6 +143,14 @@ defineExpose({ open })
         <CommandItem value="check for updates" @select="checkForUpdates">
           <ArrowDownToLine />
           <span>Check for updates</span>
+        </CommandItem>
+        <CommandItem value="copy diagnostics support bug report" @select="copyDiagnostics">
+          <ClipboardList />
+          <span>Copy diagnostics</span>
+        </CommandItem>
+        <CommandItem value="open log folder logs" @select="openLogFolder">
+          <FolderOpen />
+          <span>Open log folder</span>
         </CommandItem>
       </CommandGroup>
     </CommandList>

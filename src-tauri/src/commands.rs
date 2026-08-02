@@ -1186,6 +1186,23 @@ pub async fn secrets_status(
   })
 }
 
+/// One preformatted block: the shape is the product, and a struct would move the
+/// formatting to the webview where the facts do not live.
+#[tauri::command]
+#[specta::specta]
+pub async fn diagnostics(
+  app: tauri::AppHandle,
+  state: State<'_, AppState>,
+) -> Result<String, Error> {
+  Ok(crate::diagnostics::block(&app, state.inner()).await)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn open_log_folder(app: tauri::AppHandle) -> Result<(), Error> {
+  crate::diagnostics::open_log_folder(&app)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn check_update(

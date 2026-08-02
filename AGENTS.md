@@ -90,6 +90,14 @@ Weight: Rust integration against real databases is the core; unit tests for pure
 - Add Tauri plugins with `pnpm tauri add <name>`; their permissions go in `src-tauri/capabilities/default.json`.
 - No remote assets in the webview (fonts, scripts): the app must work offline and keep a strict CSP. Bundle everything.
 
+### Logs and diagnostics
+
+`diagnostics.rs` owns both. The log plugin is registered on the builder chain, not in `setup`, so anything logged while starting up (the keyring probe first of all) is captured. One file target always, Stdout only in debug (a bundle has no console). The log dir derives from the identifier and is therefore shared, so the file name is what separates them: `soquel-dev.log` in debug, `soquel.log` in release. With `SOQUEL_DATA_DIR` set, logs go to `<data dir>/logs` so an e2e run is as isolated for its logs as for its data.
+
+Levels: `Warn` globally, `Info` for `soquel_lib`. An `Info` floor everywhere buries our lines under russh, hyper and rustls.
+
+`diagnostics` returns one preformatted block, built in the core where the facts are. It carries **no connection names, no hosts, no database paths** and never the log's contents: it is meant to be pasted into a public issue, and driver errors in the log can hold a table name or a query fragment. Counts per kind are enough to triage. The webview reaches both this and `open_log_folder` through the command layer, so `tauri-plugin-opener` is a Rust-only dependency with no `opener:` permission in the capabilities.
+
 ### Updater
 
 `src-tauri/src/updater.rs` wraps the Tauri updater behind `check_update` / `install_update`, so the webview never touches the plugin's own JS API and `capabilities/default.json` needs no `updater:` permission. Download progress rides the `UpdateProgress` event; `install_update` only ever returns on failure, since a successful install restarts the app.

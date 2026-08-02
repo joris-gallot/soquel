@@ -16,6 +16,7 @@ mod command_approvals;
 mod commands;
 mod connectors;
 mod credentials;
+mod diagnostics;
 mod error;
 mod export;
 mod known_hosts;
@@ -160,6 +161,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_trust_windows,
       commands::mcp_revoke_trust,
       commands::secrets_status,
+      commands::diagnostics,
+      commands::open_log_folder,
       commands::check_update,
       commands::install_update,
     ])
@@ -190,17 +193,14 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(tauri_plugin_opener::init())
+    // Registered on the builder rather than in setup: the chain runs first, so
+    // the keyring probe and everything else at startup lands in the log.
+    .plugin(diagnostics::log_plugin())
     .invoke_handler(builder.invoke_handler())
     .setup(move |app| {
       // Typed event channel for the approval dialog.
       builder.mount_events(app);
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
       // SOQUEL_DATA_DIR isolates e2e runs from the real app data; debug builds
       // get their own subtree so `tauri dev` never touches an installed
       // release's connections.

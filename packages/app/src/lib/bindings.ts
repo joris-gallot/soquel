@@ -107,6 +107,12 @@ export const commands = {
 	mcpTrustWindows: () => typedError<TrustWindowInfo[], Error>(__TAURI_INVOKE("mcp_trust_windows")),
 	mcpRevokeTrust: (session: string, connectionId: string) => typedError<null, Error>(__TAURI_INVOKE("mcp_revoke_trust", { session, connectionId })),
 	secretsStatus: () => typedError<SecretsStatus, Error>(__TAURI_INVOKE("secrets_status")),
+	/**
+	 *  One preformatted block: the shape is the product, and a struct would move the
+	 *  formatting to the webview where the facts do not live.
+	 */
+	diagnostics: () => typedError<string, Error>(__TAURI_INVOKE("diagnostics")),
+	openLogFolder: () => typedError<null, Error>(__TAURI_INVOKE("open_log_folder")),
 	checkUpdate: () => typedError<{
 	version: string,
 	currentVersion: string,

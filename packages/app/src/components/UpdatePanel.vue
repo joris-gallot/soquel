@@ -14,7 +14,7 @@ import { useUpdater } from '@/composables/useUpdater'
 
 const open = defineModel<boolean>('open', { required: true })
 
-const { available, downloading, downloaded, total, progress, install } = useUpdater()
+const { available, downloading, progress, installing, install } = useUpdater()
 
 const error = ref<string | null>(null)
 
@@ -25,11 +25,6 @@ const publishedOn = computed(() => {
   const date = new Date(raw)
   return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString()
 })
-
-// The installer runs after the last chunk, before the app is replaced.
-const installing = computed(() =>
-  downloading.value && total.value !== null && downloaded.value >= total.value,
-)
 
 async function run() {
   error.value = null

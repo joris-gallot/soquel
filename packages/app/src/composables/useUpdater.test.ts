@@ -1,5 +1,8 @@
+import type { UpdateProgress } from '@/lib/bindings'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useUpdater } from './useUpdater'
+
+let emitProgress: ((event: { payload: UpdateProgress }) => void) | null = null
 
 const update = {
   version: '0.1.1',
@@ -27,7 +30,14 @@ vi.mock('@/lib/bindings', () => ({
         : { status: 'ok', data: null },
     ),
   },
-  events: { updateProgress: { listen: vi.fn(async () => () => {}) } },
+  events: {
+    updateProgress: {
+      listen: vi.fn(async (handler: (event: { payload: UpdateProgress }) => void) => {
+        emitProgress = handler
+        return () => {}
+      }),
+    },
+  },
 }))
 
 describe('useUpdater', () => {
@@ -83,5 +93,40 @@ describe('useUpdater', () => {
     total.value = 400
     downloaded.value = 100
     expect(progress.value).toBe(0.25)
+  })
+
+  it('switches to installing once the last chunk landed', () => {
+    const { downloading, downloaded, total, installing } = useUpdater()
+    downloading.value = true
+    total.value = 400
+
+    downloaded.value = 399
+    expect(installing.value).toBe(false)
+
+    downloaded.value = 400
+    expect(installing.value).toBe(true)
+  })
+
+  // specta renders the core's f64 as `number | null`, so the event can carry
+  // null where Rust promised a number.
+  it('reads a null byte count as zero rather than leaving the bar empty', async () => {
+    const { listen, downloaded, total } = useUpdater()
+    await listen()
+
+    emitProgress!({ payload: { downloaded: 2048, total: 4096 } })
+    expect(downloaded.value).toBe(2048)
+    expect(total.value).toBe(4096)
+
+    emitProgress!({ payload: { downloaded: null, total: null } })
+    expect(downloaded.value).toBe(0)
+    expect(total.value).toBeNull()
+  })
+
+  it('is not installing while the total is still unknown', () => {
+    const { downloading, downloaded, installing } = useUpdater()
+    downloading.value = true
+    downloaded.value = 400
+
+    expect(installing.value).toBe(false)
   })
 })

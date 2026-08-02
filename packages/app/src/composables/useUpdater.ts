@@ -52,5 +52,21 @@ export function useUpdater() {
     return Math.min(1, downloaded.value / total.value)
   })
 
-  return { available, panelOpen, downloading, downloaded, total, progress, check, install, listen }
+  /// The installer runs after the last chunk, while the app is still up.
+  const installing = computed(() =>
+    downloading.value && total.value !== null && downloaded.value >= total.value,
+  )
+
+  return {
+    available,
+    panelOpen,
+    downloading,
+    downloaded,
+    total,
+    progress,
+    installing,
+    check,
+    install,
+    listen,
+  }
 }

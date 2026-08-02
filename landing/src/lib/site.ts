@@ -49,6 +49,31 @@ export const DEB = {
   url: null as string | null,
 }
 
+/// Set a src and the shot takes over. Dark theme only: a dark capture reads on
+/// either page theme, and light and dark pairs double the upkeep for little.
+/// Market seed only, never a real database, or hostnames and connection names
+/// ship to a public page.
+export const HERO_SHOT = {
+  src: null as string | null,
+  alt: 'Soquel with an agent asking to run a write, over the table browser',
+  spec: 'Table browser with the approval dialog open, market seed, dark, 1440x900',
+}
+
+export const SHOTS = [
+  {
+    src: null as string | null,
+    alt: 'The soquel SQL editor showing a query plan as a tree',
+    caption: 'The SQL editor renders EXPLAIN as a tree, not a wall of text.',
+    spec: 'SQL editor + EXPLAIN tree, market seed, dark, 1440x900',
+  },
+  {
+    src: null as string | null,
+    alt: 'The soquel MCP panel with its audit log',
+    caption: 'Every agent call, its statement and its outcome, readable in the app.',
+    spec: 'MCP panel + audit log, market seed, dark, 1440x900',
+  },
+]
+
 export const ENGINES = [
   { name: 'PostgreSQL', note: '14 and up' },
   { name: 'MySQL, MariaDB', note: 'MySQL 8.0 and up, MariaDB LTS' },

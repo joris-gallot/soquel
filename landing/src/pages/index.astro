@@ -5,7 +5,10 @@ import Shot from '@/components/Shot.astro'
 import SiteFooter from '@/components/SiteFooter.astro'
 import SiteHeader from '@/components/SiteHeader.astro'
 import Base from '@/layouts/Base.astro'
-import { ENGINES, FEATURES } from '@/lib/site'
+import { ENGINES, FEATURES, HERO_SHOT, SHOTS } from '@/lib/site'
+
+/// The frames only stand in during development, so the gap they leave has to go too.
+const shotsShown = SHOTS.some(shot => shot.src) || import.meta.env.MODE !== 'production'
 
 const guardrails = [
   {
@@ -30,27 +33,6 @@ const guardrails = [
 ]
 
 
-// Dark theme only: a dark shot reads on either page theme, and light/dark pairs
-// double the capture and the upkeep for little gain. Market seed only, never a
-// real database: hostnames and connection names would ship to a public page.
-const shots = [
-  {
-    alt: 'The soquel table browser, editing a row inline',
-    caption: 'Table browser. Edits are staged, then written in one transaction.',
-    spec: 'Table browser, market seed, dark, 1440x900',
-  },
-  {
-    alt: 'The soquel SQL editor showing a query plan as a tree',
-    caption: 'The SQL editor renders EXPLAIN as a tree, not a wall of text.',
-    spec: 'SQL editor + EXPLAIN tree, market seed, dark, 1440x900',
-  },
-  {
-    alt: 'The soquel MCP panel with its audit log',
-    caption: 'Every agent call, its statement and its outcome, readable in the app.',
-    spec: 'MCP panel + audit log, market seed, dark, 1440x900',
-  },
-]
-
 ---
 
 <Base>
@@ -73,7 +55,11 @@ const shots = [
         </p>
 
         <div class="mt-12">
-          <ApprovalCard />
+          {
+            HERO_SHOT.src
+              ? <Shot src={HERO_SHOT.src} alt={HERO_SHOT.alt} spec={HERO_SHOT.spec} />
+              : <ApprovalCard />
+          }
         </div>
       </section>
 
@@ -123,9 +109,13 @@ const shots = [
           }
         </ul>
 
-        <div class="mt-12 space-y-10">
-          {shots.map(shot => <Shot {...shot} />)}
-        </div>
+        {
+          shotsShown && (
+            <div class="mt-12 space-y-10">
+              {SHOTS.map(shot => <Shot {...shot} />)}
+            </div>
+          )
+        }
       </section>
 
       <section class="border-t border-rule py-14">

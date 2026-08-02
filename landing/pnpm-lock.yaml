@@ -18,7 +18,7 @@ importers:
         specifier: ^4.1.16
         version: 4.3.3(vite@6.4.3(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0))
       astro:
-        specifier: ^5.15.9
+        specifier: ^5.18.2
         version: 5.18.2(jiti@2.7.0)(lightningcss@1.32.0)(rollup@4.62.4)(typescript@5.9.3)(yaml@2.9.0)
       tailwindcss:
         specifier: ^4.1.16
@@ -28,7 +28,7 @@ importers:
         specifier: ^9.2.0
         version: 9.2.0(@typescript-eslint/typescript-estree@8.65.0(typescript@5.9.3))(@typescript-eslint/utils@8.65.0(eslint@10.8.0(jiti@2.7.0))(typescript@5.9.3))(@vue/compiler-sfc@3.5.40)(astro-eslint-parser@3.0.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(eslint-plugin-astro@3.0.1(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)(@typescript-eslint/parser@8.65.0(eslint@10.8.0(jiti@2.7.0))(typescript@5.9.3))(eslint@10.8.0(jiti@2.7.0)))(eslint@10.8.0(jiti@2.7.0))(typescript@5.9.3)
       '@astrojs/check':
-        specifier: ^0.9.5
+        specifier: ^0.9.10
         version: 0.9.10(prettier@3.9.6)(typescript@5.9.3)
       astro-eslint-parser:
         specifier: ^3.0.0

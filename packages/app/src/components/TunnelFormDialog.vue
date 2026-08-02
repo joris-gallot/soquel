@@ -25,7 +25,7 @@ import {
 import { useKeychain } from '@/composables/useKeychain'
 import { useTunnels } from '@/composables/useTunnels'
 import { commands } from '@/lib/bindings'
-import { CREDENTIAL_MODE_HINTS, CREDENTIAL_MODE_LABELS, CREDENTIAL_MODES } from '@/lib/connections'
+import { CREDENTIAL_MODE_HINTS, CREDENTIAL_MODE_LABELS, CREDENTIAL_MODES, defaultCredentialMode } from '@/lib/connections'
 import { CommandError, unwrap } from '@/lib/result'
 import { SSH_AUTH_HINTS, SSH_AUTH_LABELS, SSH_AUTH_METHODS, SSH_AUTH_NEEDS_SECRET, toTunnelInput, tunnelFormValues, tunnelSchema } from '@/lib/tunnels'
 import { zodFieldErrors } from '@/lib/validation'
@@ -38,8 +38,7 @@ const { create, update, test } = useTunnels()
 const { available: keychainAvailable, problem: keychainProblem } = useKeychain()
 
 function emptyValues(): TunnelFormValues {
-  // No keyring to save into: asking every time is the only mode that needs no setup.
-  const credentialMode = keychainAvailable.value ? 'keychain' : 'prompt'
+  const credentialMode = defaultCredentialMode(keychainAvailable.value)
   return { name: '', host: '', port: 22, user: '', method: 'agent', keyPath: '', secret: '', credentialMode, credentialCommand: '' }
 }
 

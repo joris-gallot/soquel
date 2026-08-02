@@ -67,6 +67,12 @@ export const CREDENTIAL_MODE_HINTS: Record<CredentialMode, string | null> = {
   command: null,
 }
 
+/// A keyring-less session has nothing to save into, and the form disables that
+/// mode: a new profile must not open on it.
+export function defaultCredentialMode(keychainAvailable: boolean): CredentialMode {
+  return keychainAvailable ? 'keychain' : 'prompt'
+}
+
 /// Connectors whose driver holds the credential for the connection's life, so a
 /// token that expires mid-session is not replayed. Null where the pool re-resolves.
 export const CREDENTIAL_COMMAND_CAVEATS: Record<ConnectorKind, string | null> = {

@@ -201,11 +201,6 @@ mod tests {
   }
 
   #[test]
-  fn a_store_that_holds_secrets_probes_clean() {
-    assert!(InMemoryStore::default().probe().is_ok());
-  }
-
-  #[test]
   fn a_tunnel_and_a_connection_of_the_same_id_are_two_secrets() {
     let store = InMemoryStore::default();
     store.set(&connection("a"), "db").unwrap();

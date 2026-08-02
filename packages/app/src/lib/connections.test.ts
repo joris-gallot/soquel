@@ -1,6 +1,6 @@
 import type { ConnectionProfile } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { connectionDsn, connectionSchema, connectionTarget, CREDENTIAL_COMMAND_CAVEATS, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, serverBadge, toConnectionInput } from './connections'
+import { connectionDsn, connectionSchema, connectionTarget, CREDENTIAL_COMMAND_CAVEATS, defaultCredentialMode, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, serverBadge, toConnectionInput } from './connections'
 import { zodFieldErrors } from './validation'
 
 function profile(name: string, group: string | null): ConnectionProfile {
@@ -185,6 +185,15 @@ describe('portForKindChange', () => {
   it('never touches a hand-set port', () => {
     expect(portForKindChange(5471, 'postgres', 'mysql')).toBe(5471)
     expect(portForKindChange('5471', 'mysql', 'postgres')).toBe('5471')
+  })
+})
+
+describe('defaultCredentialMode', () => {
+  // Shared by both forms. Opening on a mode the select disables would leave the
+  // user staring at a greyed-out choice they never made.
+  it('never opens a new profile on a keychain that cannot answer', () => {
+    expect(defaultCredentialMode(false)).toBe('prompt')
+    expect(defaultCredentialMode(true)).toBe('keychain')
   })
 })
 

@@ -27,7 +27,7 @@ import { Switch } from '@/components/ui/switch'
 import { useConnections } from '@/composables/useConnections'
 import { useTunnels } from '@/composables/useTunnels'
 import { commands } from '@/lib/bindings'
-import { AGENT_ACCESS_CHOICES, AGENT_ACCESS_LABELS, connectionSchema, CREDENTIAL_MODE_HINTS, CREDENTIAL_MODE_LABELS, CREDENTIAL_MODES, ENGINE_CHOICES, engineChoiceForKind, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
+import { AGENT_ACCESS_CHOICES, AGENT_ACCESS_LABELS, connectionSchema, CREDENTIAL_COMMAND_CAVEATS, CREDENTIAL_MODE_HINTS, CREDENTIAL_MODE_LABELS, CREDENTIAL_MODES, ENGINE_CHOICES, engineChoiceForKind, ENVS, formValuesFromProfile, NO_TUNNEL, parseConnectionUrl, portForKindChange, SSL_MODES, toConnectionInput } from '@/lib/connections'
 import { CommandError } from '@/lib/result'
 import { zodFieldErrors } from '@/lib/validation'
 
@@ -87,6 +87,7 @@ async function browsePath() {
 
 const commandArgv = ref<string[]>([])
 const commandProblem = ref<string | null>(null)
+const commandCaveat = computed(() => CREDENTIAL_COMMAND_CAVEATS[values.value.kind])
 
 // The core owns the splitting rules; previewing them here would drift.
 watch(() => [values.value.credentialMode, values.value.credentialCommand] as const, async ([mode, command]) => {
@@ -416,6 +417,9 @@ async function save() {
               </p>
               <p v-else-if="commandArgv.length" data-testid="credential-command-argv" class="font-mono text-xs text-muted-foreground">
                 runs: <span v-for="(arg, index) in commandArgv" :key="index" class="mr-1 rounded bg-muted px-1 py-0.5">{{ arg }}</span>
+              </p>
+              <p v-if="commandCaveat" data-testid="credential-command-caveat" class="text-xs text-muted-foreground">
+                {{ commandCaveat }}
               </p>
               <p class="text-xs text-muted-foreground">
                 No shell: {{ '{host}' }} {{ '{port}' }} {{ '{user}' }} {{ '{database}' }} are substituted, pipes and $(...) are not supported.

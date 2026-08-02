@@ -59,10 +59,22 @@ export const CREDENTIAL_MODE_LABELS: Record<CredentialMode, string> = {
   command: 'From a command',
 }
 
-export const CREDENTIAL_MODE_HINTS: Record<CredentialMode, string> = {
+/// Null where the mode's own fields carry the explanation (the command branch
+/// shows its argv preview and parsing rules).
+export const CREDENTIAL_MODE_HINTS: Record<CredentialMode, string | null> = {
   keychain: 'Stored in the OS keychain and reused on every connection.',
   prompt: 'Nothing is stored: soquel asks when you connect.',
-  command: 'Runs the command and uses its output. For short-lived tokens (RDS IAM, Vault, 1Password).',
+  command: null,
+}
+
+/// Connectors whose driver holds the credential for the connection's life, so a
+/// token that expires mid-session is not replayed. Null where the pool re-resolves.
+export const CREDENTIAL_COMMAND_CAVEATS: Record<ConnectorKind, string | null> = {
+  postgres: null,
+  mysql: null,
+  sqlite: null,
+  redis: 'Read once at connect and never refreshed: an expired token needs a manual reconnect.',
+  mongo: 'Read once at connect and never refreshed: once it expires new pooled connections fail, and you have to reconnect.',
 }
 
 export const NO_TUNNEL = 'none'

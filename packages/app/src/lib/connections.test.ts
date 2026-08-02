@@ -1,6 +1,6 @@
 import type { ConnectionProfile } from '@/lib/bindings'
 import { describe, expect, it } from 'vitest'
-import { connectionDsn, connectionSchema, connectionTarget, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, serverBadge, toConnectionInput } from './connections'
+import { connectionDsn, connectionSchema, connectionTarget, CREDENTIAL_COMMAND_CAVEATS, formValuesFromProfile, groupConnections, parseConnectionUrl, portForKindChange, serverBadge, toConnectionInput } from './connections'
 import { zodFieldErrors } from './validation'
 
 function profile(name: string, group: string | null): ConnectionProfile {
@@ -185,6 +185,18 @@ describe('portForKindChange', () => {
   it('never touches a hand-set port', () => {
     expect(portForKindChange(5471, 'postgres', 'mysql')).toBe(5471)
     expect(portForKindChange('5471', 'mysql', 'postgres')).toBe('5471')
+  })
+})
+
+describe('credential command caveats', () => {
+  // Redis and Mongo hold the credential for the connection's life; the SQL
+  // pools re-resolve it. Teaching one of them to refresh means dropping its line.
+  it('warns for the connectors that cannot replay auth, and only those', () => {
+    const warned = Object.entries(CREDENTIAL_COMMAND_CAVEATS)
+      .filter(([, caveat]) => caveat !== null)
+      .map(([kind]) => kind)
+
+    expect(warned.sort()).toEqual(['mongo', 'redis'])
   })
 })
 

@@ -15,6 +15,40 @@ export const ANALYTICS = {
   websiteId: 'b7a0fa9f-be4b-41eb-88eb-4be7db1dc3c4',
 } as const
 
+/// Set a url and the button goes live: the section reads as pre-release for as
+/// long as they are all null, so the page is honest in both states.
+/// Formats follow the packaging plan: universal dmg, NSIS installer, AppImage
+/// (the only Linux format the Tauri updater can replace) and a deb that cannot.
+export const DOWNLOADS = [
+  {
+    platform: 'macOS',
+    detail: 'Universal, Apple Silicon and Intel',
+    format: 'dmg',
+    event: 'download-macos',
+    url: null as string | null,
+  },
+  {
+    platform: 'Windows',
+    detail: 'Installer, x64',
+    format: 'exe',
+    event: 'download-windows',
+    url: null as string | null,
+  },
+  {
+    platform: 'Linux',
+    detail: 'AppImage, updates itself',
+    format: 'AppImage',
+    event: 'download-linux-appimage',
+    url: null as string | null,
+  },
+]
+
+/// Packaged for convenience, but the updater cannot replace a deb: it says so.
+export const DEB = {
+  event: 'download-linux-deb',
+  url: null as string | null,
+}
+
 export const ENGINES = [
   { name: 'PostgreSQL', note: '14 and up' },
   { name: 'MySQL, MariaDB', note: 'MySQL 8.0 and up, MariaDB LTS' },

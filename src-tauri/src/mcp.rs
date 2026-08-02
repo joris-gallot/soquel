@@ -91,6 +91,18 @@ fn check_port(port: u16) -> Result<(), Error> {
   Ok(())
 }
 
+/// std bind: reports "port in use" synchronously and defers reactor
+/// registration to the runtime that actually serves.
+fn bind(port: u16) -> Result<std::net::TcpListener, Error> {
+  check_port(port)?;
+  std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|err| match err.kind() {
+    std::io::ErrorKind::AddrInUse => Error::Unsupported {
+      message: format!("Port {port} is already in use. Pick another one."),
+    },
+    _ => Error::from(err),
+  })
+}
+
 pub fn configured_port(state: &AppState) -> u16 {
   load_settings(state).port
 }
@@ -216,17 +228,8 @@ pub async fn start(app: AppHandle, port: u16) -> Result<(), Error> {
       message: "MCP server already running".to_string(),
     });
   }
-  check_port(port)?;
   let token = ensure_token(state.secrets.as_ref())?;
-  // std bind: reports "port in use" synchronously and defers reactor
-  // registration to the runtime that actually serves.
-  let listener =
-    std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|err| match err.kind() {
-      std::io::ErrorKind::AddrInUse => Error::Unsupported {
-        message: format!("Port {port} is already in use. Pick another one."),
-      },
-      _ => Error::from(err),
-    })?;
+  let listener = bind(port)?;
   listener.set_nonblocking(true)?;
   let cancel = CancellationToken::new();
 
@@ -2126,6 +2129,25 @@ mod tests {
     let loaded = load_settings(&state);
     assert!(loaded.enabled);
     assert_eq!(loaded.port, 4242);
+  }
+
+  #[test]
+  fn bind_names_the_port_someone_else_holds() {
+    let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
+
+    let err = bind(port).unwrap_err();
+    let Error::Unsupported { message } = &err else {
+      panic!("{err:?}");
+    };
+    assert!(message.contains(&port.to_string()), "{message}");
+    assert!(message.contains("already in use"), "{message}");
+  }
+
+  #[test]
+  fn bind_refuses_a_privileged_port_without_asking_the_os() {
+    let err = bind(80).unwrap_err();
+    assert!(matches!(err, Error::Unsupported { .. }), "{err:?}");
   }
 
   #[tokio::test]

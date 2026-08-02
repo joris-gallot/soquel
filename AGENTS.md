@@ -77,6 +77,7 @@ Weight: Rust integration against real databases is the core; unit tests for pure
 - Rust integration tests are named `integration_<engine>_*`, each gated by its env var (`SOQUEL_TEST_PG`, `SOQUEL_TEST_SSH`, later `SOQUEL_TEST_MYSQL`, ...) and skipped silently when unset. `pnpm test:integration` wires the env vars to the compose databases. SSH tunnel tests use the sshd service (key auth via the committed throwaway keypair in `scripts/test-ssh/`).
 - e2e specs take DB coordinates from `packages/app/e2e/fixtures.ts` (never hardcode), and need `pnpm db:test` up.
 - Native file pickers are invisible to WebDriver, and the webview's IPC cannot be stubbed around them: `window.__TAURI_INTERNALS__.invoke` is non-writable and non-configurable (assignment is silently ignored, `defineProperty` throws). A synthetic `popstate` does not move vue-router either, and the `tauri://` scheme drops the query string on navigation. Calling a command from a spec does work: `invokeCommand` in `e2e/helpers.ts`, and `open_connections_file` is how a spec reaches the import dialog.
+- WebKitGTK returns empty rendered text for elements carrying Tailwind's `truncate`, so `getText()` / `toHaveText` see `""` on them however the page is scrolled. Assert `getProperty('textContent')` instead (see `shownEndpoint` in `e2e/mcp.spec.ts`).
 
 ## Tauri specifics
 

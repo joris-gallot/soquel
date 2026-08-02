@@ -100,6 +100,7 @@ export const commands = {
 	mcpStatus: () => typedError<McpStatus, Error>(__TAURI_INVOKE("mcp_status")),
 	mcpStart: (port: number | null) => typedError<McpStatus, Error>(__TAURI_INVOKE("mcp_start", { port })),
 	mcpStop: () => typedError<null, Error>(__TAURI_INVOKE("mcp_stop")),
+	mcpSetPort: (port: number) => typedError<McpStatus, Error>(__TAURI_INVOKE("mcp_set_port", { port })),
 	mcpRegenerateToken: () => typedError<McpStatus, Error>(__TAURI_INVOKE("mcp_regenerate_token")),
 	mcpAuditLog: (limit: number | null) => typedError<AuditEntry[], Error>(__TAURI_INVOKE("mcp_audit_log", { limit })),
 	mcpResolveApproval: (id: string, answer: ApprovalAnswer) => typedError<null, Error>(__TAURI_INVOKE("mcp_resolve_approval", { id, answer })),

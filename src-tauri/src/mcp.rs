@@ -28,6 +28,8 @@ use crate::{commands, AppState};
 // Debug builds get their own port and agent-facing name, like the data dir
 // and keychain scope: dev and an installed release can run side by side.
 pub const DEFAULT_PORT: u16 = if cfg!(debug_assertions) { 52701 } else { 52700 };
+/// Below this, binding needs root on unix.
+pub const MIN_PORT: u16 = 1024;
 /// A write nobody answers is a write nobody wanted.
 const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// How long "allow for a while" lasts. Short on purpose: long enough for one
@@ -78,6 +80,37 @@ fn save_settings(state: &AppState, settings: McpSettings) {
   if let Err(err) = written {
     log::warn!("mcp settings write failed: {err}");
   }
+}
+
+fn check_port(port: u16) -> Result<(), Error> {
+  if port < MIN_PORT {
+    return Err(Error::Unsupported {
+      message: format!("MCP port must be between {MIN_PORT} and 65535"),
+    });
+  }
+  Ok(())
+}
+
+pub fn configured_port(state: &AppState) -> u16 {
+  load_settings(state).port
+}
+
+/// Only while stopped: the port a running server bound is not up for edit.
+pub async fn set_port(state: &AppState, port: u16) -> Result<(), Error> {
+  check_port(port)?;
+  if state.mcp.lock().await.is_some() {
+    return Err(Error::Unsupported {
+      message: "stop the MCP server before changing its port".to_string(),
+    });
+  }
+  save_settings(
+    state,
+    McpSettings {
+      port,
+      ..load_settings(state)
+    },
+  );
+  Ok(())
 }
 
 pub fn autostart(app: &AppHandle) {
@@ -183,10 +216,17 @@ pub async fn start(app: AppHandle, port: u16) -> Result<(), Error> {
       message: "MCP server already running".to_string(),
     });
   }
+  check_port(port)?;
   let token = ensure_token(state.secrets.as_ref())?;
   // std bind: reports "port in use" synchronously and defers reactor
   // registration to the runtime that actually serves.
-  let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+  let listener =
+    std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|err| match err.kind() {
+      std::io::ErrorKind::AddrInUse => Error::Unsupported {
+        message: format!("Port {port} is already in use. Pick another one."),
+      },
+      _ => Error::from(err),
+    })?;
   listener.set_nonblocking(true)?;
   let cancel = CancellationToken::new();
 
@@ -2086,6 +2126,56 @@ mod tests {
     let loaded = load_settings(&state);
     assert!(loaded.enabled);
     assert_eq!(loaded.port, 4242);
+  }
+
+  #[tokio::test]
+  async fn set_port_keeps_the_toggle_and_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    assert_eq!(configured_port(&state), DEFAULT_PORT);
+
+    save_settings(
+      &state,
+      McpSettings {
+        enabled: true,
+        port: DEFAULT_PORT,
+      },
+    );
+    set_port(&state, 52799).await.unwrap();
+
+    let loaded = load_settings(&state);
+    assert!(loaded.enabled, "the toggle is not the port's business");
+    assert_eq!(loaded.port, 52799);
+    assert_eq!(configured_port(&state), 52799);
+  }
+
+  #[tokio::test]
+  async fn set_port_refuses_privileged_ports() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    set_port(&state, 52799).await.unwrap();
+
+    let err = set_port(&state, 80).await.unwrap_err();
+    assert!(matches!(err, Error::Unsupported { .. }), "{err:?}");
+    assert_eq!(configured_port(&state), 52799);
+  }
+
+  #[tokio::test]
+  async fn set_port_requires_a_stopped_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bare_state(&dir);
+    *state.mcp.lock().await = Some(McpRunning {
+      port: DEFAULT_PORT,
+      cancel: CancellationToken::new(),
+    });
+
+    let err = set_port(&state, 52799).await.unwrap_err();
+    assert!(matches!(err, Error::Unsupported { .. }), "{err:?}");
+    assert_eq!(configured_port(&state), DEFAULT_PORT);
+
+    *state.mcp.lock().await = None;
+    set_port(&state, 52799).await.unwrap();
+    assert_eq!(configured_port(&state), 52799);
   }
 
   /// One agent call from the default test session.

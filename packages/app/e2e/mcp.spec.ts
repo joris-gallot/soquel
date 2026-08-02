@@ -6,7 +6,10 @@ import { TEST_REDIS } from './fixtures'
 import { createSqliteConnection, deleteConnectionNamed, deleteFirstConnection } from './helpers'
 
 // The e2e binary is a debug build: dev port, isolated from an installed app.
-const ENDPOINT = 'http://127.0.0.1:52701/mcp'
+const DEFAULT_PORT = 52701
+const ENDPOINT = `http://127.0.0.1:${DEFAULT_PORT}/mcp`
+/// Where the port-change spec moves the server: free, and not the dev default.
+const OTHER_PORT = 52799
 // A zero-byte file is a valid empty sqlite database.
 const DB_PATH = path.join(os.tmpdir(), 'soquel-e2e-agent.sqlite')
 
@@ -14,7 +17,7 @@ const DB_PATH = path.join(os.tmpdir(), 'soquel-e2e-agent.sqlite')
 let connectionId = ''
 
 /// Minimal streamable-HTTP MCP client: POST JSON-RPC, parse the SSE answer.
-async function mcpRequest(body: unknown, token: string, sessionId?: string) {
+async function mcpRequest(body: unknown, token: string, sessionId?: string, endpoint = ENDPOINT) {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json, text/event-stream',
@@ -22,7 +25,7 @@ async function mcpRequest(body: unknown, token: string, sessionId?: string) {
   }
   if (sessionId)
     headers['Mcp-Session-Id'] = sessionId
-  const response = await fetch(ENDPOINT, { method: 'POST', headers, body: JSON.stringify(body) })
+  const response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) })
   const text = await response.text()
   // Priming events carry empty data lines: the message is the last non-empty one.
   const data = text
@@ -36,6 +39,11 @@ async function mcpRequest(body: unknown, token: string, sessionId?: string) {
     sessionId: response.headers.get('mcp-session-id') ?? sessionId,
     json: data ? JSON.parse(data) : null,
   }
+}
+
+/// The endpoint line is `truncate`, and WebKitGTK returns empty rendered text for those: read the DOM.
+async function shownEndpoint() {
+  return $('[data-testid="mcp-endpoint"]').getProperty('textContent')
 }
 
 /// initialize + initialized: every later call rides the returned session.
@@ -321,6 +329,57 @@ describe('mcp server', () => {
         return true
       }
     }, { timeout: 5000, timeoutMsg: 'mcp port still answers after stop' })
+  })
+
+  it('refuses a privileged port without touching the server', async () => {
+    const field = await $('[data-testid="mcp-port"]')
+    await field.setValue('80')
+    await browser.keys(['Enter'])
+
+    await expect($('[data-testid="mcp-error"]')).toHaveText('Port must be 1024 or above')
+    await $('[data-testid="mcp-stopped"]').waitForExist()
+  })
+
+  it('moves the server to another port, and back while it runs', async () => {
+    const otherEndpoint = `http://127.0.0.1:${OTHER_PORT}/mcp`
+    const field = await $('[data-testid="mcp-port"]')
+    await field.setValue(String(OTHER_PORT))
+    await browser.keys(['Enter'])
+    await expect($('[data-testid="mcp-error"]')).not.toBeExisting()
+
+    await $('[data-testid="mcp-toggle"]').click()
+    await $('[data-testid="mcp-running"]').waitForExist()
+    await expect(shownEndpoint()).resolves.toBe(otherEndpoint)
+
+    const token = await $('[data-testid="mcp-details"]').getAttribute('data-token')
+    if (token === null)
+      throw new Error('panel exposes no token')
+    const moved = await mcpRequest({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'soquel-e2e', version: '0.0.0' },
+      },
+    }, token, undefined, otherEndpoint)
+    expect(moved.status).toBe(200)
+    expect(moved.json.result.serverInfo.name).toBeDefined()
+    await expect(fetch(ENDPOINT, { method: 'POST' })).rejects.toThrow()
+
+    // Changing the port on a running server restarts it.
+    await field.setValue(String(DEFAULT_PORT))
+    await browser.keys(['Enter'])
+    await $('[data-testid="mcp-running"]').waitForExist()
+    await expect(shownEndpoint()).resolves.toBe(ENDPOINT)
+    await browser.waitUntil(async () => {
+      const response = await fetch(ENDPOINT, { method: 'POST' }).catch(() => null)
+      return response?.status === 401
+    }, { timeout: 5000, timeoutMsg: 'server did not come back on the default port' })
+
+    await $('[data-testid="mcp-toggle"]').click()
+    await $('[data-testid="mcp-stopped"]').waitForExist()
   })
 
   it('deletes the connection', async () => {

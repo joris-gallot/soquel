@@ -1106,7 +1106,8 @@ pub async fn mcp_start(
   state: State<'_, AppState>,
   port: Option<u16>,
 ) -> Result<crate::mcp::McpStatus, Error> {
-  crate::mcp::start(app, port.unwrap_or(crate::mcp::DEFAULT_PORT)).await?;
+  let port = port.unwrap_or_else(|| crate::mcp::configured_port(state.inner()));
+  crate::mcp::start(app, port).await?;
   crate::mcp::status(state.inner()).await
 }
 
@@ -1114,6 +1115,16 @@ pub async fn mcp_start(
 #[specta::specta]
 pub async fn mcp_stop(state: State<'_, AppState>) -> Result<(), Error> {
   crate::mcp::stop(state.inner()).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_set_port(
+  state: State<'_, AppState>,
+  port: u16,
+) -> Result<crate::mcp::McpStatus, Error> {
+  crate::mcp::set_port(state.inner(), port).await?;
+  crate::mcp::status(state.inner()).await
 }
 
 #[tauri::command]

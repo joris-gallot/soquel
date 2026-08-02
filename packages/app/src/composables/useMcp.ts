@@ -19,9 +19,19 @@ export function useMcp() {
     await refresh()
   }
 
+  /// Persist before restarting: the choice survives an app restart even if the new port fails to bind.
+  async function setPort(port: number) {
+    const wasRunning = status.value?.running ?? false
+    if (wasRunning)
+      await stop()
+    status.value = unwrap(await commands.mcpSetPort(port))
+    if (wasRunning)
+      await start()
+  }
+
   async function regenerateToken() {
     status.value = unwrap(await commands.mcpRegenerateToken())
   }
 
-  return { status, refresh, start, stop, regenerateToken }
+  return { status, refresh, start, stop, setPort, regenerateToken }
 }

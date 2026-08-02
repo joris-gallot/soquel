@@ -148,6 +148,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_status,
       commands::mcp_start,
       commands::mcp_stop,
+      commands::mcp_set_port,
       commands::mcp_regenerate_token,
       commands::mcp_audit_log,
       commands::mcp_resolve_approval,

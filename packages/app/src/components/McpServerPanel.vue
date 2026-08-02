@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { Check, Copy, RefreshCw, ScrollText, ShieldOff } from '@lucide/vue'
 import { useClipboard } from '@vueuse/core'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import McpAuditDialog from '@/components/McpAuditDialog.vue'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useConnections } from '@/composables/useConnections'
 import { useMcp } from '@/composables/useMcp'
 import { useTrustWindows } from '@/composables/useTrustWindows'
+import { mcpPortSchema } from '@/lib/mcp'
 
-const { status, refresh, start, stop, regenerateToken } = useMcp()
+const { status, refresh, start, stop, setPort, regenerateToken } = useMcp()
 const { windows, refresh: refreshWindows, revoke } = useTrustWindows()
 const { connections } = useConnections()
 
@@ -39,11 +41,18 @@ function setupCommand(token: string) {
 }
 
 const busy = ref(false)
+const problem = ref<string | null>(null)
+const portInput = ref<number | string>('')
 const auditOpen = ref(false)
 const connectionNames = computed(() =>
   Object.fromEntries(connections.value.map(profile => [profile.id, profile.name])),
 )
 const { copy, copied } = useClipboard({ legacy: true })
+
+watch(() => status.value?.port, (port) => {
+  if (port !== undefined)
+    portInput.value = port
+}, { immediate: true })
 
 onMounted(async () => {
   await refresh()
@@ -52,6 +61,7 @@ onMounted(async () => {
 
 async function toggle(on: boolean) {
   busy.value = true
+  problem.value = null
   try {
     if (on)
       await start()
@@ -60,11 +70,39 @@ async function toggle(on: boolean) {
     await refreshWindows()
   }
   catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+    problem.value = error instanceof Error ? error.message : String(error)
   }
   finally {
     busy.value = false
   }
+}
+
+/// Commits on blur and Enter, never on input: each change restarts a running server.
+async function applyPort() {
+  const parsed = mcpPortSchema.safeParse(portInput.value)
+  if (!parsed.success) {
+    problem.value = parsed.error.issues[0].message
+    return
+  }
+  problem.value = null
+  if (!status.value || parsed.data === status.value.port)
+    return
+
+  busy.value = true
+  try {
+    await setPort(parsed.data)
+  }
+  catch (error) {
+    problem.value = error instanceof Error ? error.message : String(error)
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+function resetPort() {
+  portInput.value = status.value?.port ?? ''
+  problem.value = null
 }
 
 async function copySetup() {
@@ -106,10 +144,21 @@ async function regenerate() {
         />
         <div class="min-w-0 flex-1">
           <span class="text-sm font-medium">MCP server</span>
-          <p class="truncate font-mono text-xs text-muted-foreground">
+          <p class="truncate font-mono text-xs text-muted-foreground" data-testid="mcp-endpoint">
             {{ status?.running ? status.endpoint : 'Give coding agents scoped access to your connections.' }}
           </p>
         </div>
+        <Input
+          v-model="portInput"
+          type="number"
+          class="w-24 font-mono"
+          data-testid="mcp-port"
+          aria-label="MCP port"
+          :disabled="!status || busy"
+          @blur="applyPort"
+          @keyup.enter="applyPort"
+          @keyup.esc="resetPort"
+        />
         <Switch
           :model-value="status?.running ?? false"
           data-testid="mcp-toggle"
@@ -118,6 +167,10 @@ async function regenerate() {
           @update:model-value="toggle"
         />
       </div>
+
+      <p v-if="problem" class="px-4 pb-3 text-xs text-destructive" data-testid="mcp-error">
+        {{ problem }}
+      </p>
 
       <div
         v-if="status?.running"

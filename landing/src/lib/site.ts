@@ -1,7 +1,7 @@
 export const SITE = {
   name: 'soquel',
   url: 'https://soquel.dev',
-  repo: 'https://github.com/joris-gallot/soquel',
+  repo: 'https://github.com/soquel-dev/soquel',
   author: 'Joris Gallot',
   licence: 'https://spdx.org/licenses/FSL-1.1-MIT',
   tagline: 'a database client that lends agents the query, not the credentials',

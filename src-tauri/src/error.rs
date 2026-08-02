@@ -52,6 +52,8 @@ pub enum Error {
     program: String,
     stderr: String,
   },
+  #[error("{message}")]
+  Update { message: String },
   /// A credential command nobody agreed to run yet: it arrived with an import.
   #[error("{message}")]
   CommandApprovalRequired {
@@ -133,6 +135,14 @@ impl From<std::io::Error> for Error {
 impl From<serde_json::Error> for Error {
   fn from(err: serde_json::Error) -> Self {
     Error::Storage {
+      message: err.to_string(),
+    }
+  }
+}
+
+impl From<tauri_plugin_updater::Error> for Error {
+  fn from(err: tauri_plugin_updater::Error) -> Self {
+    Error::Update {
       message: err.to_string(),
     }
   }

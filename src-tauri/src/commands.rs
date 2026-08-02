@@ -1174,6 +1174,20 @@ pub async fn mcp_revoke_trust(
   Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn check_update(
+  app: tauri::AppHandle,
+) -> Result<Option<crate::updater::UpdateInfo>, Error> {
+  crate::updater::check(&app).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn install_update(app: tauri::AppHandle) -> Result<(), Error> {
+  crate::updater::install(app).await
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

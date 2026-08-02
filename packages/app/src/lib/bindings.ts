@@ -106,12 +106,20 @@ export const commands = {
 	mcpResolveApproval: (id: string, answer: ApprovalAnswer) => typedError<null, Error>(__TAURI_INVOKE("mcp_resolve_approval", { id, answer })),
 	mcpTrustWindows: () => typedError<TrustWindowInfo[], Error>(__TAURI_INVOKE("mcp_trust_windows")),
 	mcpRevokeTrust: (session: string, connectionId: string) => typedError<null, Error>(__TAURI_INVOKE("mcp_revoke_trust", { session, connectionId })),
+	checkUpdate: () => typedError<{
+	version: string,
+	currentVersion: string,
+	notes: string | null,
+	pubDate: string | null,
+} | null, Error>(__TAURI_INVOKE("check_update")),
+	installUpdate: () => typedError<null, Error>(__TAURI_INVOKE("install_update")),
 };
 
 /** Events */
 export const events = {
 	importFileRequested: makeEvent<ImportFileRequested>("import-file-requested"),
 	mcpApprovalRequest: makeEvent<McpApprovalRequest>("mcp-approval-request"),
+	updateProgress: makeEvent<UpdateProgress>("update-progress"),
 };
 
 /* Types */
@@ -296,7 +304,7 @@ export type Env = "dev" | "staging" | "prod";
 /**  Normalized error shape crossing the IPC boundary. */
 export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean } | 
 /**  The profile asks for its password interactively; the caller must supply one. */
-{ kind: "secret-required"; message: string; subject: SecretSubject; targetId: string; targetName: string } | { kind: "credential-command"; message: string; program: string; stderr: string } | 
+{ kind: "secret-required"; message: string; subject: SecretSubject; targetId: string; targetName: string } | { kind: "credential-command"; message: string; program: string; stderr: string } | { kind: "update"; message: string } | 
 /**  A credential command nobody agreed to run yet: it arrived with an import. */
 { kind: "command-approval-required"; message: string; subject: SecretSubject; targetId: string; targetName: string; program: string; args: string[] };
 
@@ -620,6 +628,20 @@ export type TunnelProfile = {
 	 *  `Agent` and `None`, which send no credential of ours.
 	 */
 	credential?: CredentialSource,
+};
+
+export type UpdateInfo = {
+	version: string,
+	currentVersion: string,
+	notes: string | null,
+	pubDate: string | null,
+};
+
+/**  Emitted while the bundle downloads. */
+export type UpdateProgress = {
+	downloaded: number | null,
+	/**  Absent when the server sends no content-length. */
+	total: number | null,
 };
 
 export type ZsetMember = {

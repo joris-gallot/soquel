@@ -87,6 +87,16 @@ Weight: Rust integration against real databases is the core; unit tests for pure
 - Add Tauri plugins with `pnpm tauri add <name>`; their permissions go in `src-tauri/capabilities/default.json`.
 - No remote assets in the webview (fonts, scripts): the app must work offline and keep a strict CSP. Bundle everything.
 
+### Updater
+
+`src-tauri/src/updater.rs` wraps the Tauri updater behind `check_update` / `install_update`, so the webview never touches the plugin's own JS API and `capabilities/default.json` needs no `updater:` permission. Download progress rides the `UpdateProgress` event; `install_update` only ever returns on failure, since a successful install restarts the app.
+
+The signing keypair is **not rotatable**: `plugins.updater.pubkey` is compiled into every binary, so a new key orphans every installed client (no auto-update, manual reinstall). Private key + passphrase live in 1Password, and become `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for release builds.
+
+`endpoints` points at a dynamic service, never a static `latest.json`: the license window is enforced server-side (see the Pricing issue), and the license key will ride an `UpdaterBuilder::header` set in `pending()`.
+
+`SOQUEL_UPDATE_ENDPOINT` overrides the endpoint in debug builds only. A debug build with no override skips the check entirely (nothing to replace), and a release build ignores the variable so a shipped app cannot be redirected. Consequence for end-to-end testing: use `tauri build --debug`, since a release bundle both ignores the override and refuses plain `http`. Only the AppImage is updatable on Linux; `.deb` is not.
+
 ## UI
 
 - shadcn-vue components via CLI from `packages/app`: `pnpm exec shadcn-vue add <name>` (check the registry before hand-rolling).

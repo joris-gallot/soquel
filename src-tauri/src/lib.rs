@@ -30,6 +30,7 @@ mod sqlite;
 mod ssh;
 mod transfer;
 mod tunnels;
+mod updater;
 
 /// A connected database plus the tunnel carrying it: dropped together.
 pub struct ActiveConnection {
@@ -154,10 +155,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_resolve_approval,
       commands::mcp_trust_windows,
       commands::mcp_revoke_trust,
+      commands::check_update,
+      commands::install_update,
     ])
     .events(tauri_specta::collect_events![
       mcp::McpApprovalRequest,
-      transfer::ImportFileRequested
+      transfer::ImportFileRequested,
+      updater::UpdateProgress
     ])
     .error_handling(tauri_specta::ErrorHandlingMode::Result)
 }
@@ -180,6 +184,7 @@ pub fn run() {
 
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .invoke_handler(builder.invoke_handler())
     .setup(move |app| {
       // Typed event channel for the approval dialog.

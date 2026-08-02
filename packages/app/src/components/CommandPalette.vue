@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Moon, Plug, Plus, Sun } from '@lucide/vue'
+import { ArrowDownToLine, Moon, Plug, Plus, Sun } from '@lucide/vue'
 import { useMagicKeys, whenever } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -18,6 +18,7 @@ import { useCommandApproval } from '@/composables/useCommandApproval'
 import { useConnections } from '@/composables/useConnections'
 import { useSecretPrompt } from '@/composables/useSecretPrompt'
 import { useTheme } from '@/composables/useTheme'
+import { useUpdater } from '@/composables/useUpdater'
 import { connectionTarget, groupConnections } from '@/lib/connections'
 
 const router = useRouter()
@@ -25,6 +26,7 @@ const { connections, connect, activeIds } = useConnections()
 const { intercept: interceptSecret } = useSecretPrompt()
 const { intercept: interceptCommand } = useCommandApproval()
 const { mode, toggle } = useTheme()
+const { panelOpen, check: checkForUpdate } = useUpdater()
 
 const sections = computed(() => groupConnections(connections.value))
 
@@ -68,6 +70,14 @@ function toggleTheme() {
   toggle()
 }
 
+async function checkForUpdates() {
+  open.value = false
+  if (await checkForUpdate())
+    panelOpen.value = true
+  else
+    toast.success('soquel is up to date.')
+}
+
 defineExpose({ open })
 </script>
 
@@ -105,6 +115,10 @@ defineExpose({ open })
         <CommandItem value="toggle theme dark light" @select="toggleTheme">
           <component :is="mode === 'dark' ? Sun : Moon" />
           <span>Switch to {{ mode === 'dark' ? 'light' : 'dark' }} theme</span>
+        </CommandItem>
+        <CommandItem value="check for updates" @select="checkForUpdates">
+          <ArrowDownToLine />
+          <span>Check for updates</span>
         </CommandItem>
       </CommandGroup>
     </CommandList>

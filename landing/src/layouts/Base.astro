@@ -1,12 +1,80 @@
 ---
+import { existsSync } from 'node:fs'
+import process from 'node:process'
+import monoLatin from '@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2?url'
+import sansLatin from '@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2?url'
+import { SITE } from '@/lib/site'
 import '@/styles/global.css'
 
 interface Props {
-  title: string
-  description: string
+  title?: string
+  description?: string
+  robots?: string
 }
 
-const { title, description } = Astro.props
+const {
+  title = `${SITE.name}: ${SITE.tagline}`,
+  description = SITE.description,
+  robots = 'index,follow',
+} = Astro.props
+
+const site = Astro.site ?? new URL(SITE.url)
+const canonical = new URL(Astro.url.pathname, site).toString()
+
+// Referenced only once it exists: a card that 404s is worse than none, and it
+// cannot be produced here (no rasteriser, and IBM Plex is not a system font).
+const card = existsSync(`${process.cwd()}/public/og.png`)
+  ? new URL('/og.png', site).toString()
+  : null
+
+const brandId = `${site.origin}/#brand`
+const siteId = `${site.origin}/#website`
+
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Organization',
+      '@id': brandId,
+      'name': SITE.name,
+      'url': site.toString(),
+      'logo': new URL('/web-app-manifest-512x512.png', site).toString(),
+      'founder': { '@type': 'Person', 'name': SITE.author },
+      'sameAs': [SITE.repo],
+    },
+    {
+      '@type': 'WebSite',
+      '@id': siteId,
+      'name': SITE.name,
+      'url': site.toString(),
+      'publisher': { '@id': brandId },
+      'inLanguage': 'en',
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': `${site.origin}/#software`,
+      'name': SITE.name,
+      'description': SITE.description,
+      'url': site.toString(),
+      'applicationCategory': 'DeveloperApplication',
+      'applicationSubCategory': 'Database client',
+      'operatingSystem': 'macOS, Windows, Linux',
+      'publisher': { '@id': brandId },
+      'sameAs': [SITE.repo],
+      'codeRepository': SITE.repo,
+      'license': SITE.licence,
+      'keywords':
+        'database client, Postgres, MySQL, SQLite, Redis, MongoDB, MCP, SQL editor, SSH tunnel',
+      'featureList': [
+        'Table browser with inline editing',
+        'SQL editor with query plans rendered as a tree',
+        'SSH tunnels with host key verification',
+        'MCP server exposing databases to coding agents, read-only by default',
+        'Credentials in the OS keychain, never in the webview',
+      ],
+    },
+  ],
+}
 ---
 
 <!doctype html>
@@ -14,22 +82,43 @@ const { title, description } = Astro.props
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <link rel="preload" as="font" type="font/woff2" href={monoLatin} crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href={sansLatin} crossorigin />
+
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="Soquel" />
     <link rel="manifest" href="/site.webmanifest" />
-    <link rel="canonical" href={Astro.site} />
+    <link rel="canonical" href={canonical} />
+
     <title>{title}</title>
     <meta name="description" content={description} />
+    <meta name="robots" content={robots} />
+
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content={SITE.name} />
+    <meta property="og:locale" content="en" />
+    {card && <meta property="og:image" content={card} />}
+    {card && <meta property="og:image:width" content="1200" />}
+    {card && <meta property="og:image:height" content="630" />}
+    {card && <meta property="og:image:alt" content={`${SITE.name}, ${SITE.tagline}`} />}
+    <meta name="twitter:card" content={card ? 'summary_large_image' : 'summary'} />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    {card && <meta name="twitter:image" content={card} />}
+
     <meta name="color-scheme" content="light dark" />
     <!-- Mobile browser chrome follows the page instead of staying white on the dark one. -->
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a" />
+
+    <script type="application/ld+json" set:html={JSON.stringify(structuredData)} is:inline />
   </head>
   <body>
     <slot />

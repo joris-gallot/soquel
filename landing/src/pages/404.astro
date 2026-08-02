@@ -1,0 +1,23 @@
+---
+import Wordmark from '@/components/Wordmark.astro'
+import Base from '@/layouts/Base.astro'
+import { SITE } from '@/lib/site'
+---
+
+<Base title={`Not found: ${SITE.name}`} robots="noindex,follow">
+  <div class="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-6 py-16">
+    <p class="label">404</p>
+    <h1 class="mt-3 font-mono text-2xl font-semibold tracking-tight">
+      relation does not exist
+    </h1>
+    <p class="mt-4 max-w-lg text-mute">
+      That page is not here. The engines say it better than we could.
+    </p>
+    <a
+      href="/"
+      class="mt-8 inline-flex w-fit items-baseline gap-2 font-mono text-sm underline-offset-4 hover:underline"
+    >
+      <Wordmark class="text-sm" />
+    </a>
+  </div>
+</Base>

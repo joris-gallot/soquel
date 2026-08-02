@@ -3,8 +3,7 @@ import ApprovalCard from '@/components/ApprovalCard.astro'
 import Shot from '@/components/Shot.astro'
 import Wordmark from '@/components/Wordmark.astro'
 import Base from '@/layouts/Base.astro'
-
-const SOURCE = 'https://github.com/joris-gallot/soquel'
+import { ENGINES, FEATURES, SITE } from '@/lib/site'
 
 const guardrails = [
   {
@@ -28,13 +27,6 @@ const guardrails = [
   },
 ]
 
-const engines = [
-  { name: 'PostgreSQL', note: '14 and up' },
-  { name: 'MySQL, MariaDB', note: 'MySQL 8.0 and up, MariaDB LTS' },
-  { name: 'SQLite', note: 'a file, no server' },
-  { name: 'Redis, Valkey', note: 'key browser and console' },
-  { name: 'MongoDB', note: 'document browser and console' },
-]
 
 // Dark theme only: a dark shot reads on either page theme, and light/dark pairs
 // double the capture and the upkeep for little gain. Market seed only, never a
@@ -57,25 +49,14 @@ const shots = [
   },
 ]
 
-const client = [
-  'Table browser with inline editing, filters and export',
-  'SQL editor with query plans, rendered as a tree',
-  'SSH tunnels with key, agent or password auth, and host key verification',
-  'TLS, custom root certificates included',
-  'Passwords from the OS keychain, asked at connect, or read from a command',
-  'Connections exported to a file, passwords left out unless you encrypt them in',
-]
 ---
 
-<Base
-  title="soquel: a database client that lends agents the query, not the credentials"
-  description="A desktop database client for Postgres, MySQL, SQLite, Redis and MongoDB. Coding agents reach your data through the app over MCP: read-only by default, every write stops for your approval, and credentials never leave the Rust core."
->
+<Base>
   <div class="mx-auto max-w-3xl px-6">
     <header class="flex items-center justify-between border-b border-rule py-5">
       <Wordmark />
       <a
-        href={SOURCE}
+        href={SITE.repo}
         target="_blank"
         rel="noopener"
         aria-label="soquel source on GitHub"
@@ -141,7 +122,7 @@ const client = [
         </h2>
         <ul class="mt-8 space-y-3">
           {
-            client.map(line => (
+            FEATURES.map(line => (
               <li class="flex gap-3 text-sm leading-relaxed">
                 <span aria-hidden="true" class="mt-2.5 h-px w-4 shrink-0 bg-rule" />
                 <span>{line}</span>
@@ -159,7 +140,7 @@ const client = [
         <p class="label">Engines</p>
         <dl class="mt-6">
           {
-            engines.map(engine => (
+            ENGINES.map(engine => (
               <div class="flex items-baseline justify-between gap-6 border-b border-rule py-3">
                 <dt class="font-mono text-sm font-medium">{engine.name}</dt>
                 <dd class="text-right text-sm text-mute">{engine.note}</dd>
@@ -180,7 +161,7 @@ const client = [
           builds.
         </p>
         <a
-          href={SOURCE}
+          href={SITE.repo}
           target="_blank"
           rel="noopener"
           class="mt-6 inline-flex rounded-md bg-ink px-4 py-2.5 font-sans text-sm font-medium text-paper transition-opacity hover:opacity-90"
@@ -194,7 +175,7 @@ const client = [
     >
       <span>Offline by design, no telemetry.</span>
       <a
-        href={SOURCE}
+        href={SITE.repo}
         target="_blank"
         rel="noopener"
         aria-label="soquel source on GitHub"

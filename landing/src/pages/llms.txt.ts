@@ -1,0 +1,35 @@
+import type { APIRoute } from 'astro'
+import { ENGINES, SITE } from '@/lib/site'
+
+/// The curated index an answer engine reads. The long form lives at /llms-full.txt.
+export const GET: APIRoute = () => {
+  const engines = ENGINES.map(engine => `- ${engine.name}: ${engine.note}`).join('\n')
+
+  const body = `# ${SITE.name}
+
+> ${SITE.description}
+
+Pre-release: the source is available under FSL-1.1-MIT and there are no published builds yet.
+
+Soquel is a Tauri 2 desktop app. The Rust core owns the database drivers, SSH tunnels, connection pools and credentials; the Vue webview is a thin client that never sees a password. What separates it from other database clients is that it can lend a coding agent access to a database without handing over the connection string.
+
+## Engines
+
+${engines}
+
+## Agent access over MCP
+
+- The app runs a local MCP server, bound to loopback, behind a bearer token that never leaves the machine. It starts stopped, and every connection is invisible to agents until opted in, one at a time.
+- Read-only is enforced by the engine, not by a SQL parser: agent reads run inside a READ ONLY transaction on Postgres and MySQL, or on a handle opened read-only at the filesystem level on SQLite.
+- A write opens a dialog showing the exact statement. Denying it, closing it, or ignoring it for a minute all refuse.
+- Every call is logged with its tool, connection, statement, outcome and duration.
+- Results are capped and paginated, and agent queries carry a 30 second engine-enforced timeout.
+
+## Links
+
+- [Source](${SITE.repo}): the full application, readable and buildable.
+- [Long form](${SITE.url}/llms-full.txt): every claim above with its detail.
+`
+
+  return new Response(body, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+}

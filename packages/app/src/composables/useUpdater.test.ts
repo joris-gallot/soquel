@@ -109,17 +109,26 @@ describe('useUpdater', () => {
 
   // specta renders the core's f64 as `number | null`, so the event can carry
   // null where Rust promised a number.
-  it('reads a null byte count as zero rather than leaving the bar empty', async () => {
+  it('reads a null byte count as zero rather than NaN', async () => {
     const { listen, downloaded, total } = useUpdater()
     await listen()
+
+    emitProgress!({ payload: { downloaded: null, total: null } })
+    expect(downloaded.value).toBe(0)
 
     emitProgress!({ payload: { downloaded: 2048, total: 4096 } })
     expect(downloaded.value).toBe(2048)
     expect(total.value).toBe(4096)
+  })
 
-    emitProgress!({ payload: { downloaded: null, total: null } })
-    expect(downloaded.value).toBe(0)
-    expect(total.value).toBeNull()
+  it('never rewinds the bar on an out-of-order event', async () => {
+    const { listen, downloaded } = useUpdater()
+    await listen()
+
+    emitProgress!({ payload: { downloaded: 3000, total: 4096 } })
+    emitProgress!({ payload: { downloaded: 2000, total: 4096 } })
+
+    expect(downloaded.value).toBe(3000)
   })
 
   it('is not installing while the total is still unknown', () => {

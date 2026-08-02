@@ -17,7 +17,9 @@ export function useUpdater() {
       return
     listening = true
     await events.updateProgress.listen(({ payload }) => {
-      downloaded.value = payload.downloaded ?? 0
+      // The core only ever counts up, so an event that goes backwards arrived
+      // out of order: keeping the max stops the bar from rewinding.
+      downloaded.value = Math.max(downloaded.value, payload.downloaded ?? 0)
       total.value = payload.total
     })
   }

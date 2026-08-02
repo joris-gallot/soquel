@@ -56,6 +56,12 @@ fn endpoint_override() -> Option<String> {
     .filter(|endpoint| !endpoint.trim().is_empty())
 }
 
+/// Roughly a hundred events over the download, whatever its size.
+fn emit_step(total: Option<u64>) -> u64 {
+  const FLOOR: u64 = 1 << 20;
+  total.map_or(FLOOR, |total| (total / 100).max(FLOOR))
+}
+
 async fn pending(app: &AppHandle) -> Result<Option<Update>, Error> {
   #[cfg_attr(not(debug_assertions), allow(unused_mut))]
   let mut builder = app.updater_builder();
@@ -91,10 +97,17 @@ pub async fn install(app: AppHandle) -> Result<(), Error> {
   };
   let progress = app.clone();
   let mut downloaded = 0u64;
+  let mut emitted = 0u64;
   update
     .download_and_install(
       move |chunk, total| {
         downloaded += chunk as u64;
+        // One event per chunk floods the IPC channel, and the webview then sees
+        // them out of order: the bar jumps ahead and falls back.
+        if downloaded - emitted < emit_step(total) && Some(downloaded) != total {
+          return;
+        }
+        emitted = downloaded;
         let _ = UpdateProgress {
           downloaded: downloaded as f64,
           total: total.map(|total| total as f64),
@@ -119,6 +132,14 @@ mod tests {
       format_pub_date(date).as_deref(),
       Some("2025-08-02T12:00:00Z")
     );
+  }
+
+  #[test]
+  fn emit_step_scales_with_the_download() {
+    // ~100 events on a real bundle, and no flood on a tiny one.
+    assert_eq!(emit_step(Some(200 * 1024 * 1024)), 2 * 1024 * 1024);
+    assert_eq!(emit_step(Some(4 * 1024 * 1024)), 1024 * 1024);
+    assert_eq!(emit_step(None), 1024 * 1024);
   }
 
   #[test]

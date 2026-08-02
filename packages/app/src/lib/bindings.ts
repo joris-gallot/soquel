@@ -108,6 +108,11 @@ export const commands = {
 	mcpRevokeTrust: (session: string, connectionId: string) => typedError<null, Error>(__TAURI_INVOKE("mcp_revoke_trust", { session, connectionId })),
 	secretsStatus: () => typedError<SecretsStatus, Error>(__TAURI_INVOKE("secrets_status")),
 	/**
+	 *  The compile target, not a user agent string: the webview needs it for the
+	 *  modifier key it prints and the file manager it names.
+	 */
+	platform: () => typedError<string, Error>(__TAURI_INVOKE("platform")),
+	/**
 	 *  One preformatted block: the shape is the product, and a struct would move the
 	 *  formatting to the webview where the facts do not live.
 	 */

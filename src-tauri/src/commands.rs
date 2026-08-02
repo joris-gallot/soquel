@@ -1186,6 +1186,14 @@ pub async fn secrets_status(
   })
 }
 
+/// The compile target, not a user agent string: the webview needs it for the
+/// modifier key it prints and the file manager it names.
+#[tauri::command]
+#[specta::specta]
+pub async fn platform() -> Result<String, Error> {
+  Ok(std::env::consts::OS.to_string())
+}
+
 /// One preformatted block: the shape is the product, and a struct would move the
 /// formatting to the webview where the facts do not live.
 #[tauri::command]

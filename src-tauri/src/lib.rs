@@ -161,6 +161,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_trust_windows,
       commands::mcp_revoke_trust,
       commands::secrets_status,
+      commands::platform,
       commands::diagnostics,
       commands::open_log_folder,
       commands::check_update,

@@ -34,6 +34,8 @@ An OS keyring is required, not emulated: `SecretStore::probe()` runs once at sta
 
 Importing reads soquel files and nothing else: parsing another client's private format is a one-shot path with permanent upkeep, and a pasted connection URL already prefills the form. Two rules hold whatever the file says: a password lands only when `import_connections` is called with `with_secrets`, and a credential command arriving in a file stays inert until approved.
 
+Exports carry `.soquel` (`transfer.ts`), so the OS can associate the format later. Not `.soquel.json`: Windows binds the last extension and a macOS UTI extension cannot contain a dot, so only Linux would ever match it. The import picker still lists `.json` too, for files written before the extension existed.
+
 ## Commands
 
 Run from the repo root.

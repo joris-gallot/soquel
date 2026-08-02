@@ -1,9 +1,13 @@
 import type { DuplicateStrategy, ImportPreview, PreviewEntry } from '@/lib/bindings'
 import { open, save } from '@tauri-apps/plugin-dialog'
 
-const FILTERS = [{ name: 'Soquel connections', extensions: ['json'] }]
+/// Own extension so the OS can associate it later: Windows and macOS bind the
+/// last one, which rules out a `.soquel.json` pair.
+const EXPORT_FILTERS = [{ name: 'Soquel connections', extensions: ['soquel'] }]
+/// The file was JSON-named before it had an extension of its own.
+const IMPORT_FILTERS = [{ name: 'Soquel connections', extensions: ['soquel', 'json'] }]
 
-export const DEFAULT_EXPORT_NAME = 'soquel-connections.json'
+export const DEFAULT_EXPORT_NAME = 'connections.soquel'
 
 export const DUPLICATE_STRATEGIES = ['skip', 'replace', 'keep-both'] as const satisfies readonly DuplicateStrategy[]
 
@@ -15,11 +19,11 @@ export const DUPLICATE_STRATEGY_LABELS: Record<DuplicateStrategy, { label: strin
 
 /** Null when the user cancels the dialog. */
 export function pickImportFile(): Promise<string | null> {
-  return open({ multiple: false, directory: false, filters: FILTERS }) as Promise<string | null>
+  return open({ multiple: false, directory: false, filters: IMPORT_FILTERS }) as Promise<string | null>
 }
 
 export function pickExportPath(): Promise<string | null> {
-  return save({ defaultPath: DEFAULT_EXPORT_NAME, filters: FILTERS })
+  return save({ defaultPath: DEFAULT_EXPORT_NAME, filters: EXPORT_FILTERS })
 }
 
 /// A passphrase is only worth asking for when it can actually be re-typed right.

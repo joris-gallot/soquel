@@ -7,12 +7,13 @@ import { SITE } from '@/lib/site'
 >
   <span>Offline by design, no telemetry.</span>
   <nav class="flex items-center gap-4">
-    <a href="/privacy" class="underline-offset-4 hover:text-ink hover:underline">Privacy</a>
+    <a href="/privacy" data-umami-event="privacy-footer" class="underline-offset-4 hover:text-ink hover:underline">Privacy</a>
     <a
       href={SITE.repo}
       target="_blank"
       rel="noopener"
       aria-label="soquel source on GitHub"
+      data-umami-event="source-footer"
       class="underline-offset-4 hover:text-ink hover:underline"
     >GitHub</a
     >

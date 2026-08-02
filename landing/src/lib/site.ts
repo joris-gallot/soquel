@@ -9,6 +9,12 @@ export const SITE = {
     'A desktop database client for Postgres, MySQL, SQLite, Redis and MongoDB. Coding agents reach your data through the app over MCP: read-only by default, every write stops for your approval, and credentials never leave the Rust core.',
 } as const
 
+/// Self-hosted, cookieless, production only. The privacy page says as much.
+export const ANALYTICS = {
+  src: 'https://analytics.jorisgallot.dev/j.js',
+  websiteId: 'b7a0fa9f-be4b-41eb-88eb-4be7db1dc3c4',
+} as const
+
 export const ENGINES = [
   { name: 'PostgreSQL', note: '14 and up' },
   { name: 'MySQL, MariaDB', note: 'MySQL 8.0 and up, MariaDB LTS' },

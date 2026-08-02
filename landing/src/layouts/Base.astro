@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import process from 'node:process'
 import monoLatin from '@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2?url'
 import sansLatin from '@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2?url'
-import { SITE } from '@/lib/site'
+import { ANALYTICS, SITE } from '@/lib/site'
 import '@/styles/global.css'
 
 interface Props {
@@ -19,6 +19,7 @@ const {
 } = Astro.props
 
 const site = Astro.site ?? new URL(SITE.url)
+const isProd = import.meta.env.MODE === 'production'
 // The sitemap drops the root's trailing slash and re-applies that after any
 // serialize hook, so the canonical is what has to match it.
 const canonical
@@ -125,5 +126,10 @@ const structuredData = {
   </head>
   <body>
     <slot />
+    {
+      isProd && (
+        <script is:inline defer src={ANALYTICS.src} data-website-id={ANALYTICS.websiteId} />
+      )
+    }
   </body>
 </html>

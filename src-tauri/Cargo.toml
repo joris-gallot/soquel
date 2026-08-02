@@ -37,7 +37,7 @@ async-trait = "0.1.91"
 tokio-postgres = "0.7"
 mysql_async = { version = "0.37", default-features = false, features = [ "default-rustls-ring" ] }
 futures-util = { version = "0.3.33", default-features = false }
-tokio = { version = "1", features = [
+tokio = { version = "1.53.1", features = [
   "sync",
   "net",
   "io-util",
@@ -89,7 +89,7 @@ base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3.27.0"
-tokio = { version = "1", features = [
+tokio = { version = "1.53.1", features = [
   "rt",
   "rt-multi-thread",
   "macros",

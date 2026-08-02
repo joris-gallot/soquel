@@ -1,0 +1,100 @@
+---
+import SiteFooter from '@/components/SiteFooter.astro'
+import SiteHeader from '@/components/SiteHeader.astro'
+import Base from '@/layouts/Base.astro'
+import { SITE } from '@/lib/site'
+
+const updated = '2 August 2026'
+---
+
+<Base
+  title={`Privacy: ${SITE.name}`}
+  description="What soquel sends, what it runs on your behalf, and what never leaves your machine."
+>
+  <div class="mx-auto max-w-3xl px-6">
+    <SiteHeader />
+
+    <main class="py-14 [&_h2]:mt-12 [&_h2]:font-mono [&_h2]:text-lg [&_h2]:font-medium [&_h2]:tracking-tight [&_p]:mt-4 [&_p]:leading-relaxed">
+      <p class="label">Privacy</p>
+      <h1 class="mt-3 font-mono text-2xl leading-snug font-semibold tracking-tight">
+        What leaves your machine, and what does not.
+      </h1>
+      <p class="text-mute">
+        Soquel is a desktop application. There is no account to create, nothing to sign in to, and
+        no copy of your data on anyone's server. This page is the exhaustive list of the exceptions,
+        because for a tool that holds database passwords and SSH keys, a vague answer is not an
+        answer.
+      </p>
+
+      <h2>What the app sends</h2>
+      <p class="text-mute">
+        One thing, and only when it checks for an update: a request to
+        <code class="font-mono text-sm text-ink">releases.soquel.dev</code>. That request
+        necessarily carries your IP address, your operating system and processor architecture, and
+        the version you are running, because those are what the app asks the server about. It
+        carries no identifier, no account and no machine fingerprint, and nothing about your
+        connections or your data. It happens once at startup and whenever you ask, and you can read
+        it in the app's own log.
+      </p>
+      <p class="text-mute">
+        Nothing else. No analytics, no usage statistics, no remote fonts or scripts: everything the
+        window draws is bundled in the application, behind a strict content security policy. Crash
+        reporting does not exist yet; if it is added it will be opt-in, and it will show you the
+        contents before anything is sent.
+      </p>
+
+      <h2>What the app runs on your behalf</h2>
+      <p class="text-mute">
+        A connection can take its password from a command you configure, which is how RDS IAM
+        tokens, Vault and 1Password are handled. The app executes the program you named and reads
+        its output; what that program does is between you and it. A command that arrives inside an
+        imported connections file stays inert until you have read its exact arguments and approved
+        them.
+      </p>
+
+      <h2>What stays on your machine</h2>
+      <p class="text-mute">
+        Passwords and passphrases live in your operating system's keychain, or only in memory when
+        you choose to be asked each time, or in the command you configured. They never cross into
+        the application's web view, and an exported connections file leaves them out unless you
+        explicitly include them, in which case the file is encrypted with a passphrase only you
+        know.
+      </p>
+      <p class="text-mute">
+        The MCP server that lends databases to coding agents binds the loopback interface and
+        requires a bearer token that never leaves the machine. Its audit log is local. The
+        diagnostic summary the app can produce is assembled locally and copied by you: it carries no
+        connection names, no hostnames and no log contents, and nothing sends it anywhere.
+      </p>
+
+      <h2>This website</h2>
+      <p class="text-mute">
+        soquel.dev counts page views with Umami, running on our own server rather than a third
+        party's. It sets no cookies, follows you across no other site, and records a page address, a
+        referrer and an approximate country. Nothing is sold or shared.
+      </p>
+
+      <h2>Contact</h2>
+      <p class="text-mute">
+        Questions about any of the above:
+        <a
+          href="mailto:hi@soquel.dev"
+          class="text-ink underline underline-offset-4"
+        >hi@soquel.dev</a
+        >, or open an issue on
+        <a
+          href={SITE.repo}
+          target="_blank"
+          rel="noopener"
+          class="text-ink underline underline-offset-4"
+        >GitHub</a
+        >. The application is source available, so every claim on this page can be checked against
+        the code rather than taken on trust.
+      </p>
+
+      <p class="mt-12 font-mono text-xs text-mute">Last updated {updated}.</p>
+    </main>
+
+    <SiteFooter />
+  </div>
+</Base>

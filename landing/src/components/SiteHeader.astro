@@ -1,0 +1,26 @@
+---
+import Wordmark from '@/components/Wordmark.astro'
+import { SITE } from '@/lib/site'
+
+const { pathname } = Astro.url
+---
+
+<header class="flex items-center justify-between border-b border-rule py-5">
+  {
+    pathname === '/'
+      ? <Wordmark />
+      : (
+          <a href="/" class="underline-offset-4 hover:underline">
+            <Wordmark />
+          </a>
+        )
+  }
+  <a
+    href={SITE.repo}
+    target="_blank"
+    rel="noopener"
+    aria-label="soquel source on GitHub"
+    class="font-mono text-xs text-mute underline-offset-4 hover:text-ink hover:underline"
+  >Source</a
+  >
+</header>

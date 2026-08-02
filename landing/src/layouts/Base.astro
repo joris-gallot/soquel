@@ -19,7 +19,10 @@ const {
 } = Astro.props
 
 const site = Astro.site ?? new URL(SITE.url)
-const canonical = new URL(Astro.url.pathname, site).toString()
+// The sitemap drops the root's trailing slash and re-applies that after any
+// serialize hook, so the canonical is what has to match it.
+const canonical
+  = Astro.url.pathname === '/' ? site.origin : new URL(Astro.url.pathname, site).toString()
 
 // Referenced only once it exists: a card that 404s is worse than none, and it
 // cannot be produced here (no rasteriser, and IBM Plex is not a system font).

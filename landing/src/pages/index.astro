@@ -1,7 +1,8 @@
 ---
 import ApprovalCard from '@/components/ApprovalCard.astro'
 import Shot from '@/components/Shot.astro'
-import Wordmark from '@/components/Wordmark.astro'
+import SiteFooter from '@/components/SiteFooter.astro'
+import SiteHeader from '@/components/SiteHeader.astro'
 import Base from '@/layouts/Base.astro'
 import { ENGINES, FEATURES, SITE } from '@/lib/site'
 
@@ -53,17 +54,7 @@ const shots = [
 
 <Base>
   <div class="mx-auto max-w-3xl px-6">
-    <header class="flex items-center justify-between border-b border-rule py-5">
-      <Wordmark />
-      <a
-        href={SITE.repo}
-        target="_blank"
-        rel="noopener"
-        aria-label="soquel source on GitHub"
-        class="font-mono text-xs text-mute underline-offset-4 hover:text-ink hover:underline"
-      >Source</a
-      >
-    </header>
+    <SiteHeader />
 
     <main>
       <section class="py-16 sm:py-24">
@@ -170,18 +161,6 @@ const shots = [
       </section>
     </main>
 
-    <footer
-      class="flex flex-wrap items-center justify-between gap-3 border-t border-rule py-8 font-mono text-xs text-mute"
-    >
-      <span>Offline by design, no telemetry.</span>
-      <a
-        href={SITE.repo}
-        target="_blank"
-        rel="noopener"
-        aria-label="soquel source on GitHub"
-        class="underline-offset-4 hover:text-ink hover:underline"
-      >GitHub</a
-      >
-    </footer>
+    <SiteFooter />
   </div>
 </Base>

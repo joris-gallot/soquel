@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "private": true,
   "packageManager": "pnpm@11.17.0",
-  "description": "Next generation database client",
+  "description": "Desktop database client for Postgres, MySQL, SQLite, Redis and MongoDB",
   "license": "FSL-1.1-MIT",
   "engines": {
     "node": "26.3.1"

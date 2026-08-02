@@ -1,6 +1,6 @@
 # soquel
 
-Next generation database client.
+A desktop database client that lends coding agents the query, not the credentials.
 
 A Tauri 2 desktop app: the Rust core owns everything heavy and sensitive (database drivers, SSH tunnels, connection pools, result streaming, credentials), the Vue 3 webview is a thin client on top. Pre-release, under active development: no builds to download yet.
 

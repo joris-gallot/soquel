@@ -1,7 +1,7 @@
 [package]
 name = "soquel"
 version = "0.1.0"
-description = "Next generation database client"
+description = "Desktop database client for Postgres, MySQL, SQLite, Redis and MongoDB"
 license = "FSL-1.1-MIT"
 authors = [ "Joris Gallot" ]
 edition = "2021"

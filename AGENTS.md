@@ -6,7 +6,7 @@ Guidance for agents in this repo. Shared stack conventions are imported above; e
 
 ## What this is
 
-Soquel is a next generation database client (TablePlus alternative): a Tauri 2 desktop app. The Rust core owns everything heavy and sensitive (DB drivers, SSH tunnels, connection pools, result streaming, credentials); the Vue webview is a thin client. v1 targets Postgres + SSH tunnels + table browser + SQL editor; MySQL and Redis come later behind a capability-based connector trait.
+Soquel is a desktop database client in the TablePlus mould: a Tauri 2 desktop app. The Rust core owns everything heavy and sensitive (DB drivers, SSH tunnels, connection pools, result streaming, credentials); the Vue webview is a thin client. v1 targets Postgres + SSH tunnels + table browser + SQL editor; MySQL and Redis come later behind a capability-based connector trait.
 
 Two architecture rules that must hold:
 

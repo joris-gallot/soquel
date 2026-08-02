@@ -1,13 +1,11 @@
 ---
 import ApprovalCard from '@/components/ApprovalCard.astro'
+import Downloads from '@/components/Downloads.astro'
 import Shot from '@/components/Shot.astro'
 import SiteFooter from '@/components/SiteFooter.astro'
 import SiteHeader from '@/components/SiteHeader.astro'
 import Base from '@/layouts/Base.astro'
-import { DEB, DOWNLOADS, ENGINES, FEATURES, SITE } from '@/lib/site'
-
-/// Every url null means the first release has not shipped.
-const released = DOWNLOADS.some(build => build.url)
+import { ENGINES, FEATURES } from '@/lib/site'
 
 const guardrails = [
   {
@@ -144,62 +142,7 @@ const shots = [
         </dl>
       </section>
 
-      <section class="border-t border-rule py-14">
-        <p class="label">Get it</p>
-        <h2 class="mt-3 max-w-xl font-mono text-xl leading-snug font-medium tracking-tight">
-          {released ? 'Download soquel.' : 'No builds yet.'}
-        </h2>
-        <p class="mt-4 max-w-xl text-mute">
-          {
-            released
-              ? 'Signed builds for the three desktops. Every one of them updates itself, and the source stays available under FSL-1.1-MIT.'
-              : 'Soquel is pre-release and under active development. The source is available under FSL-1.1-MIT: read it, build it for yourself, or watch the repository for the first signed builds.'
-          }
-        </p>
-
-        {
-          released && (
-            <>
-              <div class="mt-8 grid gap-3 sm:grid-cols-3">
-                {DOWNLOADS.filter(build => build.url).map(build => (
-                  <a
-                    href={build.url}
-                    data-umami-event={build.event}
-                    class="rounded-card border-rule hover:border-ink flex flex-col border p-4 transition-colors"
-                  >
-                    <span class="font-mono text-sm font-medium">{build.platform}</span>
-                    <span class="text-mute mt-1 text-xs">{build.detail}</span>
-                    <span class="label mt-3">{build.format}</span>
-                  </a>
-                ))}
-              </div>
-              {DEB.url && (
-                <p class="text-mute mt-4 text-xs">
-                  Also a{' '}
-                  <a
-                    href={DEB.url}
-                    data-umami-event={DEB.event}
-                    class="text-ink underline underline-offset-4"
-                  >
-                    .deb
-                  </a>{' '}
-                  for Debian and Ubuntu. It installs the same application, but the updater cannot
-                  replace a package your system owns: apt or a fresh download handles those.
-                </p>
-              )}
-            </>
-          )
-        }
-
-        <a
-          href={SITE.repo}
-          target="_blank"
-          rel="noopener"
-          data-umami-event="source-cta"
-          class={`inline-flex rounded-md px-4 py-2.5 font-sans text-sm font-medium transition-opacity hover:opacity-90 ${released ? 'border-rule text-ink mt-8 border' : 'bg-ink text-paper mt-6'}`}
-        >Read the source</a
-        >
-      </section>
+      <Downloads />
     </main>
 
     <SiteFooter />

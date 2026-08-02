@@ -6,6 +6,7 @@ import { TooltipProvider } from 'reka-ui'
 import { onMounted, ref } from 'vue'
 import CommandApprovalDialog from '@/components/CommandApprovalDialog.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
+import DiagnosticsDialog from '@/components/DiagnosticsDialog.vue'
 import HostKeyDialog from '@/components/HostKeyDialog.vue'
 import McpApprovalDialog from '@/components/McpApprovalDialog.vue'
 import SecretPromptDialog from '@/components/SecretPromptDialog.vue'
@@ -19,6 +20,7 @@ import { useUpdater } from '@/composables/useUpdater'
 const { mode, toggle } = useTheme()
 
 const palette = ref<InstanceType<typeof CommandPalette> | null>(null)
+const diagnosticsOpen = ref(false)
 
 const { state: version } = useAsyncState(getVersion, '')
 
@@ -79,12 +81,13 @@ onMounted(async () => {
           <component :is="mode === 'dark' ? Sun : Moon" class="size-3" />
         </button>
       </footer>
-      <CommandPalette ref="palette" />
+      <CommandPalette ref="palette" @diagnostics="diagnosticsOpen = true" />
       <HostKeyDialog />
       <SecretPromptDialog />
       <CommandApprovalDialog />
       <McpApprovalDialog />
       <UpdatePanel v-model:open="panelOpen" />
+      <DiagnosticsDialog v-model:open="diagnosticsOpen" />
       <Toaster />
     </div>
   </TooltipProvider>

@@ -59,7 +59,9 @@ fn log_dir(app: &AppHandle) -> Result<PathBuf, Error> {
   }
 }
 
-pub fn open_log_folder(app: &AppHandle) -> Result<(), Error> {
+/// Returns the folder it asked for, because it cannot promise a window: the
+/// opener spawns detached, so a session with no file manager fails silently.
+pub fn open_log_folder(app: &AppHandle) -> Result<String, Error> {
   let dir = log_dir(app)?;
   // The folder rather than the file: a log opened in a text editor is not what
   // someone about to attach it to a report wants.
@@ -68,7 +70,8 @@ pub fn open_log_folder(app: &AppHandle) -> Result<(), Error> {
     .open_path(dir.to_string_lossy(), None::<&str>)
     .map_err(|err| Error::Unsupported {
       message: format!("could not open the log folder: {err}"),
-    })
+    })?;
+  Ok(dir.display().to_string())
 }
 
 const fn kind_label(kind: ConnectorKind) -> &'static str {

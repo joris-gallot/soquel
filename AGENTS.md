@@ -98,6 +98,10 @@ Levels: `Warn` globally, `Info` for `soquel_lib`. An `Info` floor everywhere bur
 
 `diagnostics` returns one preformatted block, built in the core where the facts are. It carries **no connection names, no hosts, no database paths** and never the log's contents: it is meant to be pasted into a public issue, and driver errors in the log can hold a table name or a query fragment. Counts per kind are enough to triage. The webview reaches both this and `open_log_folder` through the command layer, so `tauri-plugin-opener` is a Rust-only dependency with no `opener:` permission in the capabilities.
 
+`DiagnosticsDialog.vue` is the surface, reached from the palette: it shows the block before anyone copies it (proving the no-names claim rather than promising it in a toast) and offers to open the log folder. Opening cannot be verified, since the opener spawns detached and a session with no file manager reports success while doing nothing, so the log path stays visible in the block and a "Copy path" button sits next to the open button.
+
+Known dead end under WSL: the `open` crate puts PowerShell first there and passes the target in an env var without listing it in `WSLENV`, which WSL interop requires, so the Windows process receives an empty path and `Start-Process` refuses. Detached, that surfaces as nothing at all. Shipped platforms are unaffected; use "Copy path" while developing.
+
 ### Updater
 
 `src-tauri/src/updater.rs` wraps the Tauri updater behind `check_update` / `install_update`, so the webview never touches the plugin's own JS API and `capabilities/default.json` needs no `updater:` permission. Download progress rides the `UpdateProgress` event; `install_update` only ever returns on failure, since a successful install restarts the app.

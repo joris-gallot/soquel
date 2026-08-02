@@ -1199,7 +1199,7 @@ pub async fn diagnostics(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn open_log_folder(app: tauri::AppHandle) -> Result<(), Error> {
+pub async fn open_log_folder(app: tauri::AppHandle) -> Result<String, Error> {
   crate::diagnostics::open_log_folder(&app)
 }
 

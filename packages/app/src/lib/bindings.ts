@@ -112,7 +112,7 @@ export const commands = {
 	 *  formatting to the webview where the facts do not live.
 	 */
 	diagnostics: () => typedError<string, Error>(__TAURI_INVOKE("diagnostics")),
-	openLogFolder: () => typedError<null, Error>(__TAURI_INVOKE("open_log_folder")),
+	openLogFolder: () => typedError<string, Error>(__TAURI_INVOKE("open_log_folder")),
 	checkUpdate: () => typedError<{
 	version: string,
 	currentVersion: string,

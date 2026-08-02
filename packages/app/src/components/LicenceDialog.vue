@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { useLicence } from '@/composables/useLicence'
+import { formatDay } from '@/lib/format'
 
 const { status, install } = useLicence()
 const open = defineModel<boolean>('open', { required: true })
@@ -26,13 +27,8 @@ watch(open, (isOpen) => {
   }
 })
 
-const until = computed(() => {
-  const raw = status.value.kind === 'free' ? null : status.value.updatesUntil
-  if (!raw)
-    return null
-  const date = new Date(raw)
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString()
-})
+const until = computed(() =>
+  formatDay(status.value.kind === 'free' ? null : status.value.updatesUntil))
 
 async function apply() {
   if (token.value.trim() === '')

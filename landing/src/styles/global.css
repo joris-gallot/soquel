@@ -25,6 +25,8 @@
   --color-string: oklch(0.52 0.11 150);
   --color-number: oklch(0.53 0.12 70);
   --color-danger: oklch(0.577 0.245 27.325);
+  /* The app hardcodes this one in both themes: it belongs to the wordmark. */
+  --color-cursor: oklch(0.72 0.11 240);
 
   --radius-card: 0.625rem;
 }
@@ -78,6 +80,21 @@
   color: var(--color-mute);
 }
 
+/* The app's prompt cursor, same timing and same blue in both themes: it belongs
+   to the wordmark, so it must not shift with the page theme. */
+.prompt-cursor {
+  /* Through the variable, not the literal: a direct oklch gets downlevelled to
+     an sRGB hex, which is a different blue from the app's on a wide-gamut screen. */
+  background: var(--color-cursor);
+  animation: blink 1.2s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 /* One orchestrated moment: the statement lands line by line, then the buttons. */
 @keyframes settle {
   from {
@@ -101,7 +118,8 @@
     scroll-behavior: auto;
   }
 
-  .settle {
+  .settle,
+  .prompt-cursor {
     animation: none;
   }
 }

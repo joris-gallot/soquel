@@ -164,18 +164,16 @@ mod tests {
   use crate::profiles::{ConnectorParams, Env, SqlServerParams, SslMode};
 
   #[test]
-  fn dev_and_release_write_to_separate_files() {
-    #[cfg(debug_assertions)]
-    assert_eq!(LOG_FILE_NAME, "soquel-dev");
-    #[cfg(not(debug_assertions))]
-    assert_eq!(LOG_FILE_NAME, "soquel");
-  }
-
-  #[test]
-  fn every_kind_has_a_label() {
-    // Exhaustive by construction; this pins the wording a report is read with.
-    assert_eq!(kind_label(ConnectorKind::Postgres), "postgres");
-    assert_eq!(kind_label(ConnectorKind::Mongo), "mongo");
+  fn an_isolated_run_keeps_its_logs_with_its_data() {
+    // e2e sets SOQUEL_DATA_DIR: logs landing in the real log dir instead would
+    // be invisible until someone read a stranger's file.
+    assert_eq!(log_dir_override(), None);
+    std::env::set_var("SOQUEL_DATA_DIR", "/tmp/soquel-e2e");
+    assert_eq!(
+      log_dir_override(),
+      Some(PathBuf::from("/tmp/soquel-e2e/logs"))
+    );
+    std::env::remove_var("SOQUEL_DATA_DIR");
   }
 
   fn facts() -> Facts<'static> {

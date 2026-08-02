@@ -27,7 +27,7 @@ const { state: version } = useAsyncState(getVersion, '')
 
 const { available, panelOpen, check, listen } = useUpdater()
 const { load: loadKeychain } = useKeychain()
-const { modifier, load: loadOs } = useOs()
+const { paletteShortcut, load: loadOs } = useOs()
 
 onMounted(async () => {
   // Before any form opens: the core probed the keyring at startup, and the
@@ -72,7 +72,7 @@ onMounted(async () => {
           data-testid="open-palette"
           @click="palette && (palette.open = true)"
         >
-          {{ modifier }}K
+          {{ paletteShortcut }}
         </button>
         <button
           type="button"

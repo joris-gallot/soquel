@@ -11,17 +11,17 @@ vi.mock('@/lib/bindings', () => ({
 
 describe('useOs', () => {
   it('prints the modifier of the platform the core reports', async () => {
-    const { load, modifier, isMac } = useOs()
+    const { load, paletteShortcut, isMac } = useOs()
 
     // Ctrl until the core answers: the palette binds both, so the label is the
     // only thing at stake and the majority platform is the safer default.
-    expect(modifier.value).toBe('Ctrl ')
+    expect(paletteShortcut.value).toBe('Ctrl K')
 
     await load()
     await load()
 
     expect(isMac.value).toBe(true)
-    expect(modifier.value).toBe('⌘')
+    expect(paletteShortcut.value).toBe('⌘K')
     expect(platform).toHaveBeenCalledTimes(1)
   })
 })

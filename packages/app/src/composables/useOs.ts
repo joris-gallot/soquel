@@ -15,8 +15,9 @@ export function useOs() {
   }
 
   const isMac = computed(() => os.value === 'macos')
-  /// Ctrl on Windows and Linux, where the palette binds both anyway.
-  const modifier = computed(() => (isMac.value ? '⌘' : 'Ctrl '))
+  /// Whole label rather than a modifier the caller concatenates: the non-mac one
+  /// needs a space, and a constant whose trailing space matters gets eaten.
+  const paletteShortcut = computed(() => (isMac.value ? '⌘K' : 'Ctrl K'))
 
-  return { os, isMac, modifier, load }
+  return { os, isMac, paletteShortcut, load }
 }

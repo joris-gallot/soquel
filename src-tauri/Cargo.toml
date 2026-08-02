@@ -62,7 +62,7 @@ rusqlite = { version = "0.40.1", features = [
   "bundled",
   "column_decltype"
 ] }
-redis = { version = "0.32.2", default-features = false, features = [
+redis = { version = "0.32.7", default-features = false, features = [
   "tokio-comp",
   "tokio-rustls-comp"
 ] }

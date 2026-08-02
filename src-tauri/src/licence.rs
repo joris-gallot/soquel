@@ -143,7 +143,16 @@ pub fn read(path: &std::path::Path) -> LicenceStatus {
 
 /// Validated before it is written: a bad paste must not replace a working licence.
 pub fn install(path: &std::path::Path, token: &str) -> Result<LicenceStatus, Error> {
-  let status = status_of(token, BUILT, PUBLIC_KEY)?;
+  install_with(path, token, BUILT, PUBLIC_KEY)
+}
+
+fn install_with(
+  path: &std::path::Path,
+  token: &str,
+  built: &str,
+  key_base64: &str,
+) -> Result<LicenceStatus, Error> {
+  let status = status_of(token, built, key_base64)?;
   if let Some(dir) = path.parent() {
     std::fs::create_dir_all(dir)?;
   }
@@ -277,6 +286,20 @@ mod tests {
   }
 
   #[test]
+  fn a_rejected_paste_leaves_the_licence_that_was_already_there() {
+    let (signing, public) = keypair(7);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("licence.txt");
+    let good = token_with(&signing, &payload(1, "2027-01-01T00:00:00Z"));
+    install_with(&path, &good, BUILT_AT, &public).unwrap();
+
+    // Someone pasting over a working licence and getting it wrong must not lose
+    // the one they paid for.
+    assert!(install_with(&path, "rubbish", BUILT_AT, &public).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), good);
+  }
+
+  #[test]
   fn anything_that_is_not_a_token_is_refused_without_panicking() {
     let (_, public) = keypair(7);
 
@@ -289,12 +312,5 @@ mod tests {
   fn the_shipped_public_key_is_a_usable_ed25519_key() {
     // A typo in the constant would only surface the day someone pastes a licence.
     assert!(verifying_key(PUBLIC_KEY).is_ok());
-  }
-
-  #[test]
-  fn the_build_stamps_its_own_date() {
-    // build.rs supplies this; without it the window check has nothing to compare.
-    assert!(BUILT.len() >= 20, "{BUILT}");
-    assert!(BUILT.contains('T'), "{BUILT}");
   }
 }

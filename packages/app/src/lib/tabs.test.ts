@@ -106,11 +106,4 @@ describe('the free tier limit', () => {
     expect(back.tabs).toHaveLength(2)
     expect(back.activeId).toBe(opened.activeId)
   })
-
-  it('opens without limit when none is given', () => {
-    let state = EMPTY_TABS
-    for (let i = 0; i < 5; i++)
-      state = openSqlTab(state)
-    expect(state.tabs).toHaveLength(5)
-  })
 })

@@ -111,69 +111,16 @@ jobs:
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      # Not on Windows: the test binary builds and links there, then the loader
+      # refuses it with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139). It is not a
+      # shadowed C runtime, which was measured rather than assumed: pruning PATH to
+      # System32 changes nothing. Two upstream reports carry the same signature and
+      # neither has a workaround (https://github.com/tauri-apps/tauri/issues/13419, #13948).
+      #
       # integration_* tests skip themselves without their SOQUEL_TEST_* env vars.
       - name: Test
+        if: runner.os != 'Windows'
         run: cargo test --manifest-path src-tauri/Cargo.toml
-
-      # Temporary. The Windows test binary builds and links, then the loader refuses
-      # it with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139): an imported DLL does not
-      # export something it wants. Two upstream issues describe it with no
-      # workaround (tauri-apps/tauri#13419, #13948), so this prints the imports
-      # rather than guessing. Delete once the cause is known.
-      - name: Diagnose a Windows loader failure
-        if: failure() && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem src-tauri/target/debug/deps -Filter 'soquel_lib-*.exe' -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $exe) { Write-Host 'no test executable was produced: the failure is earlier than the loader'; exit 0 }
-          Write-Host "test executable: $($exe.FullName)"
-
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          # -First 1: vswhere prints one line per install, and two would stringify
-          # into a path that exists nowhere.
-          $vc = & $vswhere -latest -products * -property installationPath | Select-Object -First 1
-          $dumpbin = Get-ChildItem "$vc\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -like '*Hostx64\x64*' } | Select-Object -First 1
-          if (-not $dumpbin) { Write-Host 'dumpbin not found under the VC tools'; exit 0 }
-
-          Write-Host "`n=== dependent DLLs ==="
-          $dependents = & $dumpbin.FullName /nologo /dependents $exe.FullName
-          $dependents
-
-          # Where each one actually resolves from: a shadowing copy on PATH is the
-          # usual way an export goes missing at load time.
-          Write-Host "`n=== where each resolves ==="
-          $dependents |
-            Select-String -Pattern '^\s+(\S+\.dll)$' |
-            ForEach-Object { $_.Matches[0].Groups[1].Value } |
-            Sort-Object -Unique |
-            ForEach-Object {
-              $found = (& where.exe $_ 2>$null) -join ', '
-              Write-Host "$_ -> $(if ($found) { $found } else { 'NOT FOUND on PATH' })"
-            }
-
-          # The decisive experiment. The runner's PATH puts the JDK's and Python's
-          # copies of the C runtime ahead of System32, but the loader searches
-          # System32 before PATH, so that ordering should not matter. If the binary
-          # loads with PATH pruned, it does, and pruning it is the fix.
-          Write-Host "`n=== does it load with PATH pruned to System32? ==="
-          $original = $env:PATH
-          $env:PATH = "$env:SystemRoot\System32"
-          # try/catch because GitHub runs pwsh steps with ErrorActionPreference stop:
-          # a launch that throws would skip the imports below, which is the half of
-          # this we need when the experiment comes back negative.
-          try { & $exe.FullName --list 2>&1 | Select-Object -First 5 }
-          catch { Write-Host "launch threw: $_" }
-          Write-Host "exit code with a pruned PATH: $LASTEXITCODE"
-          $env:PATH = $original
-
-          # If it still refuses, the shadowing theory is out and the missing symbol
-          # has to be named. These are the imports a mismatched runtime would fail
-          # to satisfy.
-          Write-Host "`n=== imports from the C runtime ==="
-          & $dumpbin.FullName /nologo /imports $exe.FullName |
-            Select-String -Pattern 'vcruntime|api-ms-win-crt|ucrtbase' -Context 0, 12
 
       # export_typescript_bindings just rewrote bindings.ts: fail if it was stale.
       # Linux only, since git on Windows would report the line endings as a diff.

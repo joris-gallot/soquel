@@ -30,8 +30,14 @@ export function useLicence() {
     status.value = unwrap(await commands.installLicence(token))
   }
 
+  /// The normal path. The core makes the call and installs what comes back, so the
+  /// only difference here is what the user pasted.
+  async function activate(key: string) {
+    status.value = unwrap(await commands.activateLicence(key))
+  }
+
   const unlocked = computed(() => status.value.kind === 'licensed')
   const tabLimit = computed(() => (unlocked.value ? Number.POSITIVE_INFINITY : FREE_TABS))
 
-  return { status, unlocked, tabLimit, panelOpen, load, install }
+  return { status, unlocked, tabLimit, panelOpen, load, install, activate }
 }

@@ -13,6 +13,10 @@ let exiting = false
 const E2E_DATA_DIR = path.join(os.tmpdir(), 'soquel-e2e-data')
 process.env.SOQUEL_DATA_DIR = E2E_DATA_DIR
 process.env.SOQUEL_EPHEMERAL_SECRETS = '1'
+// A closed port, so activation fails at the transport. Nothing can stand in for the
+// real service: only it holds the key whose public half this binary trusts, so the
+// refusal path is what an e2e run can actually cover.
+process.env.SOQUEL_ACTIVATION_ENDPOINT = 'http://127.0.0.1:1/activate'
 
 export const config: WebdriverIO.Config = {
   hostname: '127.0.0.1',

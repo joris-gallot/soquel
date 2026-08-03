@@ -9,6 +9,22 @@ pub enum SecretSubject {
   Tunnel,
 }
 
+/// Why an activation was refused. Each one asks something different of the buyer,
+/// which is the whole reason the licence service distinguishes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivationReason {
+  /// The request never got an answer: no network, DNS, TLS, or a timeout.
+  Offline,
+  UnknownKey,
+  WrongProduct,
+  Revoked,
+  ActivationLimit,
+  /// The service answered, but could not reach Polar. The only one where nothing
+  /// is wrong with the purchase.
+  UpstreamUnavailable,
+}
+
 /// Normalized error shape crossing the IPC boundary.
 #[derive(Debug, thiserror::Error, Serialize, Type)]
 #[serde(
@@ -54,6 +70,12 @@ pub enum Error {
   },
   #[error("{message}")]
   Update { message: String },
+  /// `reason` rather than `kind`: that name is already the tag of this enum.
+  #[error("{message}")]
+  Activation {
+    message: String,
+    reason: ActivationReason,
+  },
   /// A credential command nobody agreed to run yet: it arrived with an import.
   #[error("{message}")]
   CommandApprovalRequired {

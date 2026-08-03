@@ -134,7 +134,7 @@ defineExpose({ open })
           <ArrowDownToLine />
           <span>Check for updates</span>
         </CommandItem>
-        <CommandItem value="licence license unlock buy" @select="showLicence">
+        <CommandItem value="licence license unlock buy" data-testid="palette-licence" @select="showLicence">
           <KeyRound />
           <span>Licence</span>
         </CommandItem>

@@ -5560,6 +5560,7 @@ dependencies = [
  "mongodb",
  "mysql_async",
  "redis",
+ "reqwest",
  "rmcp",
  "rusqlite",
  "russh",

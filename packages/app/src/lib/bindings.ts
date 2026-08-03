@@ -112,6 +112,11 @@ export const commands = {
 	 */
 	licenceStatus: () => typedError<LicenceStatus, Error>(__TAURI_INVOKE("licence_status")),
 	installLicence: (token: string) => typedError<LicenceStatus, Error>(__TAURI_INVOKE("install_licence", { token })),
+	/**
+	 *  The normal path: a key goes out, a signed file comes back and is installed
+	 *  through the same validation as a pasted one.
+	 */
+	activateLicence: (key: string) => typedError<LicenceStatus, Error>(__TAURI_INVOKE("activate_licence", { key })),
 	secretsStatus: () => typedError<SecretsStatus, Error>(__TAURI_INVOKE("secrets_status")),
 	/**
 	 *  The compile target, not a user agent string: the webview needs it for the
@@ -141,6 +146,19 @@ export const events = {
 };
 
 /* Types */
+/**
+ *  Why an activation was refused. Each one asks something different of the buyer,
+ *  which is the whole reason the licence service distinguishes them.
+ */
+export type ActivationReason = 
+/**  The request never got an answer: no network, DNS, TLS, or a timeout. */
+"offline" | "unknown-key" | "wrong-product" | "revoked" | "activation-limit" | 
+/**
+ *  The service answered, but could not reach Polar. The only one where nothing
+ *  is wrong with the purchase.
+ */
+"upstream-unavailable";
+
 /**  What the MCP server may do with a connection; `None` hides it from agents entirely. */
 export type AgentAccess = "none" | "read-only" | "write-with-approval";
 
@@ -323,6 +341,8 @@ export type Env = "dev" | "staging" | "prod";
 export type Error = { kind: "not-found"; message: string } | { kind: "storage"; message: string } | { kind: "secret"; message: string } | { kind: "unsupported"; message: string } | { kind: "database"; message: string } | { kind: "tunnel"; message: string } | { kind: "host-key-untrusted"; message: string; host: string; port: number; fingerprint: string; key: string; previouslyTrusted: boolean } | 
 /**  The profile asks for its password interactively; the caller must supply one. */
 { kind: "secret-required"; message: string; subject: SecretSubject; targetId: string; targetName: string } | { kind: "credential-command"; message: string; program: string; stderr: string } | { kind: "update"; message: string } | 
+/**  `reason` rather than `kind`: that name is already the tag of this enum. */
+{ kind: "activation"; message: string; reason: ActivationReason } | 
 /**  A credential command nobody agreed to run yet: it arrived with an import. */
 { kind: "command-approval-required"; message: string; subject: SecretSubject; targetId: string; targetName: string; program: string; args: string[] };
 

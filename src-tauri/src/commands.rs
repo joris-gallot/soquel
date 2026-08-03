@@ -1205,6 +1205,18 @@ pub async fn install_licence(
   crate::licence::install(&licence_path(state.inner()), &token)
 }
 
+/// The normal path: a key goes out, a signed file comes back and is installed
+/// through the same validation as a pasted one.
+#[tauri::command]
+#[specta::specta]
+pub async fn activate_licence(
+  state: State<'_, AppState>,
+  key: String,
+) -> Result<crate::licence::LicenceStatus, Error> {
+  let token = crate::activation::activate(key.trim()).await?;
+  crate::licence::install(&licence_path(state.inner()), &token)
+}
+
 fn licence_path(state: &AppState) -> std::path::PathBuf {
   state.data_dir.join("licence.txt")
 }

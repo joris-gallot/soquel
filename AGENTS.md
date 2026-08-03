@@ -105,6 +105,10 @@ The public key is a parameter with the constant as its default: inline, no test 
 
 The limit is two tabs **per connection**, enforced in the pure functions of `lib/tabs.ts`. Only opening counts: `openTableTab` re-activating a tab that is already there must always pass, or the limit blocks navigation instead of a purchase.
 
+`activation.rs` is the normal way in: `activate_licence` posts the key a buyer pasted to the licence service and installs the file it returns through `licence::install`, so a bad answer is refused by the same validation as a bad paste. The HTTP call lives in the core like the updater's, so the capabilities need no `http:` permission. `SOQUEL_ACTIVATION_ENDPOINT` overrides the endpoint in debug builds only. The refusals are told apart by the body, not the status: the service answers 403 for both a revoked key and one from another product, and `ActivationReason` is what the dialog keys its wording on in `lib/licence.ts`. reqwest is pinned to `rustls-no-provider` and handed a ring config per call, since it panics if a client is built with no provider and the alternative pulls aws-lc-rs into the graph.
+
+Pasting a licence **file** stays as the second path, folded away in `LicenceDialog.vue`. Not to save activations: it works with no network, it outlives the service, and it is how a licence gets issued with no Polar order behind it.
+
 ### Logs and diagnostics
 
 `diagnostics.rs` owns both. The log plugin is registered on the builder chain, not in `setup`, so anything logged while starting up (the keyring probe first of all) is captured. One file target always, Stdout only in debug (a bundle has no console). The log dir derives from the identifier and is therefore shared, so the file name is what separates them: `soquel-dev.log` in debug, `soquel.log` in release. With `SOQUEL_DATA_DIR` set, logs go to `<data dir>/logs` so an e2e run is as isolated for its logs as for its data.

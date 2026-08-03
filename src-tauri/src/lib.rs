@@ -12,6 +12,7 @@ use crate::secrets::{FileStore, InMemoryStore, KeyringStore, SecretStore};
 use crate::ssh::SshTunnel;
 use crate::tunnels::TunnelStore;
 
+mod activation;
 mod command_approvals;
 mod commands;
 mod connectors;
@@ -163,6 +164,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::mcp_revoke_trust,
       commands::licence_status,
       commands::install_licence,
+      commands::activate_licence,
       commands::secrets_status,
       commands::platform,
       commands::diagnostics,

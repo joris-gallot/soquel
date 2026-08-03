@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { ChevronRight } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -9,42 +11,80 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useLicence } from '@/composables/useLicence'
 import { formatDay } from '@/lib/format'
+import { ACTIVATION_MESSAGES } from '@/lib/licence'
+import { CommandError } from '@/lib/result'
 
-const { status, install } = useLicence()
+const { status, install, activate } = useLicence()
 const open = defineModel<boolean>('open', { required: true })
 
+const key = ref('')
 const token = ref('')
-const error = ref<string | null>(null)
+const pasting = ref(false)
+const outcome = ref<{ ok: boolean, message: string } | null>(null)
 const busy = ref(false)
 
 watch(open, (isOpen) => {
   if (isOpen) {
+    key.value = ''
     token.value = ''
-    error.value = null
+    pasting.value = false
+    outcome.value = null
   }
 })
 
 const until = computed(() =>
   formatDay(status.value.kind === 'free' ? null : status.value.updatesUntil))
 
-async function apply() {
-  if (token.value.trim() === '')
-    return
+/// A refused activation carries why, and each reason asks something different of
+/// the buyer. Anything else is already a sentence.
+function explain(thrown: unknown): string {
+  if (thrown instanceof CommandError && thrown.raw.kind === 'activation')
+    return ACTIVATION_MESSAGES[thrown.raw.reason]
+  return thrown instanceof Error ? thrown.message : String(thrown)
+}
+
+/// A licence can install and still unlock nothing, so success cannot be one phrase.
+function installed(): string {
+  return status.value.kind === 'licensed'
+    ? 'Licence added. Tabs are unlimited from here.'
+    : 'Licence added, and it does not cover this build.'
+}
+
+async function run(action: () => Promise<void>) {
   busy.value = true
-  error.value = null
+  outcome.value = null
   try {
-    await install(token.value)
-    token.value = ''
+    await action()
+    outcome.value = { ok: status.value.kind === 'licensed', message: installed() }
   }
-  catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+  catch (thrown) {
+    outcome.value = { ok: false, message: explain(thrown) }
   }
   finally {
     busy.value = false
   }
+}
+
+async function apply() {
+  if (key.value.trim() === '')
+    return
+  await run(async () => {
+    await activate(key.value)
+    key.value = ''
+  })
+}
+
+async function applyFile() {
+  if (token.value.trim() === '')
+    return
+  await run(async () => {
+    await install(token.value)
+    token.value = ''
+  })
 }
 </script>
 
@@ -73,17 +113,54 @@ async function apply() {
         </DialogDescription>
       </DialogHeader>
 
-      <!-- min-w-0: the token is one unbroken string, and the textarea sizes to its
-           content, so without a break point it widens the dialog off screen. -->
-      <div class="min-w-0 space-y-2">
-        <Textarea
-          v-model="token"
-          data-testid="licence-token"
-          class="h-24 max-h-24 w-full resize-none font-mono text-xs break-all"
-          placeholder="Paste your licence here"
+      <div class="min-w-0 space-y-3">
+        <Input
+          v-model="key"
+          data-testid="licence-key"
+          class="font-mono text-xs"
+          placeholder="SOQUEL-XXXX-XXXX-XXXX"
+          @keydown.enter="apply"
         />
-        <p v-if="error" data-testid="licence-error" class="font-mono text-xs text-destructive">
-          {{ error }}
+
+        <!-- Kept, and kept second: it needs no network, it outlives this service,
+             and it is how a licence gets handed out with no order behind it. -->
+        <Collapsible v-model:open="pasting">
+          <CollapsibleTrigger
+            data-testid="licence-file-toggle"
+            class="text-muted-foreground hover:text-foreground flex items-center gap-1 font-mono text-xs"
+          >
+            <ChevronRight class="size-3 transition-transform" :class="{ 'rotate-90': pasting }" />
+            I have a licence file
+          </CollapsibleTrigger>
+          <CollapsibleContent class="space-y-2 pt-2">
+            <!-- min-w-0: the token is one unbroken string, and the textarea sizes to
+                 its content, so without a break point it widens the dialog off screen. -->
+            <Textarea
+              v-model="token"
+              data-testid="licence-token"
+              class="h-24 max-h-24 w-full min-w-0 resize-none font-mono text-xs break-all"
+              placeholder="Paste your licence file"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="apply-licence-file"
+              :disabled="busy || token.trim() === ''"
+              @click="applyFile"
+            >
+              Add licence file
+            </Button>
+          </CollapsibleContent>
+        </Collapsible>
+
+        <p
+          v-if="outcome"
+          data-testid="licence-outcome"
+          class="font-mono text-xs"
+          :class="outcome.ok ? 'text-emerald-500' : 'text-destructive'"
+        >
+          {{ outcome.message }}
         </p>
       </div>
 
@@ -94,10 +171,10 @@ async function apply() {
         <Button
           type="button"
           data-testid="apply-licence"
-          :disabled="busy || token.trim() === ''"
+          :disabled="busy || key.trim() === ''"
           @click="apply"
         >
-          {{ busy ? 'Checking…' : 'Add licence' }}
+          {{ busy ? 'Checking…' : 'Activate' }}
         </Button>
       </DialogFooter>
     </DialogContent>

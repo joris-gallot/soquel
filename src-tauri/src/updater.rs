@@ -51,9 +51,14 @@ fn format_pub_date(date: time::OffsetDateTime) -> Option<String> {
 /// An empty value would blank the endpoint list instead of leaving it alone.
 #[cfg(debug_assertions)]
 fn endpoint_override() -> Option<String> {
-  std::env::var(ENDPOINT_ENV)
-    .ok()
-    .filter(|endpoint| !endpoint.trim().is_empty())
+  chosen_endpoint(std::env::var(ENDPOINT_ENV).ok())
+}
+
+/// Pure so its test mutates no process env: setenv beside a getenv on another
+/// thread is undefined behaviour, and the suite runs its tests in parallel.
+#[cfg(debug_assertions)]
+fn chosen_endpoint(configured: Option<String>) -> Option<String> {
+  configured.filter(|endpoint| !endpoint.trim().is_empty())
 }
 
 /// Roughly a hundred events over the download, whatever its size.
@@ -144,13 +149,12 @@ mod tests {
 
   #[test]
   fn blank_endpoint_override_is_ignored() {
-    std::env::set_var(ENDPOINT_ENV, "  ");
-    assert_eq!(endpoint_override(), None);
-    std::env::set_var(ENDPOINT_ENV, "http://127.0.0.1:9000/{{target}}");
+    // An empty value would blank the endpoint list instead of leaving it alone.
+    assert_eq!(chosen_endpoint(None), None);
+    assert_eq!(chosen_endpoint(Some("  ".to_string())), None);
     assert_eq!(
-      endpoint_override().as_deref(),
+      chosen_endpoint(Some("http://127.0.0.1:9000/{{target}}".to_string())).as_deref(),
       Some("http://127.0.0.1:9000/{{target}}")
     );
-    std::env::remove_var(ENDPOINT_ENV);
   }
 }

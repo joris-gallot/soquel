@@ -78,12 +78,19 @@ jobs:
         run: pnpm build
 
   rust:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      # All three results, every run: one platform failing must not hide the others.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Only Linux needs them: macOS and Windows carry their webview.
       - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $TAURI_DEPS
 
       - name: Install Rust toolchain
@@ -96,18 +103,22 @@ jobs:
           workspaces: src-tauri
           shared-key: soquel
 
+      # Formatting has no platform to differ on, so it runs once.
       - name: Format
+        if: runner.os == 'Linux'
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       # integration_* tests skip themselves without their SOQUEL_TEST_* env vars.
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       # export_typescript_bindings just rewrote bindings.ts: fail if it was stale.
+      # Linux only, since git on Windows would report the line endings as a diff.
       - name: Bindings up to date
+        if: runner.os == 'Linux'
         run: git diff --exit-code packages/app/src/lib/bindings.ts
 
   integration_tests:

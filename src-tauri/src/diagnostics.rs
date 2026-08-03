@@ -45,9 +45,13 @@ pub fn log_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 
 /// e2e sets SOQUEL_DATA_DIR: its logs belong with its data, not in the real log dir.
 fn log_dir_override() -> Option<PathBuf> {
-  std::env::var("SOQUEL_DATA_DIR")
-    .ok()
-    .map(|dir| PathBuf::from(dir).join("logs"))
+  log_dir_in(std::env::var("SOQUEL_DATA_DIR").ok())
+}
+
+/// Pure so its test mutates no process env, which would race every other test in
+/// the binary.
+fn log_dir_in(data_dir: Option<String>) -> Option<PathBuf> {
+  data_dir.map(|dir| PathBuf::from(dir).join("logs"))
 }
 
 fn log_dir(app: &AppHandle) -> Result<PathBuf, Error> {
@@ -170,13 +174,13 @@ mod tests {
   fn an_isolated_run_keeps_its_logs_with_its_data() {
     // e2e sets SOQUEL_DATA_DIR: logs landing in the real log dir instead would
     // be invisible until someone read a stranger's file.
-    assert_eq!(log_dir_override(), None);
-    std::env::set_var("SOQUEL_DATA_DIR", "/tmp/soquel-e2e");
+    assert_eq!(log_dir_in(None), None);
+    // Built from components rather than written with a separator: the expectation
+    // would otherwise be a unix path a Windows run could never match.
     assert_eq!(
-      log_dir_override(),
-      Some(PathBuf::from("/tmp/soquel-e2e/logs"))
+      log_dir_in(Some("run-data".to_string())),
+      Some(["run-data", "logs"].iter().collect::<PathBuf>())
     );
-    std::env::remove_var("SOQUEL_DATA_DIR");
   }
 
   fn facts() -> Facts<'static> {

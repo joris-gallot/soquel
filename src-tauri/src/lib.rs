@@ -165,6 +165,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
       commands::licence_status,
       commands::install_licence,
       commands::activate_licence,
+      commands::tab_limit_override,
       commands::secrets_status,
       commands::platform,
       commands::diagnostics,

@@ -1205,6 +1205,13 @@ pub async fn install_licence(
   crate::licence::install(&licence_path(state.inner()), &token)
 }
 
+/// None in a release build, whatever the environment says.
+#[tauri::command]
+#[specta::specta]
+pub async fn tab_limit_override() -> Result<Option<u32>, Error> {
+  Ok(crate::licence::tab_limit_override())
+}
+
 /// The normal path: a key goes out, a signed file comes back and is installed
 /// through the same validation as a pasted one.
 #[tauri::command]

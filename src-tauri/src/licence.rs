@@ -21,6 +21,32 @@ const BUILT: &str = env!("SOQUEL_BUILD_DATE");
 /// is refused rather than guessed at.
 const SUPPORTED_VERSION: u32 = 1;
 
+/// Dev only, like the endpoint overrides: an e2e run needs more tabs than the free
+/// tier opens, and a shipped build must not be unlockable by an environment variable.
+#[cfg(debug_assertions)]
+const TAB_LIMIT_ENV: &str = "SOQUEL_TAB_LIMIT";
+
+/// Raises the free tier's limit without claiming a licence: `read` still answers
+/// `Free`, so the dialog keeps telling the truth about what is installed.
+#[cfg(debug_assertions)]
+pub fn tab_limit_override() -> Option<u32> {
+  chosen_tab_limit(std::env::var(TAB_LIMIT_ENV).ok())
+}
+
+#[cfg(not(debug_assertions))]
+pub fn tab_limit_override() -> Option<u32> {
+  None
+}
+
+/// Pure so its test mutates no process env, and a value that is not a number is
+/// ignored rather than read as zero, which would open nothing at all.
+#[cfg(debug_assertions)]
+fn chosen_tab_limit(configured: Option<String>) -> Option<u32> {
+  configured
+    .and_then(|limit| limit.trim().parse::<u32>().ok())
+    .filter(|limit| *limit > 0)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Payload {
@@ -306,6 +332,18 @@ mod tests {
     for junk in ["", "not-a-licence", "only.one", "...", "a.b.c"] {
       assert!(status_of(junk, BUILT_AT, &public).is_err(), "{junk}");
     }
+  }
+
+  #[cfg(debug_assertions)]
+  #[test]
+  fn a_tab_limit_override_only_takes_a_usable_number() {
+    assert_eq!(chosen_tab_limit(None), None);
+    assert_eq!(chosen_tab_limit(Some(" 20 ".to_string())), Some(20));
+    // Zero would open no tabs at all, and a word would read as zero if parsed
+    // loosely: neither is a limit anybody meant to set.
+    assert_eq!(chosen_tab_limit(Some("0".to_string())), None);
+    assert_eq!(chosen_tab_limit(Some("lots".to_string())), None);
+    assert_eq!(chosen_tab_limit(Some(String::new())), None);
   }
 
   #[test]

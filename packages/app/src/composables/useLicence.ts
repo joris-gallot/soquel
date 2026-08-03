@@ -8,6 +8,8 @@ import { FREE_TABS } from '@/lib/tabs'
 /// dialog below, which refreshes it itself.
 const status = ref<LicenceStatus>({ kind: 'free' })
 const panelOpen = ref(false)
+/// Debug builds only, and null everywhere else: the core decides, not the webview.
+const freeTabs = ref(FREE_TABS)
 let loaded = false
 
 export function useLicence() {
@@ -17,6 +19,7 @@ export function useLicence() {
     loaded = true
     try {
       status.value = unwrap(await commands.licenceStatus())
+      freeTabs.value = unwrap(await commands.tabLimitOverride()) ?? FREE_TABS
     }
     catch {
       // A licence that will not load is the free tier, not a startup failure.
@@ -37,7 +40,7 @@ export function useLicence() {
   }
 
   const unlocked = computed(() => status.value.kind === 'licensed')
-  const tabLimit = computed(() => (unlocked.value ? Number.POSITIVE_INFINITY : FREE_TABS))
+  const tabLimit = computed(() => (unlocked.value ? Number.POSITIVE_INFINITY : freeTabs.value))
 
   return { status, unlocked, tabLimit, panelOpen, load, install, activate }
 }

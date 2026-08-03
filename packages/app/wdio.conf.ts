@@ -17,6 +17,10 @@ process.env.SOQUEL_EPHEMERAL_SECRETS = '1'
 // real service: only it holds the key whose public half this binary trusts, so the
 // refusal path is what an e2e run can actually cover.
 process.env.SOQUEL_ACTIVATION_ENDPOINT = 'http://127.0.0.1:1/activate'
+// The specs open more tabs than the free tier allows, and they cannot install a
+// licence to lift it: that would take the private signing key. The limit itself is
+// covered by unit tests, in the pure functions and in the composable that refuses.
+process.env.SOQUEL_TAB_LIMIT = '20'
 
 export const config: WebdriverIO.Config = {
   hostname: '127.0.0.1',

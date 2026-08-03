@@ -4,11 +4,13 @@ import { useLicence } from './useLicence'
 
 const licenceStatus = vi.fn()
 const installLicence = vi.fn()
+const tabLimitOverride = vi.fn(() => ({ status: 'ok', data: null as number | null }))
 
 vi.mock('@/lib/bindings', () => ({
   commands: {
     licenceStatus: () => licenceStatus(),
     installLicence: (token: string) => installLicence(token),
+    tabLimitOverride: () => tabLimitOverride(),
   },
 }))
 
@@ -38,6 +40,23 @@ describe('useLicence', () => {
     await install('token')
 
     expect(tabLimit.value).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('takes the free limit from the core, which only a debug build raises', async () => {
+    // Fresh module: the composable keeps its state at module scope, and the first
+    // test in this file has already spent the one-shot load.
+    vi.resetModules()
+    licenceStatus.mockResolvedValue({ status: 'ok', data: { kind: 'free' } })
+    tabLimitOverride.mockReturnValue({ status: 'ok', data: 20 })
+    const { useLicence: fresh } = await import('./useLicence')
+    const { load, status, tabLimit } = fresh()
+
+    await load()
+
+    // Raised without claiming a licence: an e2e run needs more than two tabs, and
+    // the dialog must still say the app is on the free tier.
+    expect(tabLimit.value).toBe(20)
+    expect(status.value.kind).toBe('free')
   })
 
   it('throws when a licence is refused, unlike the read at startup', async () => {

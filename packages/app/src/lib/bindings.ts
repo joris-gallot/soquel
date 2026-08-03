@@ -117,6 +117,8 @@ export const commands = {
 	 *  through the same validation as a pasted one.
 	 */
 	activateLicence: (key: string) => typedError<LicenceStatus, Error>(__TAURI_INVOKE("activate_licence", { key })),
+	/**  None in a release build, whatever the environment says. */
+	tabLimitOverride: () => typedError<number | null, Error>(__TAURI_INVOKE("tab_limit_override")),
 	secretsStatus: () => typedError<SecretsStatus, Error>(__TAURI_INVOKE("secrets_status")),
 	/**
 	 *  The compile target, not a user agent string: the webview needs it for the

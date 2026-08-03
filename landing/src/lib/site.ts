@@ -49,6 +49,25 @@ export const DEB = {
   url: null as string | null,
 }
 
+/// Read from here by both /pricing and /terms so a figure cannot drift between the
+/// page that quotes it and the page that commits to it.
+export const PRICE = {
+  licence: '$69',
+  renewal: '$35',
+  currency: 'USD',
+  months: 12,
+  activations: 5,
+  freeTabs: 'two',
+} as const
+
+/// Set the url and the button goes live, same rule as DOWNLOADS: until then the page
+/// says it is not on sale, because taking money for something nobody can install is
+/// worse than saying "not yet".
+export const CHECKOUT = {
+  url: null as string | null,
+  event: 'checkout',
+}
+
 /// Set a src and the shot takes over. Dark theme only: a dark capture reads on
 /// either page theme, and light and dark pairs double the upkeep for little.
 /// Market seed only, never a real database, or hostnames and connection names

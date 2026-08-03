@@ -5,7 +5,7 @@ import Shot from '@/components/Shot.astro'
 import SiteFooter from '@/components/SiteFooter.astro'
 import SiteHeader from '@/components/SiteHeader.astro'
 import Base from '@/layouts/Base.astro'
-import { ENGINES, FEATURES, HERO_SHOT, SHOTS } from '@/lib/site'
+import { ENGINES, FEATURES, HERO_SHOT, PRICE, SHOTS } from '@/lib/site'
 
 /// The frames only stand in during development, so the gap they leave has to go too.
 const shotsShown = SHOTS.some(shot => shot.src) || import.meta.env.MODE !== 'production'
@@ -131,6 +131,27 @@ const guardrails = [
             ))
           }
         </dl>
+      </section>
+
+      <section class="border-t border-rule py-14">
+        <p class="label">Pricing</p>
+        <h2 class="mt-3 max-w-xl font-mono text-xl leading-snug font-medium tracking-tight">
+          Free while you judge it. {PRICE.licence} once when it earns it.
+        </h2>
+        <p class="mt-4 max-w-xl text-mute">
+          The free tier holds back one thing, how many workspace tabs you can open: {PRICE.freeTabs}
+          per connection. Every engine, the SQL editor, tunnels and agent access all work without a
+          licence. A licence lifts that limit for good and includes {PRICE.months} months of updates,
+          with no subscription and nothing to cancel.
+        </p>
+        <p class="mt-6">
+          <a
+            href="/pricing"
+            data-umami-event="pricing-index"
+            class="font-mono text-sm text-ink underline underline-offset-4"
+          >What a year of updates means</a
+          >
+        </p>
       </section>
 
       <Downloads />

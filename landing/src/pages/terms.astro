@@ -1,0 +1,156 @@
+---
+import SiteFooter from '@/components/SiteFooter.astro'
+import SiteHeader from '@/components/SiteHeader.astro'
+import Base from '@/layouts/Base.astro'
+import { PRICE, SITE } from '@/lib/site'
+
+const updated = '3 August 2026'
+---
+
+<Base
+  title={`Terms of sale: ${SITE.name}`}
+  description="What a soquel licence grants, how the update window works, and how refunds are handled."
+>
+  <div class="mx-auto max-w-3xl px-6">
+    <SiteHeader />
+
+    <main class="py-14 [&>h2]:mt-12 [&>h2]:font-mono [&>h2]:text-lg [&>h2]:font-medium [&>h2]:tracking-tight [&>p]:mt-4 [&>p]:leading-relaxed">
+      <p class="label">Terms of sale</p>
+      <h1 class="mt-3 font-mono text-2xl leading-snug font-semibold tracking-tight">
+        What you are buying, in plain terms.
+      </h1>
+      <p class="text-mute">
+        These terms cover buying a soquel licence. They are deliberately short, and they say the
+        same thing as the
+        <a
+          href="/pricing"
+          data-umami-event="pricing-terms"
+          class="text-ink underline underline-offset-4"
+        >pricing page</a
+        >: if the two ever disagree, this page is the one that binds.
+      </p>
+      <p class="text-mute">
+        Using the application is governed separately by its source licence,
+        <a
+          href={SITE.licence}
+          target="_blank"
+          rel="noopener"
+          class="text-ink underline underline-offset-4"
+        >FSL-1.1-MIT</a
+        >, which applies whether you buy anything or not.
+      </p>
+
+      <h2>Who you are buying from</h2>
+      <p class="text-mute">
+        Soquel is made by {SITE.author}. Payment is handled by Polar as merchant of record: your
+        payment, invoice and any applicable tax are between you and Polar, and your card details
+        never reach us. The licence itself is granted by us, under these terms.
+      </p>
+
+      <h2>What a licence grants</h2>
+      <p class="text-mute">
+        A perpetual, non-exclusive right for one named person to use the official signed builds of
+        soquel, on as many machines as that person works on, with no time limit and no requirement
+        to stay connected or subscribed. A licence lifts the free tier's workspace tab limit; it
+        does not unlock a separate edition, because there is only one.
+      </p>
+      <p class="text-mute">
+        A licence is for one person. Two people working with soquel need two licences, whichever
+        machines they use. Nothing in the software enforces that beyond the activation count, and we
+        would rather say it plainly than pretend a technical measure decides it.
+      </p>
+
+      <h2>What it does not grant</h2>
+      <p class="text-mute">
+        Reselling, sublicensing or redistributing the signed builds, sharing your licence key or
+        licence file outside the one person it was issued to, or removing the licence check from a
+        build and distributing the result. The source licence covers what you may do with the code
+        itself, including building it for your own use, which stays free.
+      </p>
+
+      <h2>The update window</h2>
+      <p class="text-mute">
+        A purchase includes {PRICE.months} months of updates, counted from the date of purchase.
+        Every build released inside that window activates with your licence, whatever its version
+        number, and keeps working indefinitely. When the window closes nothing is taken away: the
+        last covered build stays fully licensed for as long as you care to run it.
+      </p>
+      <p class="text-mute">
+        Installing a build released after your window is what the licence will not cover. The app
+        says so and falls back to the free tier's limit, and going back to a covered build restores
+        it. The comparison happens on your machine, against the date the build was made, with no
+        network involved. A renewal at {PRICE.renewal} moves the window forward another {
+          PRICE.months
+        } months. Nothing renews automatically and we will never charge you without a new purchase.
+      </p>
+      <p class="text-mute">
+        We do not commit to a release schedule, a number of releases, or any particular feature
+        arriving inside your window. What we commit to is that anything we do release in it is
+        yours.
+      </p>
+
+      <h2>Keys and activations</h2>
+      <p class="text-mute">
+        You receive a licence key on purchase. Activating it issues a signed licence file, up to {
+          PRICE.activations
+        } times per key; that file is what the application verifies, offline, from then on. You can
+        release an activation from your Polar customer portal if you need another. Losing your key
+        is recoverable, so ask rather than buying again.
+      </p>
+      <p class="text-mute">
+        We may revoke a key in cases of fraud, chargeback or a shared key. Revoking prevents further
+        activations; a licence file already issued keeps working, because a check that runs with the
+        network unplugged cannot be withdrawn. That limit is documented in the file format published
+        with the source, rather than left as a surprise.
+      </p>
+
+      <h2>Refunds</h2>
+      <p class="text-mute">
+        Within 14 days of purchase, for any reason, ask and you get your money back. No form and no
+        justification needed. The application runs free with its tab limit, so you can judge it
+        before paying, and a refund exists for when you did that and still got it wrong.
+      </p>
+      <p class="text-mute">
+        Refunds are issued through Polar, who processed the payment. A refunded licence is revoked.
+        If you are a consumer in the EU or UK, your statutory rights apply on top of this and
+        nothing here reduces them.
+      </p>
+
+      <h2>No warranty</h2>
+      <p class="text-mute">
+        Soquel is provided as is, without warranty of any kind. It is a tool that connects to your
+        databases and can change data when you tell it to; keep backups, and treat a destructive
+        statement in soquel exactly as you would in a terminal. To the extent the law allows, our
+        liability is limited to what you paid for your licence.
+      </p>
+
+      <h2>Changes</h2>
+      <p class="text-mute">
+        These terms may change for future purchases. The terms in force on the day you bought are
+        the ones that apply to your purchase, and the date below tells you which those were. Prices
+        may change too, and a change never affects a licence already bought.
+      </p>
+
+      <h2>Contact</h2>
+      <p class="text-mute">
+        Anything about a purchase, a refund or a lost key:
+        <a
+          href="mailto:hi@soquel.dev"
+          data-umami-event="contact-terms"
+          class="text-ink underline underline-offset-4"
+        >hi@soquel.dev</a
+        >. For how the application handles your data, see
+        <a
+          href="/privacy"
+          data-umami-event="privacy-terms"
+          class="text-ink underline underline-offset-4"
+        >Privacy</a
+        >.
+      </p>
+
+      <p class="mt-12 font-mono text-xs text-mute">Last updated {updated}.</p>
+    </main>
+
+    <SiteFooter />
+  </div>
+</Base>

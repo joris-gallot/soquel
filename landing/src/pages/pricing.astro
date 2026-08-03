@@ -1,0 +1,165 @@
+---
+import SiteFooter from '@/components/SiteFooter.astro'
+import SiteHeader from '@/components/SiteHeader.astro'
+import Base from '@/layouts/Base.astro'
+import { CHECKOUT, PRICE, SITE } from '@/lib/site'
+
+/// Nothing is for sale until there is a build to install, and the page says which
+/// state it is in rather than showing a button that goes nowhere.
+const onSale = CHECKOUT.url !== null
+
+const updateWindow = [
+  {
+    claim: 'Every build released in your year activates, and stays activated.',
+    detail:
+      'Whatever its version number. A major release inside your window is yours the same way a patch is, and it keeps working for good.',
+  },
+  {
+    claim: 'When the year is up, nothing stops working.',
+    detail:
+      'Your last covered version stays fully licensed, with no limit and no nagging. There is no subscription to cancel because there was never one to start.',
+  },
+  {
+    claim: 'Only a newer build asks for a renewal.',
+    detail:
+      'Install something released after your window and the app says so and runs on the free tier. Go back to a covered build and it is licensed again. The check happens on your machine, with no network.',
+  },
+]
+---
+
+<Base
+  title={`Pricing: ${SITE.name}`}
+  description="One licence, bought once, with twelve months of updates. What the free tier does, what a licence lifts, and exactly what a year of updates means."
+>
+  <div class="mx-auto max-w-3xl px-6">
+    <SiteHeader />
+
+    <!-- Direct children only: as a descendant selector this prose spacing reaches
+         into the price card and the grid below, and it outweighs their own margins. -->
+    <main class="py-14 [&>h2]:mt-12 [&>h2]:font-mono [&>h2]:text-lg [&>h2]:font-medium [&>h2]:tracking-tight [&>p]:mt-4 [&>p]:leading-relaxed">
+      <p class="label">Pricing</p>
+      <h1 class="mt-3 font-mono text-2xl leading-snug font-semibold tracking-tight">
+        Bought once. Yours for good.
+      </h1>
+      <p class="text-mute">
+        One edition, no tiers to compare, and no subscription. You pay once, you get twelve months
+        of updates, and the version you end on keeps working forever. Building it yourself from
+        source stays free, so what a licence buys is the signed builds and the work behind them.
+      </p>
+
+      <div class="mt-10 rounded-card border border-rule bg-wash px-6 py-6">
+        <div class="flex flex-wrap items-baseline justify-between gap-4">
+          <div>
+            <p class="font-mono text-3xl font-semibold tracking-tight">
+              {PRICE.licence}
+              <span class="text-base font-medium text-mute">{PRICE.currency}</span>
+            </p>
+            <p class="mt-1 font-mono text-xs text-mute">
+              once, then {PRICE.renewal} a year if you want newer builds
+            </p>
+          </div>
+          {
+            onSale
+              ? (
+                  <a
+                    href={CHECKOUT.url}
+                    data-umami-event={CHECKOUT.event}
+                    class="rounded-card bg-ink px-5 py-2.5 font-mono text-sm font-medium text-paper underline-offset-4 hover:underline"
+                  >Buy a licence</a
+                  >
+                )
+              : (
+                  <p class="font-mono text-xs text-mute">
+                    Not on sale yet. There is no build to install first.
+                  </p>
+                )
+          }
+        </div>
+
+        <ul class="mt-6 space-y-3 border-t border-rule pt-6">
+          <li class="flex gap-3 text-sm leading-relaxed">
+            <span aria-hidden="true" class="mt-2.5 h-px w-4 shrink-0 bg-rule" />
+            <span>Every feature, every engine, agent access included.</span>
+          </li>
+          <li class="flex gap-3 text-sm leading-relaxed">
+            <span aria-hidden="true" class="mt-2.5 h-px w-4 shrink-0 bg-rule" />
+            <span>{PRICE.months} months of updates, and the version you end on is yours to keep.</span>
+          </li>
+          <li class="flex gap-3 text-sm leading-relaxed">
+            <span aria-hidden="true" class="mt-2.5 h-px w-4 shrink-0 bg-rule" />
+            <span>One person, every machine you work on. Not a seat per laptop.</span>
+          </li>
+          <li class="flex gap-3 text-sm leading-relaxed">
+            <span aria-hidden="true" class="mt-2.5 h-px w-4 shrink-0 bg-rule" />
+            <span>macOS, Windows and Linux, signed and updating themselves.</span>
+          </li>
+        </ul>
+      </div>
+
+      <h2>Free, with one limit</h2>
+      <p class="text-mute">
+        The app runs without a licence, for as long as you like, and the only thing it holds back is
+        how many workspace tabs you can open: {PRICE.freeTabs} per connection. Nothing else is
+        withheld. Every engine, the SQL editor, tunnels, export, and the MCP server that lends
+        databases to coding agents all work on the free tier, because a differentiator you cannot
+        try is not one.
+      </p>
+      <p class="text-mute">
+        That limit is deliberately the one you meet while working rather than while judging. Adding
+        connections costs nothing and opening one is enough to explore; it is comparing two tables
+        with a query open beside them that runs out of room.
+      </p>
+
+      <h2>What a year of updates means</h2>
+      <p class="text-mute">
+        This is the part people get burned by elsewhere, so here it is exactly:
+      </p>
+      <div class="mt-8 space-y-px">
+        {
+          updateWindow.map(item => (
+            <div class="border-t border-rule py-6 sm:grid sm:grid-cols-[18rem_1fr] sm:gap-8">
+              <h3 class="font-mono text-sm leading-relaxed font-medium">{item.claim}</h3>
+              <p class="mt-2 text-sm leading-relaxed text-mute sm:mt-0">{item.detail}</p>
+            </div>
+          ))
+        }
+      </div>
+      <p class="text-mute">
+        A renewal at {PRICE.renewal} moves the window forward another {PRICE.months} months. You are
+        never charged automatically, and letting it lapse costs you nothing you already had.
+      </p>
+
+      <h2>Your licence, and your machines</h2>
+      <p class="text-mute">
+        After buying you get a licence key. Paste it into the app once and it fetches a signed
+        licence file, which is what the app actually checks, offline, from then on. No account, no
+        sign-in, and no call home to keep working.
+      </p>
+      <p class="text-mute">
+        The licence is per person rather than per machine: activating your key issues that file, up
+        to {PRICE.activations} times, and the file works wherever you put it. Copying the one you
+        already have to another machine of yours costs nothing, and you can release an activation
+        from your account if you run out.
+      </p>
+
+      <h2>Before you buy</h2>
+      <p class="text-mute">
+        The
+        <a
+          href="/terms"
+          data-umami-event="terms-pricing"
+          class="text-ink underline underline-offset-4"
+        >terms of sale</a
+        > cover the licence, the update window and refunds. Anything unclear, ask first:
+        <a
+          href="mailto:hi@soquel.dev"
+          data-umami-event="contact-pricing"
+          class="text-ink underline underline-offset-4"
+        >hi@soquel.dev</a
+        >.
+      </p>
+    </main>
+
+    <SiteFooter />
+  </div>
+</Base>

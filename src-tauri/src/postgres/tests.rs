@@ -1322,8 +1322,14 @@ async fn integration_postgres_filters_combine_with_sort_and_offset() {
 
 fn profile_from_env_url(url: &str) -> ConnectionProfile {
   let config: Config = url.parse().unwrap();
-  let tokio_postgres::config::Host::Tcp(host) = &config.get_hosts()[0] else {
-    panic!("expected a tcp host");
+  // Host::Unix is cfg(unix), so on Windows this match is exhaustive with the one
+  // arm: a wildcard would be unreachable there and -D warnings would refuse it.
+  let host = match &config.get_hosts()[0] {
+    tokio_postgres::config::Host::Tcp(host) => host.clone(),
+    #[cfg(unix)]
+    tokio_postgres::config::Host::Unix(socket) => {
+      panic!("expected a tcp host, got the socket {}", socket.display())
+    }
   };
   ConnectionProfile {
     id: String::new(),
@@ -1333,7 +1339,7 @@ fn profile_from_env_url(url: &str) -> ConnectionProfile {
     agent_access: Default::default(),
     credential: Default::default(),
     params: crate::profiles::ConnectorParams::Postgres(SqlServerParams {
-      host: host.clone(),
+      host,
       port: config.get_ports()[0],
       database: config.get_dbname().unwrap().to_string(),
       user: config.get_user().unwrap().to_string(),

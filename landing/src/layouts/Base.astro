@@ -1,6 +1,4 @@
 ---
-import { existsSync } from 'node:fs'
-import process from 'node:process'
 import monoLatin from '@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2?url'
 import sansLatin from '@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2?url'
 import { ANALYTICS, SITE } from '@/lib/site'
@@ -25,11 +23,7 @@ const isProd = import.meta.env.MODE === 'production'
 const canonical
   = Astro.url.pathname === '/' ? site.origin : new URL(Astro.url.pathname, site).toString()
 
-// Referenced only once it exists: a card that 404s is worse than none, and it
-// cannot be produced here (no rasteriser, and IBM Plex is not a system font).
-const card = existsSync(`${process.cwd()}/public/og.png`)
-  ? new URL('/og.png', site).toString()
-  : null
+const card = new URL('/og.png', site).toString()
 
 const brandId = `${site.origin}/#brand`
 const siteId = `${site.origin}/#website`
@@ -108,14 +102,14 @@ const structuredData = {
     <meta property="og:url" content={canonical} />
     <meta property="og:site_name" content={SITE.name} />
     <meta property="og:locale" content="en" />
-    {card && <meta property="og:image" content={card} />}
-    {card && <meta property="og:image:width" content="1200" />}
-    {card && <meta property="og:image:height" content="630" />}
-    {card && <meta property="og:image:alt" content={`${SITE.name}, ${SITE.tagline}`} />}
-    <meta name="twitter:card" content={card ? 'summary_large_image' : 'summary'} />
+    <meta property="og:image" content={card} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={`${SITE.name}, ${SITE.tagline}`} />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
-    {card && <meta name="twitter:image" content={card} />}
+    <meta name="twitter:image" content={card} />
 
     <meta name="color-scheme" content="light dark" />
     <!-- Mobile browser chrome follows the page instead of staying white on the dark one. -->

@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro'
-import { ENGINES, FEATURES, SITE } from '@/lib/site'
+import { ENGINES, FEATURES, PRICE, SITE } from '@/lib/site'
 
 /// The long form: every claim the page makes, with the detail behind it.
 export const GET: APIRoute = () => {
@@ -47,15 +47,30 @@ An imported connections file cannot run code on its own: a credential command th
 
 An OS keyring is required. Without one, the keychain mode is unavailable and the app says so; the prompt and command modes still work.
 
+## Pricing and licensing
+
+One edition, no tiers. The free tier is the whole application with a single limit: ${PRICE.freeTabs} workspace tabs open per connection. Every engine, the SQL editor, tunnels, export and agent access over MCP work without a licence, with no time limit, because a differentiator nobody can try is not one.
+
+A licence is ${PRICE.licence} ${PRICE.currency}, bought once, and it lifts that limit permanently. It is per person rather than per machine, so it covers every machine that person works on. It includes ${PRICE.months} months of updates, and a renewal at ${PRICE.renewal} moves that window forward. There is no subscription and nothing renews automatically.
+
+The update window is a date, not a version range. Every build released inside it activates with the licence whatever its version number, including a major one, and stays activated for good. When the window closes nothing is taken away: the last covered build remains fully licensed indefinitely. Installing a build released after the window is the only thing the licence will not cover, and the app says so and falls back to the free tier's limit; going back to a covered build restores it.
+
+The check runs offline. Activating a key once returns a signed licence file, and from then on the application verifies that file against a public key compiled into the binary, comparing the window to the date the build was made rather than to the system clock. No account, no sign-in, and nothing to reach for the licence to hold.
+
+Building from source stays free under FSL-1.1-MIT, with no feature held back and no limit to lift. What is sold is the signed, notarised, self-updating builds. Nothing is on sale yet, because no builds are published yet.
+
 ## Design commitments
 
 - Secrets never reach the webview. They live in the Rust core and the OS keychain.
 - A typed command layer is the only IPC boundary. Every operation is a Tauri command with a normalised error shape, and the TypeScript bindings are generated from the Rust types. The MCP tools are that same layer with a second client.
-- Offline by design: no remote assets, a strict CSP, and the app does not phone home. Updates are checked only when asked or at startup, against a single endpoint.
+- Offline by design: no remote assets and a strict CSP. The application makes exactly two network requests, both to the same endpoint: the update check, at startup or when asked, and licence activation, once, if a key is pasted. Nothing else leaves the machine.
 
 ## Links
 
 - Source: ${SITE.repo}
+- Pricing: ${SITE.url}/pricing
+- Terms of sale: ${SITE.url}/terms
+- Privacy: ${SITE.url}/privacy
 - Licence: FSL-1.1-MIT
 `
 

@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro'
-import { ENGINES, SITE } from '@/lib/site'
+import { ENGINES, PRICE, SITE } from '@/lib/site'
 
 /// The curated index an answer engine reads. The long form lives at /llms-full.txt.
 export const GET: APIRoute = () => {
@@ -25,9 +25,19 @@ ${engines}
 - Every call is logged with its tool, connection, statement, outcome and duration.
 - Results are capped and paginated, and agent queries carry a 30 second engine-enforced timeout.
 
+## Pricing
+
+- Free tier: the whole application, limited to ${PRICE.freeTabs} workspace tabs per connection. Every engine, the SQL editor, tunnels and agent access are included, with no time limit.
+- A licence is ${PRICE.licence} ${PRICE.currency} once, per person rather than per machine, and includes ${PRICE.months} months of updates. No subscription.
+- Every build released inside that window activates and keeps working for good, whatever its version number. When the window closes the last covered build stays licensed; only installing a newer one falls back to the free tier, and going back restores it. Renewal is ${PRICE.renewal} to move the window forward.
+- The check is offline against a signed licence file. No account, no sign-in, no call home to keep working.
+- Building from source stays free under FSL-1.1-MIT. What is sold is the signed, self-updating builds.
+- Nothing is on sale yet, because no builds are published yet.
+
 ## Links
 
 - [Source](${SITE.repo}): the full application, readable and buildable.
+- [Pricing](${SITE.url}/pricing) and [terms of sale](${SITE.url}/terms).
 - [Long form](${SITE.url}/llms-full.txt): every claim above with its detail.
 `
 

@@ -4,7 +4,7 @@ import SiteHeader from '@/components/SiteHeader.astro'
 import Base from '@/layouts/Base.astro'
 import { SITE } from '@/lib/site'
 
-const updated = '2 August 2026'
+const updated = '3 August 2026'
 ---
 
 <Base
@@ -28,13 +28,22 @@ const updated = '2 August 2026'
 
       <h2>What the app sends</h2>
       <p class="text-mute">
-        One thing, and only when it checks for an update: a request to
-        <code class="font-mono text-sm text-ink">releases.soquel.dev</code>. That request
-        necessarily carries your IP address, your operating system and processor architecture, and
-        the version you are running, because those are what the app asks the server about. It
-        carries no identifier, no account and no machine fingerprint, and nothing about your
-        connections or your data. It happens once at startup and whenever you ask, and you can read
-        it in the app's own log.
+        Two requests exist, both to
+        <code class="font-mono text-sm text-ink">releases.soquel.dev</code> and nowhere else. The
+        first is the update check. It necessarily carries your IP address, your operating system and
+        processor architecture, and the version you are running, because those are what the app asks
+        the server about. It carries no identifier, no account and no machine fingerprint, and
+        nothing about your connections or your data. It happens once at startup and whenever you
+        ask, and you can read it in the app's own log.
+      </p>
+      <p class="text-mute">
+        The second happens only if you buy a licence, and only when you paste your key: the key goes
+        to the same host, which checks it and returns your signed licence file. That one does carry
+        an identifier, since a licence key is tied to a purchase, along with your IP address and
+        which of the three platforms you are on, because that becomes the label you see next to your
+        own activations. It carries nothing else about the machine, and no hostname. Afterwards the
+        app never asks again: your licence is a file on your disk, checked offline, with the network
+        unplugged if you like.
       </p>
       <p class="text-mute">
         Nothing else. No analytics, no usage statistics, no remote fonts or scripts: everything the
@@ -65,6 +74,26 @@ const updated = '2 August 2026'
         requires a bearer token that never leaves the machine. Its audit log is local. The
         diagnostic summary the app can produce is assembled locally and copied by you: it carries no
         connection names, no hostnames and no log contents, and nothing sends it anywhere.
+      </p>
+
+      <h2>If you buy a licence</h2>
+      <p class="text-mute">
+        Payment goes through Polar as merchant of record. They take the payment and see what a
+        payment requires: your email address, your name if you give one, and your billing country.
+        Card details never reach us and never reach the application. There is still no account on
+        soquel.dev, and nothing to sign in to.
+      </p>
+      <p class="text-mute">
+        What we see is the order Polar records, which means the email tied to it, and your licence
+        key. The licence file the app installs carries your email and name so that a shared file is
+        at least attributable to someone; it sits on your disk and goes nowhere after it is issued.
+        How refunds and revocation work is in the
+        <a
+          href="/terms"
+          data-umami-event="terms-privacy"
+          class="text-ink underline underline-offset-4"
+        >terms of sale</a
+        >.
       </p>
 
       <h2>This website</h2>

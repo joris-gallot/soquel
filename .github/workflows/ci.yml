@@ -153,6 +153,28 @@ jobs:
               Write-Host "$_ -> $(if ($found) { $found } else { 'NOT FOUND on PATH' })"
             }
 
+          # The decisive experiment. The runner's PATH puts the JDK's and Python's
+          # copies of the C runtime ahead of System32, but the loader searches
+          # System32 before PATH, so that ordering should not matter. If the binary
+          # loads with PATH pruned, it does, and pruning it is the fix.
+          Write-Host "`n=== does it load with PATH pruned to System32? ==="
+          $original = $env:PATH
+          $env:PATH = "$env:SystemRoot\System32"
+          # try/catch because GitHub runs pwsh steps with ErrorActionPreference stop:
+          # a launch that throws would skip the imports below, which is the half of
+          # this we need when the experiment comes back negative.
+          try { & $exe.FullName --list 2>&1 | Select-Object -First 5 }
+          catch { Write-Host "launch threw: $_" }
+          Write-Host "exit code with a pruned PATH: $LASTEXITCODE"
+          $env:PATH = $original
+
+          # If it still refuses, the shadowing theory is out and the missing symbol
+          # has to be named. These are the imports a mismatched runtime would fail
+          # to satisfy.
+          Write-Host "`n=== imports from the C runtime ==="
+          & $dumpbin.FullName /nologo /imports $exe.FullName |
+            Select-String -Pattern 'vcruntime|api-ms-win-crt|ucrtbase' -Context 0, 12
+
       # export_typescript_bindings just rewrote bindings.ts: fail if it was stale.
       # Linux only, since git on Windows would report the line endings as a diff.
       - name: Bindings up to date

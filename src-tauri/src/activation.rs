@@ -151,7 +151,70 @@ async fn activate_at(endpoint: &str, key: &str) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+  use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
   use super::*;
+
+  fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .unwrap()
+  }
+
+  fn http(status: u16, body: &str) -> String {
+    format!(
+      "HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+      body.len()
+    )
+  }
+
+  /// Reads to the end of the declared body: reqwest may put the headers and the JSON
+  /// on the wire separately, and asserting on a partial read would fail at random.
+  async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+      let read = socket.read(&mut chunk).await.unwrap();
+      if read == 0 {
+        break;
+      }
+      request.extend_from_slice(&chunk[..read]);
+      let text = String::from_utf8_lossy(&request);
+      let Some((headers, body)) = text.split_once("\r\n\r\n") else {
+        continue;
+      };
+      let declared = headers
+        .lines()
+        .find_map(|line| {
+          let (name, value) = line.split_once(':')?;
+          name
+            .eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())?
+        })
+        .unwrap_or(0);
+      if body.len() >= declared {
+        break;
+      }
+    }
+    String::from_utf8_lossy(&request).to_string()
+  }
+
+  /// One request, one canned answer, and the raw request handed back so a test can
+  /// see what actually went out.
+  async fn served(response: String, key: &str) -> (Result<String, Error>, String) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/activate", listener.local_addr().unwrap());
+    let stub = tokio::spawn(async move {
+      let (mut socket, _) = listener.accept().await.unwrap();
+      let request = read_request(&mut socket).await;
+      socket.write_all(response.as_bytes()).await.unwrap();
+      socket.flush().await.unwrap();
+      request
+    });
+    let issued = activate_at(&url, key).await;
+    (issued, stub.await.unwrap())
+  }
 
   fn refusal(kind: &str) -> String {
     format!(r#"{{"error":{{"kind":"{kind}","message":"from the service"}}}}"#)
@@ -227,14 +290,56 @@ mod tests {
   }
 
   #[test]
+  fn a_service_that_issues_a_licence_hands_its_token_back() {
+    let body = r#"{"licence":"cGF5bG9hZA.c2ln"}"#;
+
+    let (issued, request) = runtime().block_on(served(http(200, body), "SOQUEL-1234"));
+
+    assert_eq!(issued.unwrap(), "cGF5bG9hZA.c2ln");
+    // The service takes the key and the platform, and nothing else about the
+    // machine goes out with them.
+    assert!(request.contains("POST /activate"), "{request}");
+    assert!(request.contains(r#""key":"SOQUEL-1234""#), "{request}");
+    assert!(
+      request.contains(&format!(r#""platform":"{}""#, platform())),
+      "{request}"
+    );
+  }
+
+  #[test]
+  fn a_success_this_build_cannot_read_is_not_a_licence() {
+    // A 200 carrying anything else must not reach the installer as a token.
+    let (issued, _) = runtime().block_on(served(http(200, r#"{"nope":1}"#), "SOQUEL-1234"));
+
+    assert!(matches!(
+      issued.unwrap_err(),
+      Error::Activation {
+        reason: ActivationReason::UpstreamUnavailable,
+        ..
+      }
+    ));
+  }
+
+  #[test]
+  fn a_refusal_yields_no_token_at_all() {
+    // What keeps a working licence on disk: the command installs what this returns,
+    // so a refusal has to come back empty-handed rather than with something.
+    let (issued, _) = runtime().block_on(served(http(403, &refusal("revoked")), "SOQUEL-1234"));
+
+    assert!(matches!(
+      issued.unwrap_err(),
+      Error::Activation {
+        reason: ActivationReason::Revoked,
+        ..
+      }
+    ));
+  }
+
+  #[test]
   fn a_request_that_goes_nowhere_reads_as_offline() {
     // Nothing listens on port 9: the transport fails, which is a different thing
     // for the user than a service that answered.
-    let runtime = tokio::runtime::Builder::new_current_thread()
-      .enable_all()
-      .build()
-      .unwrap();
-    let refused = runtime
+    let refused = runtime()
       .block_on(activate_at("http://127.0.0.1:9/activate", "SOQUEL-0000"))
       .unwrap_err();
 

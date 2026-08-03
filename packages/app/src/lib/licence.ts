@@ -1,4 +1,4 @@
-import type { ActivationReason } from '@/lib/bindings'
+import type { ActivationReason, LicenceStatus } from '@/lib/bindings'
 
 /// The service says what happened, the app says what to do about it. Keyed on the
 /// generated union so a new reason stops compiling until it has an answer here.
@@ -11,4 +11,17 @@ export const ACTIVATION_MESSAGES: Record<ActivationReason, string> = {
   // Nothing is wrong with the purchase here, and the wording has to say so: Polar
   // rate limits activation, so pasting the same key twice in a row lands on this.
   'upstream-unavailable': 'The licence server is having trouble reaching Polar. Your key is fine, try again in a minute.',
+}
+
+/// A licence can install and still unlock nothing, so success cannot be one phrase.
+/// An install answers with `licensed` or `expired`, never `free`: that one only comes
+/// from a file that was never there.
+export function installedOutcome(status: LicenceStatus): { ok: boolean, message: string } {
+  const licensed = status.kind === 'licensed'
+  return {
+    ok: licensed,
+    message: licensed
+      ? 'Licence added. Tabs are unlimited from here.'
+      : 'Licence added, and it does not cover this build.',
+  }
 }

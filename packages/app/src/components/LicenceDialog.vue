@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useLicence } from '@/composables/useLicence'
 import { formatDay } from '@/lib/format'
-import { ACTIVATION_MESSAGES } from '@/lib/licence'
+import { ACTIVATION_MESSAGES, installedOutcome } from '@/lib/licence'
 import { CommandError } from '@/lib/result'
 
 const { status, install, activate } = useLicence()
@@ -47,19 +47,12 @@ function explain(thrown: unknown): string {
   return thrown instanceof Error ? thrown.message : String(thrown)
 }
 
-/// A licence can install and still unlock nothing, so success cannot be one phrase.
-function installed(): string {
-  return status.value.kind === 'licensed'
-    ? 'Licence added. Tabs are unlimited from here.'
-    : 'Licence added, and it does not cover this build.'
-}
-
 async function run(action: () => Promise<void>) {
   busy.value = true
   outcome.value = null
   try {
     await action()
-    outcome.value = { ok: status.value.kind === 'licensed', message: installed() }
+    outcome.value = installedOutcome(status.value)
   }
   catch (thrown) {
     outcome.value = { ok: false, message: explain(thrown) }

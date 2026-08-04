@@ -24,6 +24,7 @@ src-tauri/gen/schemas/
 
 coverage/
 packages/app/e2e/screenshots/
+.market-data/
 
 .env*
 !.env.example

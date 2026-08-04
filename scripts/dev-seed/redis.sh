@@ -12,30 +12,49 @@
 set -e
 auth="-a soquel --no-auth-warning"
 
+# Everything dated hangs off this instead of the wall clock, so re-seeding with
+# the same base date reproduces the same keys (landing screenshots).
+base_epoch="${SEED_BASE_EPOCH:-$(date -u +%s)}"
+base_month="${SEED_BASE_MONTH:-$(date -u +%Y-%m)}"
+
 redis-cli $auth FLUSHALL > /dev/null
 
 # j(): quote an inline-protocol argument; | stands for a json quote.
-awk 'function j(s) { gsub(/\|/, "\\\\\"", s); return "\"" s "\"" }
+# Names come from the same lists as the sql seeds, walked by a stride coprime
+# with their 340 pairs so both names move on every key.
+awk -v base_epoch="$base_epoch" -v base_month="$base_month" '
+function j(s) { gsub(/\|/, "\\\\\"", s); return "\"" s "\"" }
+function pair(i) { return (i * 21) % (nf * nl) }
+function local_part(i) { return tolower(F[1 + pair(i) % nf]) "." tolower(L[1 + int(pair(i) / nf) % nl]) }
+function full_name(i) { return F[1 + pair(i) % nf] " " L[1 + int(pair(i) / nf) % nl] }
+function email(i) { return local_part(i) "@" B[1 + i % nb] "." T[1 + i % nt] }
 BEGIN {
+  nf = split("Alice Marcus Priya Tomas Chloe Daniel Sofia Omar Hannah Lucas Nadia Felix Clara Victor Amina Jonas Elena Mateo Iris Samuel", F, " ")
+  nl = split("Bennett Novak Iyer Lindqvist Moreau Okafor Ferrari Haddad Weber Silva Kovacs Duarte Larsen Nakamura Fischer Almeida Whitfield", L, " ")
+  nb = split("northwind lakeside meridian brightline harborview crestline evergreen stonebridge westport ironwood", B, " ")
+  nt = split("io com dev", T, " ")
+
   # % 2^31: busybox awk %x clamps above INT32_MAX, which would collide keys.
   for (i = 1; i <= 10000; i++)
-    printf "SET session:%08x user-%d EX %d\n", i * 2654435761 % 2147483648, i % 1000, 3600 + i % 86400
+    printf "SET session:%08x %s EX %d\n", i * 2654435761 % 2147483648, \
+      j(sprintf("{|uid|:%d,|email|:|%s|}", i % 1000, email(i))), 3600 + i % 86400
   for (i = 1; i <= 2000; i++)
-    printf "SET cache:user:%d %s EX %d\n", i, j(sprintf("{|id|:%d,|plan|:|%s|,|seen|:%d}", i, (i % 5 == 0 ? "pro" : "free"), 1700000000 + i)), 300 + i % 3600
+    printf "SET cache:user:%d %s EX %d\n", i, \
+      j(sprintf("{|id|:%d,|name|:|%s|,|plan|:|%s|,|seen|:%d}", i, full_name(i), (i % 5 == 0 ? "pro" : "free"), base_epoch - i)), 300 + i % 3600
   for (i = 1; i <= 1000; i++)
-    printf "HSET user:%d name user-%d email user%d@example.com plan %s logins %d\n", i, i, i, (i % 5 == 0 ? "pro" : "free"), i % 400
+    printf "HSET user:%d name %s email %s plan %s logins %d\n", i, j(full_name(i)), email(i), (i % 5 == 0 ? "pro" : "free"), i % 400
   for (i = 1; i <= 500; i++) {
-    printf "RPUSH queue:emails %s\n", j(sprintf("{|to|:|user%d@example.com|,|template|:|digest|}", i))
-    printf "RPUSH queue:webhooks %s\n", j(sprintf("{|url|:|https://hooks.example.com/%d|,|attempt|:%d}", i, i % 5))
+    printf "RPUSH queue:emails %s\n", j(sprintf("{|to|:|%s|,|template|:|digest|}", email(i)))
+    printf "RPUSH queue:webhooks %s\n", j(sprintf("{|url|:|https://hooks.%s.%s/soquel|,|attempt|:%d}", B[1 + i % nb], T[1 + i % nt], i % 5))
   }
   for (i = 1; i <= 1000; i++)
-    printf "ZADD leaderboard:tasks %d user-%d\n", i * 7 % 5000, i
+    printf "ZADD leaderboard:tasks %d %s\n", i * 7 % 5000, local_part(i)
   for (i = 1; i <= 300; i++)
-    printf "SADD online:users user-%d\n", i * 3 % 1000
+    printf "SADD online:users %s\n", local_part(i * 3 % 1000)
   for (i = 1; i <= 1000; i++)
-    printf "XADD events:stream * type %s user user-%d\n", (i % 3 == 0 ? "login" : "task.done"), i % 1000
+    printf "XADD events:stream * type %s user %s\n", (i % 3 == 0 ? "login" : "task.done"), local_part(i)
   for (i = 1; i <= 30; i++)
-    printf "SET counter:api:2026-07-%02d %d\n", i, i * 1337
+    printf "SET counter:api:%s-%02d %d\n", base_month, i, i * 1337
 }' | redis-cli $auth --pipe
 
 # One binary payload so the hex rendering shows up in the browser.

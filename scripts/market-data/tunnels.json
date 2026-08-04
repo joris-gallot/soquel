@@ -1,0 +1,20 @@
+[
+  {
+    "id": "mkt-bastion-eu",
+    "name": "bastion eu-west",
+    "host": "bastion.northwind.internal",
+    "port": 22,
+    "user": "deploy",
+    "auth": { "method": "agent" },
+    "credential": { "mode": "keychain" }
+  },
+  {
+    "id": "mkt-bastion-us",
+    "name": "bastion us-east",
+    "host": "bastion-us.northwind.internal",
+    "port": 22,
+    "user": "deploy",
+    "auth": { "method": "key-file", "path": "~/.ssh/northwind_ops" },
+    "credential": { "mode": "prompt" }
+  }
+]

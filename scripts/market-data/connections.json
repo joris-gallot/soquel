@@ -1,0 +1,91 @@
+[
+  {
+    "id": "mkt-prod-pg",
+    "name": "Production",
+    "env": "prod",
+    "group": "Northwind app",
+    "agentAccess": "read-only",
+    "credential": { "mode": "keychain" },
+    "params": {
+      "kind": "postgres",
+      "host": "db.northwind.internal",
+      "port": 5432,
+      "database": "northwind",
+      "user": "api",
+      "sslMode": "prefer",
+      "sslRootCert": null,
+      "tunnelId": null
+    }
+  },
+  {
+    "id": "mkt-staging-pg",
+    "name": "Staging",
+    "env": "staging",
+    "group": "Northwind app",
+    "agentAccess": "write-with-approval",
+    "credential": { "mode": "keychain" },
+    "params": {
+      "kind": "postgres",
+      "host": "db-staging.northwind.internal",
+      "port": 5432,
+      "database": "northwind",
+      "user": "api",
+      "sslMode": "prefer",
+      "sslRootCert": null,
+      "tunnelId": null
+    }
+  },
+  {
+    "id": "mkt-billing-mysql",
+    "name": "Billing",
+    "env": "prod",
+    "group": "Northwind app",
+    "agentAccess": "none",
+    "credential": { "mode": "keychain" },
+    "params": {
+      "kind": "mysql",
+      "host": "mysql.northwind.internal",
+      "port": 3306,
+      "database": "northwind",
+      "user": "api",
+      "sslMode": "prefer",
+      "sslRootCert": null,
+      "tunnelId": null
+    }
+  },
+  {
+    "id": "mkt-cache-redis",
+    "name": "Session cache",
+    "env": "prod",
+    "group": "Northwind data",
+    "agentAccess": "none",
+    "credential": { "mode": "keychain" },
+    "params": {
+      "kind": "redis",
+      "host": "cache.northwind.internal",
+      "port": 6379,
+      "db": 0,
+      "username": null,
+      "tls": false,
+      "tunnelId": null
+    }
+  },
+  {
+    "id": "mkt-events-mongo",
+    "name": "Event store",
+    "env": "prod",
+    "group": "Northwind data",
+    "agentAccess": "read-only",
+    "credential": { "mode": "keychain" },
+    "params": {
+      "kind": "mongo",
+      "host": "mongo.northwind.internal",
+      "port": 27017,
+      "database": "northwind",
+      "username": "api",
+      "authSource": "northwind",
+      "tls": false,
+      "tunnelId": null
+    }
+  }
+]
